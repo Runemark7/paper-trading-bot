@@ -102,6 +102,58 @@ def per_condition_table(trades) -> str:
     return "\n".join(rows)
 
 
+def _backtest_table(rows) -> str:
+    """Render one A/B result table (train or held-out)."""
+    if not rows:
+        return '<tr><td colspan="8">No results.</td></tr>'
+    out = []
+    for r in rows:
+        if r.get("error"):
+            out.append(f'<tr><td>{html.escape(r["strategy"])}</td><td colspan="7">'
+                       f'ERROR: {html.escape(r["error"])}</td></tr>')
+            continue
+        cls = "pos" if (r.get("total_pnl") or 0) > 0 else "neg"
+        out.append(
+            f'<tr><td>{html.escape(r["strategy"])}</td><td>{r["trades"]}</td>'
+            f'<td>{r["win_rate"]:.0%}</td>'
+            f'<td class="{cls}">{_fmt(r["total_pnl"])}</td>'
+            f'<td>{_fmt(r["final_equity"])}</td>'
+            f'<td>{r["sharpe"]:.2f}</td><td>{r["max_drawdown"]:.0%}</td>'
+            f'<td>{_fmt(r["fees_paid"])}</td></tr>'
+        )
+    return "\n".join(out)
+
+
+def backtest_section() -> str:
+    """Build the A/B backtest HTML section from state/abtest.json."""
+    from pathlib import Path
+    import json as _json
+    p = Path(__file__).resolve().parent.parent.parent / "state" / "abtest.json"
+    if not p.exists():
+        return f'<h2>Strategy A/B backtest</h2><div class="sm">No backtest results yet. Run scripts/ab_test.py to generate.</div>'
+    try:
+        report = _json.loads(p.read_text())
+    except (OSError, ValueError):
+        return f'<h2>Strategy A/B backtest</h2><div class="sm">Backtest data unreadable.</div>'
+
+    h = ['<h2>Strategy A/B backtest</h2>',
+         '<div class="sm">Candidate strategies compared on the same held-out window '
+         '(train = pick winner, held-out = verify not overfit). PnL after 0.1% taker fee '
+         '+ 2bps slippage, 1% risk per trade, $10k start.</div>']
+    for sym, s in report.get("symbols", {}).items():
+        h.append(f'<h3 style="margin:14px 0 6px">{html.escape(sym)} — '
+                 f'{s["bars"]} bars (train {s["train_bars"]}, held-out {s["hold_bars"]})</h3>')
+        for label, key in (("Train", "train"), ("Held-out", "held_out")):
+            h.append(f'<div class="sm">{label}</div>')
+            h.append('<div class="wrap"><table><thead><tr>'
+                     '<th>Strategy</th><th>Trades</th><th>Win%</th><th>PnL</th>'
+                     '<th>Final eq</th><th>Sharpe</th><th>Max DD</th><th>Fees</th>'
+                     '</tr></thead><tbody>')
+            h.append(_backtest_table(s.get(key, [])))
+            h.append('</tbody></table></div>')
+    return "\n".join(h)
+
+
 def generate_dashboard(store: TradeStore, out_path: str, calib_path: str | None = None) -> str:
     trades = store.all_trades()
     closed = [t for t in trades if t["exit_ts"]]
@@ -200,6 +252,8 @@ More trials = stronger evidence (learning → developing → trained → establi
 </tr></thead><tbody>
 {''.join(learning_rows) if learning_rows else '<tr><td colspan=5>No learning state yet.</td></tr>'}
 </tbody></table></div>
+
+{backtest_section()}
 
 <h2>Trade log</h2>
 <div class="wrap"><table><thead><tr>
