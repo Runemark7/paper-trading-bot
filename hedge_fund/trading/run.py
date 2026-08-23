@@ -17,6 +17,7 @@ from hedge_fund.brokers.paper import PaperBroker
 from hedge_fund.calibration import CalibrationStore
 from hedge_fund.data.binance import CcxtSource
 from hedge_fund.dashboard.report import generate_dashboard
+from hedge_fund.regime.gate import RegimeGate
 from hedge_fund.risk.managed import RiskManager
 from hedge_fund.trading.loop import TradingLoop
 from hedge_fund.trading.store import TradeStore
@@ -41,8 +42,9 @@ def main() -> None:
     risk = RiskManager(initial_equity=START_CASH)
     calib = CalibrationStore(state / "calibration.json")
     store = TradeStore(state / "trades.sqlite")
+    regime = RegimeGate(state_dir=state, cache_hours=6, top_n=10)
 
-    loop = TradingLoop(data, broker, risk, calib, store=store)
+    loop = TradingLoop(data, broker, risk, calib, store=store, regime=regime)
 
     for i in range(args.cycles):
         results = loop.run_cycle(SYMBOLS)

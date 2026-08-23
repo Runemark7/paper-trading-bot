@@ -56,6 +56,7 @@ class TradingLoop:
         risk: RiskManager,
         calib: CalibrationStore,
         store: TradeStore | None = None,
+        regime: "RegimeGate | None" = None,
         timeframe: str = "4h",
         horizon_bars: int = 6,  # ~1 day at 4h; success = close above entry at horizon
         kline_limit: int = 300,
@@ -65,6 +66,7 @@ class TradingLoop:
         self.risk = risk
         self.calib = calib
         self.store = store
+        self.regime = regime
         self.timeframe = timeframe
         self.horizon_bars = horizon_bars
         self.kline_limit = kline_limit
@@ -137,6 +139,15 @@ class TradingLoop:
                 results.append(CycleResult(
                     sym, now, sig.condition, prob, sig.direction, "HOLD",
                     reason=f"no entry: direction={sig.direction}", equity=equity))
+                continue
+
+            # Regime gate: hard precondition for new longs.
+            if self.regime is not None and not self.regime.allowed_to_trade():
+                zone = self.regime.zone() or "?"
+                results.append(CycleResult(
+                    sym, now, sig.condition, prob, sig.direction, "REJECTED",
+                    reason=f"regime {zone} blocks new longs (strict gate)",
+                    equity=equity))
                 continue
 
             entry = px.get(sym)
