@@ -177,7 +177,7 @@ def generate_dashboard(store: TradeStore, out_path: str, calib_path: str | None 
         for e in eq
     ]
 
-    # trade rows
+    # trade rows: closed trades first, then open positions (never-empty view)
     trade_rows = []
     for t in closed:
         trade_rows.append(
@@ -190,6 +190,18 @@ def generate_dashboard(store: TradeStore, out_path: str, calib_path: str | None 
             f"<td class=\"{'pos' if (t['pnl'] or 0)>0 else 'neg'}\">{_fmt(t['pnl'])}</td>"
             f"<td>{_pct(t['pnl_pct'])}</td>"
             f"<td>{'✓' if t['hit'] else '✗'}</td></tr>"
+        )
+    # open positions (exit_ts is null) shown as still-in-trade
+    open_t = [t for t in trades if not t["exit_ts"]]
+    for t in open_t:
+        trade_rows.append(
+            f"<tr><td>{html.escape(t['symbol'])}</td>"
+            f"<td>{html.escape(t['condition'] or '')}</td>"
+            f"<td>{_fmt(t['stated_prob'])}</td>"
+            f"<td>{t['entry_price']:,.0f}</td>"
+            f"<td>—</td>"
+            f"<td>open</td>"
+            f"<td class=\"neg\">—</td><td>—</td><td>…</td></tr>"
         )
 
     html_doc = f"""<!doctype html>
