@@ -124,6 +124,38 @@ def _backtest_table(rows) -> str:
     return "\n".join(out)
 
 
+def strategy_rules_section() -> str:
+    """Plain-language explainer of the strategies + live risk rules."""
+    return f"""
+<h2>Strategies & tests</h2>
+<div class="sm">Here are the strategies that were A/B backtested on real data, which one is
+currently live, and the risk rules applied to every trade.</div>
+
+<h3 style="margin:14px 0 4px">Candidate strategies (backtested)</h3>
+<div class="wrap"><table><thead><tr>
+<th>Strategy</th><th>What it does</th><th>Status</th>
+</tr></thead><tbody>
+<tr><td><b>sma_stack</b></td><td>Trend-following. Buys only when price > SMA7 > SMA25 > SMA50 (rising moving-average stack). Rides uptrends, stays out of chop.</td><td><span class="badge badge-established">● LIVE (A/B winner)</span></td></tr>
+<tr><td>rsi_momentum</td><td>Baseline: 20-EMA trend + RSI(14) filter. Original heuristic.</td><td><span class="badge badge-learning">retired (weak)</span></td></tr>
+<tr><td>momentum_gt</td><td>Pure momentum: buys when 2-week return exceeds a threshold.</td><td><span class="badge badge-learning">tested / no edge</span></td></tr>
+<tr><td>multi_timeframe</td><td>1-day trend gate + 4h momentum timing.</td><td><span class="badge badge-learning">tested</span></td></tr>
+</tbody></table></div>
+
+<h3 style="margin:14px 0 4px">Risk rules (every trade, enforced in code)</h3>
+<div class="wrap"><table><thead><tr>
+<th>Rule</th><th>Value</th>
+</tr></thead><tbody>
+<tr><td>Position risk / trade</td><td>1% of equity</td></tr>
+<tr><td>Stop-loss</td><td>2.5% below entry (hard)</td></tr>
+<tr><td>Take-profit</td><td>5% above entry (2:1 reward:risk)</td></tr>
+<tr><td>Max open risk</td><td>5% of equity</td></tr>
+<tr><td>Max drawdown</td><td>15% → hard halt</td></tr>
+<tr><td>Regime gate</td><td>Longs only in RISK_ON / NEUTRAL; blocked in RISK_OFF</td></tr>
+<tr><td>Fees + slippage</td><td>0.1% taker fee + 2bps slippage per fill</td></tr>
+</tbody></table></div>
+"""
+
+
 def backtest_section() -> str:
     """Build the A/B backtest HTML section from state/abtest.json."""
     from pathlib import Path
@@ -305,6 +337,8 @@ More trials = stronger evidence (learning → developing → trained → establi
 </tr></thead><tbody>
 {''.join(learning_rows) if learning_rows else '<tr><td colspan=5>No learning state yet.</td></tr>'}
 </tbody></table></div>
+
+{strategy_rules_section()}
 
 {backtest_section()}
 
