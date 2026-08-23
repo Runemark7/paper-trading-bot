@@ -26,6 +26,9 @@ from hedge_fund.trading.store import TradeStore
 STATE = Path(os.environ.get("PAPER_STATE", "state"))
 SYMBOLS = ["BTC/USDT", "ETH/USDT"]
 START_CASH = 10_000.0
+# Strategy the live loop runs. sma_stack = A/B backtest winner (trend-following,
+# close > SMA7 > SMA25 > SMA50). rsi_momentum = original baseline, kept as opt.
+LIVE_STRATEGY = os.environ.get("PAPER_STRATEGY", "sma_stack")
 
 
 def main() -> None:
@@ -55,7 +58,8 @@ def main() -> None:
         risk_peak = START_CASH
     risk = RiskManager(initial_equity=max(risk_peak, START_CASH))
 
-    loop = TradingLoop(data, broker, risk, calib, store=store, regime=regime)
+    loop = TradingLoop(data, broker, risk, calib, store=store, regime=regime,
+                       strategy=LIVE_STRATEGY)
 
     for i in range(args.cycles):
         results = loop.run_cycle(SYMBOLS)
@@ -70,8 +74,8 @@ def main() -> None:
     )
 
     out = generate_dashboard(store, args.dashboard, calib_path=str(state / "calibration.json"))
-    print(f"\ndashboard -> {out}")
-    print(f"equity: {broker.equity({}) :,.0f} | open: "
+    print(f"\n[dashboard -> {out}]")
+    print(f"[strategy: {LIVE_STRATEGY}] equity: {broker.equity({}) :,.0f} | open: "
           f"{ {t: round(p.quantity,4) for t,p in broker.positions.items()} }")
 
 

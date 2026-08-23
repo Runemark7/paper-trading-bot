@@ -63,6 +63,13 @@ def momentum(values: list[float], lookback: int) -> float:
     return values[-1] / prev - 1.0
 
 
+def sma(values: list[float], period: int) -> float:
+    """Simple moving average over the last `period` closes, or NaN if short."""
+    if len(values) < period:
+        return float("nan")
+    return sum(values[-period:]) / period
+
+
 # ---------------------------------------------------------------------------
 # Feature bucket -> named condition
 # ---------------------------------------------------------------------------
@@ -90,9 +97,16 @@ class Signal:
 
 
 def compute_signal(
-    candle_series: list[Candle], symbol: str, timeframe: str
+    candle_series: list[Candle], symbol: str, timeframe: str, strategy: str = "sma_stack"
 ) -> Signal:
-    """Compute the condition + a rough directional score for the latest bar."""
+    """Compute the condition + a rough directional score for the latest bar.
+
+    `strategy` selects the entry rule:
+      - "sma_stack": close > SMA(7) > SMA(25) > SMA(50) — the winner of the
+        A/B backtest (trend-following). Long when the stack is rising.
+      - "rsi_momentum": the original baseline (20-EMA trend + RSI buckets).
+        Kept for comparison; NOT the default.
+    """
     closes = [c.close for c in candle_series]
     if len(closes) < 2:
         raise ValueError(f"need >=2 bars for {symbol} {timeframe}, got {len(closes)}")
@@ -105,35 +119,48 @@ def compute_signal(
         price=price,
     )
 
-    # Trend: price vs 20-EMA
-    trend_up = price > f.ema_20
-
-    # Condition name — readable, hand-authored buckets
-    if trend_up:
-        if f.rsi >= 70:
-            cond = "uptrend_rsi_high"
-        elif f.rsi >= 55:
-            cond = "uptrend_rsi_mid"
+    if strategy == "sma_stack":
+        s7 = sma(closes, 7)
+        s25 = sma(closes, 25)
+        s50 = sma(closes, 50)
+        stacked = not any(
+            x != x for x in (s7, s25, s50)          # not NaN
+        ) and (price > s7 > s25 > s50)
+        take_long = stacked
+        cond = "sma_stack_rising" if stacked else (
+            "sma_stack_flat" if s7 > s25 > s50 else "sma_stack_flat"
+        )
+        # score: how strongly the stack is stacked, -1..1
+        if not any(x != x for x in (s7, s25, s50)):
+            spread = (s7 / s50 - 1) if s50 else 0
+            score = max(-1.0, min(1.0, spread * 60))
         else:
-            cond = "uptrend_rsi_low"
-    else:
-        if f.rsi <= 30:
-            cond = "downtrend_rsi_low"
-        elif f.rsi <= 45:
-            cond = "downtrend_rsi_mid"
+            score = 0.0
+
+    else:  # rsi_momentum (baseline)
+        trend_up = price > f.ema_20
+        if trend_up:
+            if f.rsi >= 70:
+                cond = "uptrend_rsi_high"
+            elif f.rsi >= 55:
+                cond = "uptrend_rsi_mid"
+            else:
+                cond = "uptrend_rsi_low"
         else:
-            cond = "downtrend_rsi_high"
+            if f.rsi <= 30:
+                cond = "downtrend_rsi_low"
+            elif f.rsi <= 45:
+                cond = "downtrend_rsi_mid"
+            else:
+                cond = "downtrend_rsi_high"
+        score = 0.0
+        score += 1.0 if trend_up else -1.0
+        score += 0.5 * math.tanh(f.mom_4h * 20)
+        score += 0.5 * math.tanh(f.mom_1d * 10)
+        score = max(-1.0, min(1.0, score))
+        take_long = trend_up and f.rsi > 50 and score > 0.15
 
-    # Raw directional score: trend + momentum + RSI positioning, -1..1
-    score = 0.0
-    score += 1.0 if trend_up else -1.0
-    score += 0.5 * math.tanh(f.mom_4h * 20)
-    score += 0.5 * math.tanh(f.mom_1d * 10)
-    score = max(-1.0, min(1.0, score))
-
-    # We only take longs in this first version (avoid short-side complexity);
-    # score only decides WHETHER to enter, not direction.
-    direction = "long" if score > 0.15 else "flat"
+    direction = "long" if take_long else "flat"
 
     return Signal(symbol=symbol, timeframe=timeframe, condition=cond,
                   features=f, direction=direction, raw_score=score)

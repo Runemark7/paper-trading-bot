@@ -60,6 +60,7 @@ class TradingLoop:
         timeframe: str = "4h",
         horizon_bars: int = 6,  # ~1 day at 4h; success = close above entry at horizon
         kline_limit: int = 300,
+        strategy: str = "sma_stack",
     ) -> None:
         self.data = data
         self.broker = broker
@@ -67,6 +68,7 @@ class TradingLoop:
         self.calib = calib
         self.store = store
         self.regime = regime
+        self.strategy = strategy
         self.timeframe = timeframe
         self.horizon_bars = horizon_bars
         self.kline_limit = kline_limit
@@ -111,7 +113,7 @@ class TradingLoop:
         for sym in symbols:
             try:
                 klines = self.data.fetch_klines(sym, self.timeframe, limit=self.kline_limit)
-                sig = compute_signal(klines, sym, self.timeframe)
+                sig = compute_signal(klines, sym, self.timeframe, strategy=self.strategy)
             except Exception as exc:
                 results.append(CycleResult(sym, now, "ERR", 0.0, "flat", "REJECTED",
                                            reason=f"data error: {exc}"))
