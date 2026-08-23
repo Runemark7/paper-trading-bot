@@ -71,7 +71,8 @@ class TradeStore:
                 exit_fee REAL,
                 pnl REAL,
                 pnl_pct REAL,
-                hit INTEGER               -- 1 = prediction resolved, 0 = not
+                hit INTEGER,               -- 1 = prediction resolved, 0 = not
+                lot_id INTEGER             -- identifies which broker lot this is
             );
             CREATE TABLE IF NOT EXISTS equity_snapshots (
                 ts TEXT NOT NULL,
@@ -85,6 +86,11 @@ class TradeStore:
             """
         )
         self.conn.commit()
+        # migration: add lot_id column if the table predates it
+        cols = [r[1] for r in self.conn.execute("PRAGMA table_info(trades)").fetchall()]
+        if "lot_id" not in cols:
+            self.conn.execute("ALTER TABLE trades ADD COLUMN lot_id INTEGER")
+            self.conn.commit()
 
     # -- writes ----------------------------------------------------------
     def record_decision(
@@ -123,13 +129,14 @@ class TradeStore:
         entry_price: float,
         size: float,
         entry_fee: float,
+        lot_id: int | None = None,
     ) -> int:
         cur = self.conn.execute(
             """INSERT INTO trades (symbol,timeframe,condition,stated_prob,
-               entry_ts,entry_price,size,entry_fee)
-               VALUES (?,?,?,?,?,?,?,?)""",
+               entry_ts,entry_price,size,entry_fee,lot_id)
+               VALUES (?,?,?,?,?,?,?,?,?)""",
             (symbol, timeframe, condition, stated_prob, _now(),
-             entry_price, size, entry_fee),
+             entry_price, size, entry_fee, lot_id),
         )
         self.conn.commit()
         return cur.lastrowid
@@ -183,7 +190,7 @@ class TradeStore:
         return [
             dict(r)
             for r in self.conn.execute(
-                "SELECT id, symbol, entry_price, size, entry_fee FROM trades WHERE exit_ts IS NULL"
+                "SELECT id, symbol, entry_price, size, entry_fee, lot_id FROM trades WHERE exit_ts IS NULL"
             ).fetchall()
         ]
 

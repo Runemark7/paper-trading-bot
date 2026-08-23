@@ -36,18 +36,16 @@ def replay(data: CcxtSource, symbol: str, timeframe: str, limit: int,
         cur = klines[i].close
         px = {symbol: cur}
 
-        # manage open position: stop / take-profit
-        if broker.is_open(symbol):
-            pos = broker.positions[symbol]
+        # manage open position: stop / take-profit (per lot, may pyramid)
+        for pos in list(broker.lots_for(symbol)):
             if cur <= pos.stop_loss:
-                fill = broker.close_position(symbol, cur)
+                fill = broker.close_lot(pos, cur)
                 _close(store, calib, symbol, pos, fill, "stop_loss")
             else:
                 tp = risk.take_profit_price(pos.entry_price, pos.stop_loss, TAKE_PROFIT_RR)
                 if cur >= tp:
-                    fill = broker.close_position(symbol, cur)
+                    fill = broker.close_lot(pos, cur)
                     _close(store, calib, symbol, pos, fill, "take_profit")
-            continue
 
         if sig.direction != "long" or risk.is_halted():
             continue
@@ -59,7 +57,7 @@ def replay(data: CcxtSource, symbol: str, timeframe: str, limit: int,
         entry = cur
         stop = entry * (1 - STOP_PCT)
         open_pos = [(p.entry_price, p.stop_loss, p.quantity)
-                    for p in broker.positions.values()]
+                    for p in broker.lots]
         rd = risk.size_position(equity, entry, stop, open_pos)
         if not rd.approved:
             continue
@@ -67,16 +65,15 @@ def replay(data: CcxtSource, symbol: str, timeframe: str, limit: int,
             Order(symbol, "buy", rd.size, entry, stop_loss=stop, condition=key),
             market_price=entry,
         )
+        new_lot = broker.lots[-1] if broker.lots else None
         store.open_trade(symbol, timeframe, sig.condition, prob, entry, rd.size,
-                         entry_fee=fill.fee)
-        bid = store.open_trade_ids()[-1]["id"]
-        broker._last_tid = bid  # (kept simple; not used by close path)
+                         entry_fee=fill.fee,
+                         lot_id=new_lot.lot_id if new_lot else None)
 
-    # finish: close any still-open position at last price
-    if broker.is_open(symbol):
-        pos = broker.positions[symbol]
+    # finish: close any still-open lot at last price
+    for pos in list(broker.lots_for(symbol)):
         last = klines[-1].close
-        fill = broker.close_position(symbol, last)
+        fill = broker.close_lot(pos, last)
         _close(store, calib, symbol, pos, fill, "manual_eod")
 
 

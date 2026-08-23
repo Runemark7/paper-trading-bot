@@ -57,23 +57,34 @@ def live_preview(db: str) -> dict:
     live_equity = broker.equity(prices)
 
     positions = []
-    for sym, pos in broker.positions.items():
+    # group lots by symbol -> aggregate, and list lots individually
+    from collections import defaultdict
+    by_sym: dict[str, dict] = defaultdict(lambda: {"qty": 0.0, "lots": [], "entry_w": 0.0})
+    for lot in broker.lots:
+        sym = lot.ticker
+        b = by_sym[sym]
+        b["qty"] += lot.quantity
+        b["entry_w"] += lot.entry_price * lot.quantity
+        b["lots"].append(lot)
+    for sym, b in by_sym.items():
         cur = prices.get(sym)
-        value = cur * pos.quantity if cur else None
-        entry_val = pos.entry_price * pos.quantity
+        avg_entry = b["entry_w"] / b["qty"] if b["qty"] else 0.0
+        value = cur * b["qty"] if cur else None
+        entry_val = avg_entry * b["qty"]
         unrealized = (value - entry_val) if cur else None
-        upnl_pct = (cur / pos.entry_price - 1) if cur else None
+        upnl_pct = (cur / avg_entry - 1) if cur else None
         positions.append(
             {
                 "symbol": sym,
-                "quantity": round(pos.quantity, 5),
-                "entry": round(pos.entry_price, 2),
-                "stop": round(pos.stop_loss, 2),
+                "quantity": round(b["qty"], 5),
+                "entry": round(avg_entry, 2),
+                "stop": round(min((l.stop_loss for l in b["lots"]), default=0), 2),
                 "current": round(cur, 2) if cur else None,
                 "value": round(value, 2) if value else None,
                 "unrealized_pnl": round(unrealized, 2) if unrealized is not None else None,
                 "unrealized_pct": round(upnl_pct, 4) if upnl_pct is not None else None,
-                "condition": pos.entry_condition,
+                "condition": b["lots"][0].entry_condition if b["lots"] else "",
+                "lot_count": len(b["lots"]),
             }
         )
 

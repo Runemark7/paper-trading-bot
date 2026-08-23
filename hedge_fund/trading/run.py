@@ -76,7 +76,7 @@ def main() -> None:
     out = generate_dashboard(store, args.dashboard, calib_path=str(state / "calibration.json"))
     print(f"\n[dashboard -> {out}]")
     print(f"[strategy: {LIVE_STRATEGY}] equity: {broker.equity({}) :,.0f} | open: "
-          f"{ {t: round(p.quantity,4) for t,p in broker.positions.items()} }")
+          f"{ {t: round(broker.quantity(t), 4) for t in set(p.ticker for p in broker.lots)} }")
 
 
 if __name__ == "__main__":

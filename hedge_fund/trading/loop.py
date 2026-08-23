@@ -130,11 +130,9 @@ class TradingLoop:
                     reason=f"halted: {self.risk.halt_reason}", equity=equity))
                 continue
 
-            if self.broker.is_open(sym):
-                results.append(CycleResult(
-                    sym, now, sig.condition, prob, sig.direction, "HOLD",
-                    reason="already in position", equity=equity))
-                continue
+            # Multiple concurrent lots per symbol allowed (pyramiding into an
+            # uptrend). The 5% open-risk cap below bounds how many stack.
+            # (No is_open hold here — a fresh long lot may open alongside.)
 
             # Only enter on an eligible long signal
             if sig.direction != "long":
@@ -161,10 +159,10 @@ class TradingLoop:
             # Stop: ~2.5% below entry (simple initial risk). Deterministic.
             stop = entry * (1 - 0.025)
 
-            # Existing open risk (for the cap): convert broker positions.
+            # Existing open risk (for the cap): account for ALL open lots.
             open_pos = [
                 (p.entry_price, p.stop_loss, p.quantity)
-                for p in self.broker.positions.values()
+                for p in self.broker.lots
             ]
             rd = self.risk.size_position(equity, entry, stop, open_pos)
             if not rd.approved:
@@ -185,12 +183,14 @@ class TradingLoop:
 
             # persist: open a trade row + log the decision
             if self.store is not None:
+                # the lot just created is the last in broker.lots
+                new_lot = self.broker.lots[-1] if self.broker.lots else None
+                lot_id = new_lot.lot_id if new_lot else None
                 self.store.open_trade(
                     sym, self.timeframe, sig.condition, prob, entry, rd.size,
-                    entry_fee=fill.fee,
+                    entry_fee=fill.fee, lot_id=lot_id,
                 )
                 tid = self.store.open_trade_ids()[-1]["id"]
-                self._open_ids[sym] = tid
 
         # persist decisions + equity snapshot once per cycle
         if self.store is not None:
@@ -215,53 +215,56 @@ class TradingLoop:
 
     # ------------------------------------------------------------------
     def _manage_open_positions(self, px: dict, now: str) -> None:
-        """Close positions on stop breach or take-profit; record outcomes."""
-        for sym in list(self.broker.positions.keys()):
-            pos = self.broker.positions[sym]
+        """Close any lot on stop breach or take-profit; record outcomes."""
+        for lot in list(self.broker.lots):
+            sym = lot.ticker
             cur = px.get(sym)
             if cur is None:
                 continue
-            # Reconstruct the signal condition that got us in is stored where?
-            # We keep it simple: record outcome against the current condition
-            # for the last CLOSE. For prototype, record a catch-all "closed".
-            if cur <= pos.stop_loss:
-                fill = self.broker.close_position(sym, cur)
-                self._record_outcome(sym, pos, fill, tp=False)
-                self._close_store_trade(sym, pos, fill, "stop_loss")
+            if cur <= lot.stop_loss:
+                fill = self.broker.close_lot(lot, cur)
+                self._record_outcome(sym, lot, fill, tp=False)
+                self._close_store_lot(lot, fill, "stop_loss")
                 self.history.append(CycleResult(
                     sym, now, "closed", 0.0, "flat", "CLOSE_STOP",
                     reason=f"stop at {cur:.0f}", equity=self.broker.equity(px)))
             else:
-                tp = self.risk.take_profit_price(pos.entry_price, pos.stop_loss, TAKE_PROFIT_RR)
+                tp = self.risk.take_profit_price(lot.entry_price, lot.stop_loss, TAKE_PROFIT_RR)
                 if cur >= tp:
-                    fill = self.broker.close_position(sym, cur)
-                    self._record_outcome(sym, pos, fill, tp=True)
-                    self._close_store_trade(sym, pos, fill, "take_profit")
+                    fill = self.broker.close_lot(lot, cur)
+                    self._record_outcome(sym, lot, fill, tp=True)
+                    self._close_store_lot(lot, fill, "take_profit")
                     self.history.append(CycleResult(
                         sym, now, "closed", 0.0, "flat", "CLOSE_TP",
-                        reason=f"tp at {cur:.0f}", equity=self.broker.equity(px)))
+                        reason=f"tp at {cur:.2f}", equity=self.broker.equity(px)))
 
-    def _close_store_trade(self, sym, pos, fill, reason: str) -> None:
-        """Persist a closed trade's P&L + hit flag into the store."""
+    def _close_store_lot(self, lot, fill, reason: str) -> None:
+        """Persist a closed lot's P&L + hit flag into the store.
+
+        Matches the open trade row by (symbol, lot_id) so multi-lot pyramids
+        attribute P&L to the correct entry; falls back to symbol-only.
+        """
         if self.store is None:
             return
-        # find the open trade row for this symbol (persisted in DB, so it
-        # survives across runs even though this loop instance is fresh)
         tid = None
         for t in self.store.open_trade_ids():
-            if t["symbol"] == sym:
+            if t["symbol"] == lot.ticker and t.get("lot_id") == lot.lot_id:
                 tid = t["id"]
                 break
         if tid is None:
+            for t in self.store.open_trade_ids():
+                if t["symbol"] == lot.ticker:
+                    tid = t["id"]
+                    break
+        if tid is None:
             return
-        entry = pos.entry_price
+        entry = lot.entry_price
         exit_ = fill.price
-        pnl = (exit_ - entry) * pos.quantity - fill.fee - pos.entry_fee
+        pnl = (exit_ - entry) * lot.quantity - fill.fee - lot.entry_fee
         pnl_pct = (exit_ - entry) / entry if entry else 0.0
         success = (exit_ > entry) if reason == "take_profit" else not (exit_ <= entry)
         self.store.close_trade(tid, exit_, reason, fill.fee, pnl, pnl_pct,
                                hit=1 if success else 0)
-        self._open_ids.pop(sym, None)
 
     def _record_outcome(self, sym, pos, fill, tp: bool) -> None:
         """Record a completed trade's outcome into the calibration layer.
