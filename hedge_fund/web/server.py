@@ -31,6 +31,7 @@ from pathlib import Path
 
 from hedge_fund.regime.gate import RegimeGate
 from hedge_fund.trading.store import TradeStore
+from hedge_fund.web.live import live_preview, live_prices
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 STATE_DIR = REPO_ROOT / "state"
@@ -108,6 +109,28 @@ def trigger_run() -> dict:
         }
 
 
+_LIVE_LOCK = threading.Lock()
+
+
+def live_report(fresh_prices: bool = True) -> None:
+    """Regenerate the dashboard HTML with live prices/P&L injected.
+
+    Called on each GET / so the dashboard reflects current market value,
+    not just the last cron snapshot. Position sizing/decisions are untouched —
+    this only re-prices the open positions live for display.
+    """
+    from hedge_fund.dashboard.report import generate_dashboard
+
+    with _LIVE_LOCK:
+        try:
+            live = live_preview(CORE_DB)
+            st = TradeStore(CORE_DB)
+            generate_dashboard(st, str(DASHBOARD_HTML),
+                               calib_path=str(CALIB_JSON), live=live)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[live_report] failed: {exc}")
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass  # quieter
@@ -139,13 +162,17 @@ class Handler(BaseHTTPRequestHandler):
         if route == "/health":
             self._send_json({"ok": True, "ts": time.time()})
         elif route == "/dashboard" or route == "/":
+            live_report()  # re-price open positions live before serving
             self._send_html(DASHBOARD_HTML)
         elif route == "/api/summary":
+            live_report()  # ensure fresh
             self._send_json(build_summary())
         elif route == "/api/learning":
             self._send_json(build_learning())
         elif route == "/api/regime":
             self._send_json(build_regime())
+        elif route == "/api/live":
+            self._send_json(live_preview(CORE_DB))
         elif route == "/api/trades":
             st = TradeStore(CORE_DB)
             self._send_json([dict(t) for t in st.trades(closed_only=True)[-50:]])
@@ -161,9 +188,6 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(trigger_run())
         else:
             self._send_json({"error": "unknown route"}, 404)
-
-
-CORE_DB = str(CORE_DB) if (CORE_DB := TRADES_DB) else TRADES_DB  # resolve for module use
 
 
 def main():

@@ -154,7 +154,23 @@ def backtest_section() -> str:
     return "\n".join(h)
 
 
-def generate_dashboard(store: TradeStore, out_path: str, calib_path: str | None = None) -> str:
+def _live_bar(live: dict | None) -> str:
+    """A small LIVE banner showing prices + as-of time when live data present."""
+    if not live:
+        return ""
+    prices = live.get("prices", {})
+    chips = "".join(
+        f'<span class="chip">{html.escape(s)} <b>${_fmt(p)}</b></span>'
+        for s, p in prices.items() if p
+    )
+    return (
+        f'<span class="live-dot">●</span> <b>LIVE</b> — '
+        f'{chips} <span class="sm">as of {html.escape(live.get("as_of", ""))}</span>'
+    )
+
+
+def generate_dashboard(store: TradeStore, out_path: str, calib_path: str | None = None,
+                       live: dict | None = None) -> str:
     trades = store.all_trades()
     closed = [t for t in trades if t["exit_ts"]]
     eq = store.equity_history()
@@ -191,17 +207,26 @@ def generate_dashboard(store: TradeStore, out_path: str, calib_path: str | None 
             f"<td>{_pct(t['pnl_pct'])}</td>"
             f"<td>{'✓' if t['hit'] else '✗'}</td></tr>"
         )
-    # open positions (exit_ts is null) shown as still-in-trade
+    # open positions (exit_ts is null) shown as still-in-trade; if `live`
+    # data is provided, show live current price + unrealized P&L.
     open_t = [t for t in trades if not t["exit_ts"]]
+    live_pos = {p["symbol"]: p for p in (live or {}).get("positions", [])}
     for t in open_t:
+        lp = live_pos.get(t["symbol"])
+        if lp and lp.get("current") is not None:
+            cls = "pos" if (lp.get("unrealized_pnl") or 0) > 0 else "neg"
+            cell = (f"<td>{_fmt(lp['current'])}</td><td>open</td>"
+                    f'<td class="{cls}">{_fmt(lp["unrealized_pnl"])}</td>'
+                    f'<td>{_pct(lp["unrealized_pct"])}</td><td>live</td>')
+        else:
+            cell = ("<td>—</td><td>open</td>"
+                    "<td class=\"neg\">—</td><td>—</td><td>…</td>")
         trade_rows.append(
             f"<tr><td>{html.escape(t['symbol'])}</td>"
             f"<td>{html.escape(t['condition'] or '')}</td>"
             f"<td>{_fmt(t['stated_prob'])}</td>"
             f"<td>{t['entry_price']:,.0f}</td>"
-            f"<td>—</td>"
-            f"<td>open</td>"
-            f"<td class=\"neg\">—</td><td>—</td><td>…</td></tr>"
+            f"{cell}</tr>"
         )
 
     html_doc = f"""<!doctype html>
@@ -231,11 +256,17 @@ def generate_dashboard(store: TradeStore, out_path: str, calib_path: str | None 
   .badge-developing {{ background:#cfe2ff; color:#084298; }}
   .badge-trained {{ background:#d1e7dd; color:#0f5132; }}
   .badge-established {{ background:#198754; color:#fff; }}
+  .livebar {{ margin: 8px 0 14px; font-size: 13px; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }}
+  .live-dot {{ color:#198754; font-size:14px; }}
+  .chip {{ background:#eef7ee; border:1px solid #cde8cd; border-radius:12px;
+           padding:2px 10px; }}
+  .chip b {{ font-weight:600; }}
 </style></head><body>
 <h1>paper-trading-bot <span class="sm">— self-learning probabilities on BTC/ETH (paper)</span></h1>
+<div class="livebar">{_live_bar(live)}</div>
 
 <div class="cards">
-  <div class="card"><div class="k">Equity</div><div class="v">{_fmt(eq[-1]['equity']) if eq else '—'}</div></div>
+  <div class="card"><div class="k">{'Live equity' if live else 'Equity'}</div><div class="v {'pos' if (live and (live.get('live_equity') or 0)>=9990) else ''}">{_fmt((live or {}).get('live_equity') or (eq[-1]['equity'] if eq else 0))}</div></div>
   <div class="card"><div class="k">Closed trades</div><div class="v">{stats['closed'] or 0}</div></div>
   <div class="card"><div class="k">Win rate</div><div class="v">{(stats['hits']/stats['closed']) if stats['closed'] else 0:.0%}</div></div>
   <div class="card"><div class="k">Total P&amp;L</div><div class="v {'pos' if (stats['total_pnl'] or 0)>0 else 'neg'}">{_fmt(stats['total_pnl'])}</div></div>
