@@ -69,3 +69,4 @@ scripts/release.sh
 state/
 dashboard_out/
 *.html
+state/

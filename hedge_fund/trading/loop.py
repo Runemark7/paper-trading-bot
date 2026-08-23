@@ -28,6 +28,7 @@ from hedge_fund.calibration import CalibrationStore, condition_key
 from hedge_fund.data.binance import CcxtSource
 from hedge_fund.risk.managed import RiskManager
 from hedge_fund.signals.momentum import compute_signal
+from hedge_fund.trading.store import TradeStore
 
 TAKE_PROFIT_RR = 2.0  # 2:1 reward:risk
 
@@ -54,6 +55,7 @@ class TradingLoop:
         broker: PaperBroker,
         risk: RiskManager,
         calib: CalibrationStore,
+        store: TradeStore | None = None,
         timeframe: str = "4h",
         horizon_bars: int = 6,  # ~1 day at 4h; success = close above entry at horizon
         kline_limit: int = 300,
@@ -62,10 +64,13 @@ class TradingLoop:
         self.broker = broker
         self.risk = risk
         self.calib = calib
+        self.store = store
         self.timeframe = timeframe
         self.horizon_bars = horizon_bars
         self.kline_limit = kline_limit
         self.history: list[CycleResult] = []
+        # open trade ids keyed by symbol, for close accounting
+        self._open_ids: dict[str, int] = {}
 
     # ------------------------------------------------------------------
     def _propose_probability(self, signal, features) -> float:
@@ -165,6 +170,32 @@ class TradingLoop:
                 reason=f"size {rd.size:.4f} stop {stop:.0f}",
                 equity=self.broker.equity(px), size=rd.size, entry=entry, fills=[fill]))
 
+            # persist: open a trade row + log the decision
+            if self.store is not None:
+                self.store.open_trade(
+                    sym, self.timeframe, sig.condition, prob, entry, rd.size,
+                    entry_fee=fill.fee,
+                )
+                tid = self.store.open_trade_ids()[-1]["id"]
+                self._open_ids[sym] = tid
+
+        # persist decisions + equity snapshot once per cycle
+        if self.store is not None:
+            for r in results:
+                self.store.record_decision(
+                    r.symbol, self.timeframe, r.condition, None,
+                    r.probability, r.direction, r.action, r.reason,
+                    r.equity, r.size, r.entry,
+                    raw_signal={"condition": r.condition, "direction": r.direction},
+                )
+            px_now = {}
+            for sym in symbols:
+                try:
+                    px_now[sym] = self.data.fetch_price(sym)
+                except Exception:
+                    px_now[sym] = None
+            self.store.snapshot_equity(self.broker.equity(px_now), baseline=None)
+
         self.history.extend(results)
         self.calib.save()
         return results
@@ -183,6 +214,7 @@ class TradingLoop:
             if cur <= pos.stop_loss:
                 fill = self.broker.close_position(sym, cur)
                 self._record_outcome(sym, pos, fill, tp=False)
+                self._close_store_trade(sym, pos, fill, "stop_loss")
                 self.history.append(CycleResult(
                     sym, now, "closed", 0.0, "flat", "CLOSE_STOP",
                     reason=f"stop at {cur:.0f}", equity=self.broker.equity(px)))
@@ -191,9 +223,26 @@ class TradingLoop:
                 if cur >= tp:
                     fill = self.broker.close_position(sym, cur)
                     self._record_outcome(sym, pos, fill, tp=True)
+                    self._close_store_trade(sym, pos, fill, "take_profit")
                     self.history.append(CycleResult(
                         sym, now, "closed", 0.0, "flat", "CLOSE_TP",
                         reason=f"tp at {cur:.0f}", equity=self.broker.equity(px)))
+
+    def _close_store_trade(self, sym, pos, fill, reason: str) -> None:
+        """Persist a closed trade's P&L + hit flag into the store."""
+        if self.store is None:
+            return
+        tid = self._open_ids.get(sym)
+        if tid is None:
+            return
+        entry = pos.entry_price
+        exit_ = fill.price
+        pnl = (exit_ - entry) * pos.quantity - fill.fee - pos.entry_fee
+        pnl_pct = (exit_ - entry) / entry if entry else 0.0
+        success = (exit_ > entry) if reason == "take_profit" else not (exit_ <= entry)
+        self.store.close_trade(tid, exit_, reason, fill.fee, pnl, pnl_pct,
+                               hit=1 if success else 0)
+        self._open_ids.pop(sym, None)
 
     def _record_outcome(self, sym, pos, fill, tp: bool) -> None:
         """Record a completed trade's outcome into the calibration layer.
