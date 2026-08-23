@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 
 from hedge_fund.brokers.paper import PaperBroker
@@ -38,11 +39,21 @@ def main() -> None:
     state.mkdir(parents=True, exist_ok=True)
 
     data = CcxtSource()
-    broker = PaperBroker(cash=START_CASH, taker_fee=0.001, slippage=0.0002)
-    risk = RiskManager(initial_equity=START_CASH)
-    calib = CalibrationStore(state / "calibration.json")
     store = TradeStore(state / "trades.sqlite")
+    calib = CalibrationStore(state / "calibration.json")
     regime = RegimeGate(state_dir=state, cache_hours=6, top_n=10)
+
+    # Restore the persistent paper account (cash + open positions) so the
+    # account accumulates across runs instead of resetting every cycle.
+    broker = PaperBroker(cash=START_CASH, taker_fee=0.001, slippage=0.0002)
+    saved = store.load_account_state()
+    if saved:
+        broker.restore_state(saved.get("broker", {}))
+        # risk peak continuity: start peak from last known equity if higher
+        risk_peak = saved.get("risk_peak", START_CASH)
+    else:
+        risk_peak = START_CASH
+    risk = RiskManager(initial_equity=max(risk_peak, START_CASH))
 
     loop = TradingLoop(data, broker, risk, calib, store=store, regime=regime)
 
@@ -51,6 +62,12 @@ def main() -> None:
         for r in results:
             print(f"[{i}] {r.symbol} {r.action:9s} cond={r.condition} "
                   f"p={r.probability:.2f} eq={r.equity:.0f} {r.reason[:40]}")
+
+    # Persist the account state so the next run continues from here.
+    store.save_account_state(
+        {"broker": broker.to_state(), "risk_peak": risk.peak_equity,
+         "saved_at": datetime.now(timezone.utc).isoformat()}
+    )
 
     out = generate_dashboard(store, args.dashboard, calib_path=str(state / "calibration.json"))
     print(f"\ndashboard -> {out}")

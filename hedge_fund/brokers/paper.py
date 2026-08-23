@@ -85,6 +85,34 @@ class PaperBroker:
     def is_open(self, ticker: str) -> bool:
         return ticker in self.positions
 
+    # -- state persistence ---------------------------------------------------
+    def to_state(self) -> dict:
+        """Serialize broker account state (cash + open positions)."""
+        return {
+            "cash": self._cash,
+            "positions": [
+                {
+                    "ticker": p.ticker, "quantity": p.quantity, "entry_price": p.entry_price,
+                    "stop_loss": p.stop_loss, "entry_fee": p.entry_fee,
+                    "entry_condition": p.entry_condition,
+                }
+                for p in self.positions.values()
+            ],
+        }
+
+    def restore_state(self, state: dict) -> None:
+        """Rebuild cash + positions from a saved state dict."""
+        self._cash = float(state.get("cash", self._cash))
+        self.positions = {}
+        for p in state.get("positions", []):
+            pos = OpenPosition(
+                ticker=p["ticker"], quantity=p["quantity"], entry_price=p["entry_price"],
+                stop_loss=p["stop_loss"], entry_fee=p.get("entry_fee", 0.0),
+                entry_condition=p.get("entry_condition", ""),
+            )
+            self.positions[pos.ticker] = pos
+        self.fills = []  # fills are ephemeral; positions/cash are the durable state
+
     # -- order execution -----------------------------------------------------
     def place_order(self, order: Order, market_price: float | None = None) -> Fill | None:
         """Fill an order with slippage + taker fee.

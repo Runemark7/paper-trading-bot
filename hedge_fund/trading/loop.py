@@ -243,7 +243,13 @@ class TradingLoop:
         """Persist a closed trade's P&L + hit flag into the store."""
         if self.store is None:
             return
-        tid = self._open_ids.get(sym)
+        # find the open trade row for this symbol (persisted in DB, so it
+        # survives across runs even though this loop instance is fresh)
+        tid = None
+        for t in self.store.open_trade_ids():
+            if t["symbol"] == sym:
+                tid = t["id"]
+                break
         if tid is None:
             return
         entry = pos.entry_price
