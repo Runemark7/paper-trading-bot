@@ -194,10 +194,18 @@ def generate_dashboard(store: TradeStore, out_path: str, calib_path: str | None 
     ]
 
     # trade rows: closed trades first, then open positions (never-empty view)
+    def _short_ts(ts):
+        if not ts:
+            return "—"
+        # ISO "2026-08-23T13:08:19+00:00" -> "2026-08-23 13:08"
+        return ts[:16].replace("T", " ")
+
     trade_rows = []
     for t in closed:
         trade_rows.append(
-            f"<tr><td>{html.escape(t['symbol'])}</td>"
+            f"<tr><td>{_short_ts(t['entry_ts'])}</td>"
+            f"<td>{_short_ts(t['exit_ts'])}</td>"
+            f"<td>{html.escape(t['symbol'])}</td>"
             f"<td>{html.escape(t['condition'] or '')}</td>"
             f"<td>{_fmt(t['stated_prob'])}</td>"
             f"<td>{t['entry_price']:,.0f}</td>"
@@ -222,7 +230,9 @@ def generate_dashboard(store: TradeStore, out_path: str, calib_path: str | None 
             cell = ("<td>—</td><td>open</td>"
                     "<td class=\"neg\">—</td><td>—</td><td>…</td>")
         trade_rows.append(
-            f"<tr><td>{html.escape(t['symbol'])}</td>"
+            f"<tr><td>{_short_ts(t['entry_ts'])}</td>"
+            f"<td>—</td>"
+            f"<td>{html.escape(t['symbol'])}</td>"
             f"<td>{html.escape(t['condition'] or '')}</td>"
             f"<td>{_fmt(t['stated_prob'])}</td>"
             f"<td>{t['entry_price']:,.0f}</td>"
@@ -300,10 +310,10 @@ More trials = stronger evidence (learning → developing → trained → establi
 
 <h2>Trade log</h2>
 <div class="wrap"><table><thead><tr>
-<th>Symbol</th><th>Condition</th><th>Stated p</th><th>Entry</th><th>Exit</th>
-<th>Reason</th><th>P&amp;L</th><th>P&amp;L %</th><th>Hit</th>
+<th>Entry date</th><th>Exit date</th><th>Symbol</th><th>Condition</th><th>Stated p</th>
+<th>Entry</th><th>Exit</th><th>Reason</th><th>P&amp;L</th><th>P&amp;L %</th><th>Hit</th>
 </tr></thead><tbody>
-{trade_rows and ''.join(trade_rows) or '<tr><td colspan=9>No closed trades yet.</td></tr>'}
+{trade_rows and ''.join(trade_rows) or '<tr><td colspan=11>No trades yet.</td></tr>'}
 </tbody></table></div>
 
 <script>
