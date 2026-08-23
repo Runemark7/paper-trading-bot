@@ -38,6 +38,46 @@ def build_calibration_records(trades) -> list[dict]:
     return records
 
 
+def learning_state_rows(calib: "CalibrationStore") -> list[str]:
+    """Build the 'skills learned' rows: each condition's measured proficiency.
+
+    A condition is a 'learned skill' — it accumulates sampled outcomes and its
+    calibrated mean / hit-rate is the evidence of what the bot has learned.
+    We surface 4 learning levels from sample count:
+      < 5 trials   = "learning"  (insufficient evidence)
+      5-19 trials  = "developing"
+      20-49 trials = "trained"
+      >= 50 trials = "established"
+    """
+    from hedge_fund.calibration import CalibrationStore  # local to avoid import cycle
+
+    snap = calib.snapshot()
+    if not snap:
+        return ['<tr><td colspan="6" style="text-align:center">No learning state yet — the bot hasn\u2019t closed enough trades to start calibrating conditions.</td></tr>']
+
+    rows = []
+    for key, s in sorted(snap.items(), key=lambda kv: -kv[1]["trials"]):
+        sym, tf, cond = key.split("|")
+        trials = s["trials"]
+        mean = s["mean"]
+        if trials < 5:
+            level, badge = "learning", "learning"
+        elif trials < 20:
+            level, badge = "developing", "developing"
+        elif trials < 50:
+            level, badge = "trained", "trained"
+        else:
+            level, badge = "established", "established"
+        rows.append(
+            f'<tr><td>{html.escape(sym)}</td>'
+            f'<td>{html.escape(cond)}</td>'
+            f'<td>{trials}</td>'
+            f'<td>{mean:.2f}</td>'
+            f'<td><span class="badge badge-{badge}">{level}</span></td></tr>'
+        )
+    return rows
+
+
 def per_condition_table(trades) -> str:
     """Group closed trades by condition -> stated vs measured reliability."""
     groups: dict[str, dict] = defaultdict(lambda: {"n": 0, "hits": 0, "probs": []})
@@ -62,7 +102,7 @@ def per_condition_table(trades) -> str:
     return "\n".join(rows)
 
 
-def generate_dashboard(store: TradeStore, out_path: str) -> str:
+def generate_dashboard(store: TradeStore, out_path: str, calib_path: str | None = None) -> str:
     trades = store.all_trades()
     closed = [t for t in trades if t["exit_ts"]]
     eq = store.equity_history()
@@ -70,6 +110,13 @@ def generate_dashboard(store: TradeStore, out_path: str) -> str:
     stats = store.stats()
     records = build_calibration_records(closed)
     cal = compute_calibration(records)
+
+    # learning state rows, if a calibration store path was provided
+    learning_rows = []
+    if calib_path:
+        from hedge_fund.calibration import CalibrationStore
+        cstore = CalibrationStore(calib_path)
+        learning_rows = learning_state_rows(cstore)
 
     # equity curve as JSON for chart.js
     eq_pts = [
@@ -114,6 +161,12 @@ def generate_dashboard(store: TradeStore, out_path: str) -> str:
   .wrap {{ overflow-x: auto; }}
   #curve {{ max-height: 340px; }}
   .sm {{ color: #888; font-size: 13px; }}
+  .badge {{ display:inline-block; padding: 2px 9px; border-radius: 10px;
+            font-size: 11px; font-weight: 600; text-transform: uppercase; }}
+  .badge-learning {{ background:#fff3cd; color:#7a5c00; }}
+  .badge-developing {{ background:#cfe2ff; color:#084298; }}
+  .badge-trained {{ background:#d1e7dd; color:#0f5132; }}
+  .badge-established {{ background:#198754; color:#fff; }}
 </style></head><body>
 <h1>paper-trading-bot <span class="sm">— self-learning probabilities on BTC/ETH (paper)</span></h1>
 
@@ -136,6 +189,16 @@ The gap (|stated − measured|) is the calibration error.|</div>
 <th>Condition</th><th>N</th><th>Stated prob</th><th>Measured</th><th>|gap|</th>
 </tr></thead><tbody>
 {per_condition_table(closed) or '<tr><td colspan=5>No closed trades yet.</td></tr>'}
+</tbody></table></div>
+
+<h2>Learning / Skills acquired</h2>
+<div class="sm">Each signal condition is a skill the bot is learning: it accumulates
+sampled outcomes, and its calibrated probability shows measured proficiency.
+More trials = stronger evidence (learning → developing → trained → established).</div>
+<div class="wrap"><table><thead><tr>
+<th>Symbol</th><th>Condition</th><th>Trials</th><th>Calibrated p</th><th>Level</th>
+</tr></thead><tbody>
+{''.join(learning_rows) if learning_rows else '<tr><td colspan=5>No learning state yet.</td></tr>'}
 </tbody></table></div>
 
 <h2>Trade log</h2>

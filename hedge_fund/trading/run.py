@@ -52,7 +52,7 @@ def main() -> None:
             print(f"[{i}] {r.symbol} {r.action:9s} cond={r.condition} "
                   f"p={r.probability:.2f} eq={r.equity:.0f} {r.reason[:40]}")
 
-    out = generate_dashboard(store, args.dashboard)
+    out = generate_dashboard(store, args.dashboard, calib_path=str(state / "calibration.json"))
     print(f"\ndashboard -> {out}")
     print(f"equity: {broker.equity({}) :,.0f} | open: "
           f"{ {t: round(p.quantity,4) for t,p in broker.positions.items()} }")
