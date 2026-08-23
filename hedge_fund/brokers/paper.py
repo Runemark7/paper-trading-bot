@@ -39,6 +39,7 @@ class Order:
     quantity: float  # fractional for crypto
     price: float  # reference price at decision time (mid)
     stop_loss: float | None = None  # price at which position is force-closed
+    condition: str = ""  # calibration condition key, carried to the position
 
 
 @dataclass
@@ -48,6 +49,7 @@ class OpenPosition:
     entry_price: float
     stop_loss: float
     entry_fee: float
+    entry_condition: str = ""  # calibration condition key at entry
 
 
 class PaperBroker:
@@ -111,14 +113,16 @@ class PaperBroker:
                 new_qty = prev.quantity + order.quantity
                 new_entry = (prev.quantity * prev.entry_price + notional) / new_qty
                 new_stop = order.stop_loss if order.stop_loss is not None else prev.stop_loss
+                new_cond = order.condition or prev.entry_condition
                 self.positions[order.ticker] = OpenPosition(
-                    order.ticker, new_qty, new_entry, new_stop, prev.entry_fee + fee
+                    order.ticker, new_qty, new_entry, new_stop, prev.entry_fee + fee, new_cond
                 )
             else:
                 if order.stop_loss is None:
                     raise ValueError("paper buy needs a stop_loss")
                 self.positions[order.ticker] = OpenPosition(
-                    order.ticker, order.quantity, fill_price, order.stop_loss, fee
+                    order.ticker, order.quantity, fill_price, order.stop_loss, fee,
+                    order.condition,
                 )
             self._cash -= notional + fee
         else:  # sell
