@@ -1,0 +1,93 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: paperbot-backend
+  namespace: trading
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate # SQLite single-writer safety
+  selector:
+    matchLabels:
+      app: paperbot-backend
+  template:
+    metadata:
+      labels:
+        app: paperbot-backend
+    spec:
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+        - name: web
+          image: ghcr.io/runemark7/paperbot-backend:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8787
+          env:
+            - name: PAPER_STATE
+              value: /app/state
+            - name: PAPER_STRATEGY
+              value: sma_stack
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8787
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8787
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          volumeMounts:
+            - name: state-storage
+              mountPath: /app/state
+
+        # Continuous price / stop-loss / take-profit watcher
+        - name: heartbeat
+          image: ghcr.io/runemark7/paperbot-backend:latest
+          imagePullPolicy: Always
+          command: ["python", "-m", "hedge_fund.trading.heartbeat", "--interval", "30"]
+          env:
+            - name: PAPER_STATE
+              value: /app/state
+            - name: PAPER_STRATEGY
+              value: sma_stack
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+          volumeMounts:
+            - name: state-storage
+              mountPath: /app/state
+
+      volumes:
+        - name: state-storage
+          persistentVolumeClaim:
+            claimName: paperbot-state-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: paperbot-backend-svc
+  namespace: trading
+spec:
+  selector:
+    app: paperbot-backend
+  ports:
+    - name: http
+      port: 8787
+      targetPort: 8787

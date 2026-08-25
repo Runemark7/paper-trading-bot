@@ -18,17 +18,33 @@ from hedge_fund.brokers.paper import PaperBroker
 from hedge_fund.calibration import CalibrationStore
 from hedge_fund.data.binance import CcxtSource
 from hedge_fund.dashboard.report import generate_dashboard
-from hedge_fund.regime.gate import RegimeGate
 from hedge_fund.risk.managed import RiskManager
 from hedge_fund.trading.loop import TradingLoop
 from hedge_fund.trading.store import TradeStore
+from hedge_fund.trading.champions import load_pool
 
 STATE = Path(os.environ.get("PAPER_STATE", "state"))
 SYMBOLS = ["BTC/USDT", "ETH/USDT"]
 START_CASH = 10_000.0
-# Strategy the live loop runs. sma_stack = A/B backtest winner (trend-following,
-# close > SMA7 > SMA25 > SMA50). rsi_momentum = original baseline, kept as opt.
+# Strategy the live loop runs. Default is the A/B backtest winner (sma_stack),
+# but the SELF-LEARNED CHAMPION above overrides it when present.
 LIVE_STRATEGY = os.environ.get("PAPER_STRATEGY", "sma_stack")
+
+
+def resolve_champion() -> str | None:
+    """Prefer the live champion from the evolution pool, else None."""
+    try:
+        pool = load_pool()
+        champs = pool.get("champions", [])
+        # prefer a champion that has closed trades (live-validated), else first
+        for c in champs:
+            if c.get("closed", 0) > 0:
+                return c["name"]
+        if champs:
+            return champs[0]["name"]
+    except Exception:
+        pass
+    return None
 
 
 def main() -> None:
@@ -44,7 +60,11 @@ def main() -> None:
     data = CcxtSource()
     store = TradeStore(state / "trades.sqlite")
     calib = CalibrationStore(state / "calibration.json")
-    regime = RegimeGate(state_dir=state, cache_hours=6, top_n=10)
+    # Regime gate is served read-only via /api/regime for the UI. The live
+    # decision cycle does NOT gate on it: computing the regime scans the full
+    # coin universe (40s+) which stalls every cycle. Strategy signals + risk
+    # limits govern entries; the regime zone remains visible in the dashboard.
+    regime = None
 
     # Restore the persistent paper account (cash + open positions) so the
     # account accumulates across runs instead of resetting every cycle.
@@ -58,8 +78,12 @@ def main() -> None:
         risk_peak = START_CASH
     risk = RiskManager(initial_equity=max(risk_peak, START_CASH))
 
+    # The live loop trades the self-learned champion when one exists,
+    # falling back to PAPER_STRATEGY (sma_stack) otherwise.
+    active = resolve_champion() or LIVE_STRATEGY
+    print(f"[active strategy: {active}]")
     loop = TradingLoop(data, broker, risk, calib, store=store, regime=regime,
-                       strategy=LIVE_STRATEGY)
+                       strategy=active)
 
     for i in range(args.cycles):
         results = loop.run_cycle(SYMBOLS)
@@ -75,7 +99,7 @@ def main() -> None:
 
     out = generate_dashboard(store, args.dashboard, calib_path=str(state / "calibration.json"))
     print(f"\n[dashboard -> {out}]")
-    print(f"[strategy: {LIVE_STRATEGY}] equity: {broker.equity({}) :,.0f} | open: "
+    print(f"[strategy: {active}] equity: {broker.equity({}) :,.0f} | open: "
           f"{ {t: round(broker.quantity(t), 4) for t in set(p.ticker for p in broker.lots)} }")
 
 

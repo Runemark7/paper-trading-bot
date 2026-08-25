@@ -69,4 +69,8 @@ scripts/release.sh
 state/
 dashboard_out/
 *.html
-state/
+.crypto_regime_cache/
+frontend/node_modules/
+frontend/dist/
+frontend/tsconfig.tsbuildinfo
+

@@ -50,37 +50,74 @@ def _read_json(path):
         return None
 
 
+def per_strategy_dbs() -> list[Path]:
+    """All isolated per-strategy account DBs in state/."""
+    return sorted(STATE_DIR.glob("trades_*.sqlite"))
+
+
+def store_dbs() -> list[str]:
+    """The DBs to read for aggregate stats/trades: per-strategy, else legacy."""
+    dbs = per_strategy_dbs()
+    if dbs:
+        return [str(d) for d in dbs]
+    return [str(TRADES_DB)]
+
+
 def build_summary() -> dict:
-    st = TradeStore(CORE_DB)
-    stats = st.stats()
+    dbs = store_dbs()
+    total_closed = 0
+    total_hits = 0
+    total_pnl = 0.0
+    last_equity = None
+    last_ts = None
+    for db in dbs:
+        try:
+            st = TradeStore(db)
+            stats = st.stats()
+            total_closed += stats["closed"] or 0
+            total_hits += stats["hits"] or 0
+            eh = st.equity_history()
+            if eh:
+                last_equity = (last_equity or 0.0) + eh[-1]["equity"]
+                last_ts = eh[-1]["ts"] or last_ts
+            if stats["total_pnl"]:
+                total_pnl += stats["total_pnl"]
+        except Exception:
+            continue
     return {
-        "equity": st.equity_history()[-1]["equity"] if st.equity_history() else None,
-        "closed_trades": stats["closed"] or 0,
-        "win_rate": round((stats["hits"] / stats["closed"]), 3) if stats["closed"] else None,
-        "total_pnl": stats["total_pnl"],
-        "updated": st.equity_history()[-1]["ts"] if st.equity_history() else None,
+        "equity": last_equity,
+        "closed_trades": total_closed,
+        "win_rate": round((total_hits / total_closed), 3) if total_closed else None,
+        "total_pnl": total_pnl if total_closed else None,
+        "updated": last_ts,
     }
 
 
 def build_learning() -> dict:
-    calib = _read_json(CALIB_JSON)
-    if not calib:
-        return {}
     out = {}
-    for key, v in calib.items():
-        sym, tf, cond = key.split("|")
-        trials = int(v["alpha"] + v["beta"] - 2)
-        mean = v["alpha"] / (v["alpha"] + v["beta"])
-        if trials < 5:
-            level = "learning"
-        elif trials < 20:
-            level = "developing"
-        elif trials < 50:
-            level = "trained"
-        else:
-            level = "established"
-        out[key] = {"symbol": sym, "timeframe": tf, "condition": cond,
-                    "trials": trials, "calibrated_prob": round(mean, 3), "level": level}
+    calib_files = sorted(STATE_DIR.glob("calibration_*.json"))
+    for f in calib_files:
+        calib = _read_json(f)
+        if not calib:
+            continue
+        for key, v in calib.items():
+            parts = key.split("|")
+            if len(parts) < 3:
+                continue
+            sym, tf, cond = parts[0], parts[1], "|".join(parts[2:])
+            trials = int(v["alpha"] + v["beta"] - 2)
+            mean = v["alpha"] / (v["alpha"] + v["beta"])
+            if trials < 5:
+                level = "learning"
+            elif trials < 20:
+                level = "developing"
+            elif trials < 50:
+                level = "trained"
+            else:
+                level = "established"
+            out[f"{sym}|{tf}|{cond}"] = {"symbol": sym, "timeframe": tf, "condition": cond,
+                                          "trials": trials, "calibrated_prob": round(mean, 3),
+                                          "level": level, "account": f.stem}
     return out
 
 
@@ -97,7 +134,7 @@ def trigger_run() -> dict:
     with RUN_LOCK:
         try:
             proc = subprocess.run(
-                [sys.executable, "-m", "hedge_fund.trading.run", "--cycles", "1"],
+                [sys.executable, "-m", "hedge_fund.trading.run_isolated", "--cycles", "1"],
                 capture_output=True, text=True, timeout=300, cwd=str(REPO_ROOT),
             )
         except subprocess.TimeoutExpired:
@@ -159,7 +196,7 @@ class Handler(BaseHTTPRequestHandler):
         route = self.path.split("?")[0].rstrip("/")
         if not route:
             route = "/"
-        if route == "/health":
+        if route in ("/health", "/healthz"):
             self._send_json({"ok": True, "ts": time.time()})
         elif route == "/dashboard" or route == "/":
             live_report()  # re-price open positions live before serving
@@ -172,10 +209,45 @@ class Handler(BaseHTTPRequestHandler):
         elif route == "/api/regime":
             self._send_json(build_regime())
         elif route == "/api/live":
-            self._send_json(live_preview(CORE_DB))
+            # aggregate live preview across all per-strategy accounts
+            try:
+                from hedge_fund.web.live import live_preview
+                dbs = store_dbs()
+                merged = {"live_equity": 0.0, "cash": 0.0, "positions": [], "accounts": len(dbs)}
+                for db in dbs:
+                    try:
+                        lp = live_preview(db)
+                        merged["live_equity"] += lp.get("live_equity", 0.0) or 0.0
+                        merged["cash"] += lp.get("cash", 0.0) or 0.0
+                        for p in lp.get("positions", []):
+                            p["account"] = Path(db).stem
+                            merged["positions"].append(p)
+                    except Exception:
+                        continue
+                self._send_json(merged)
+            except Exception as exc:
+                self._send_json({"error": str(exc)})
         elif route == "/api/trades":
-            st = TradeStore(CORE_DB)
-            self._send_json([dict(t) for t in st.trades(closed_only=True)[-50:]])
+            rows = []
+            for db in store_dbs():
+                try:
+                    st = TradeStore(db)
+                    for t in st.trades(closed_only=True)[-60:]:
+                        d = dict(t)
+                        d["account"] = Path(db).stem
+                        rows.append(d)
+                except Exception:
+                    continue
+            self._send_json(rows[-60:])
+        elif route == "/api/champions":
+            try:
+                from hedge_fund.trading.champions import (
+                    collect_live_results, pool_status,
+                )
+                collect_live_results()
+                self._send_json(pool_status())
+            except Exception as exc:
+                self._send_json({"error": str(exc), "champions": [], "count": 0, "max": 64}, 500)
         else:
             self._send_json({"error": "unknown route"}, 404)
 

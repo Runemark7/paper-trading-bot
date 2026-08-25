@@ -1,0 +1,12 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: trading
+
+resources:
+  - namespace.yaml
+  - pvc.yaml
+  - backend.yaml
+  - frontend.yaml
+  - cronjob.yaml
+  - ingress.yaml

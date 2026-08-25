@@ -1,0 +1,62 @@
+# Paper-trading bot — docker-compose, mirrors swedish-democratic-tracker conventions.
+# SQLite under /app/state persists in the volume; swap to Neon Postgres at k8s deploy.
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    container_name: paperbot-web
+    ports:
+      - "8787:8787"
+    volumes:
+      - paperbot_state:/app/state
+    environment:
+      PAPER_STATE: /app/state
+      PAPER_STRATEGY: ${PAPER_STRATEGY:-sma_stack}
+    restart: unless-stopped
+
+  scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    container_name: paperbot-scheduler
+    volumes:
+      - paperbot_state:/app/state
+    environment:
+      PAPER_STATE: /app/state
+      PAPER_STRATEGY: ${PAPER_STRATEGY:-sma_stack}
+    command: ["sh", "-c", "while true; do python -m hedge_fund.trading.run --cycles 1; sleep 21600; done"]
+    restart: unless-stopped
+
+  heartbeat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    container_name: paperbot-heartbeat
+    volumes:
+      - paperbot_state:/app/state
+    environment:
+      PAPER_STATE: /app/state
+      PAPER_STRATEGY: ${PAPER_STRATEGY:-sma_stack}
+    command: ["python", "-m", "hedge_fund.trading.heartbeat", "--interval", "30"]
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: paperbot-frontend
+    environment:
+      BACKEND_URL: http://web:8787
+    ports:
+      - "8080:8080"   # UI at http://localhost:8080
+    depends_on:
+      web:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  paperbot_state:

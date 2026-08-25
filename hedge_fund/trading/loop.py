@@ -61,6 +61,8 @@ class TradingLoop:
         horizon_bars: int = 6,  # ~1 day at 4h; success = close above entry at horizon
         kline_limit: int = 300,
         strategy: str = "sma_stack",
+        strategies: list[str] | None = None,
+        strategy_file: str | None = None,
     ) -> None:
         self.data = data
         self.broker = broker
@@ -69,6 +71,18 @@ class TradingLoop:
         self.store = store
         self.regime = regime
         self.strategy = strategy
+        self.strategies = strategies or [strategy]
+        # If a champion file is given, prefer the current self-learned winner.
+        if strategy_file:
+            try:
+                import json as _json
+                with open(strategy_file) as _f:
+                    champ = _json.load(_f).get("champion") or {}
+                if champ.get("strategy"):
+                    self.strategies = [champ["strategy"]]
+            except Exception:
+                pass  # fall back to default on any read problem
+        self.strategy_file = strategy_file
         self.timeframe = timeframe
         self.horizon_bars = horizon_bars
         self.kline_limit = kline_limit
@@ -113,7 +127,7 @@ class TradingLoop:
         for sym in symbols:
             try:
                 klines = self.data.fetch_klines(sym, self.timeframe, limit=self.kline_limit)
-                sig = compute_signal(klines, sym, self.timeframe, strategy=self.strategy)
+                sig = compute_signal(klines, sym, self.timeframe, strategy=self.strategies[0])
             except Exception as exc:
                 results.append(CycleResult(sym, now, "ERR", 0.0, "flat", "REJECTED",
                                            reason=f"data error: {exc}"))
