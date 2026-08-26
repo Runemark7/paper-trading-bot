@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: paperbot-frontend
+  namespace: trading
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: paperbot-frontend
+  template:
+    metadata:
+      labels:
+        app: paperbot-frontend
+    spec:
+      containers:
+        - name: frontend
+          image: ghcr.io/runemark7/paperbot-frontend:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+          env:
+            - name: BACKEND_URL
+              value: "http://paperbot-backend-svc.trading.svc.cluster.local:8787"
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: paperbot-frontend-svc
+  namespace: trading
+spec:
+  selector:
+    app: paperbot-frontend
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080

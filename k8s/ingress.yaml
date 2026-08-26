@@ -1,0 +1,18 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: paperbot-ingress
+  namespace: trading
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: paperbot.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: paperbot-frontend-svc
+                port:
+                  number: 8080
