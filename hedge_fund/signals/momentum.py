@@ -99,14 +99,7 @@ class Signal:
 def compute_signal(
     candle_series: list[Candle], symbol: str, timeframe: str, strategy: str = "sma_stack"
 ) -> Signal:
-    """Compute the condition + a rough directional score for the latest bar.
-
-    `strategy` selects the entry rule:
-      - "sma_stack": close > SMA(7) > SMA(25) > SMA(50) — the winner of the
-        A/B backtest (trend-following). Long when the stack is rising.
-      - "rsi_momentum": the original baseline (20-EMA trend + RSI buckets).
-        Kept for comparison; NOT the default.
-    """
+    """Compute condition + direction dynamically using the unified strategy parser."""
     closes = [c.close for c in candle_series]
     if len(closes) < 2:
         raise ValueError(f"need >=2 bars for {symbol} {timeframe}, got {len(closes)}")
@@ -119,112 +112,13 @@ def compute_signal(
         price=price,
     )
 
-    if strategy == "sma_stack":  # orig name; maps to 7,25,50
-        s7 = sma(closes, 7)
-        s25 = sma(closes, 25)
-        s50 = sma(closes, 50)
-        stacked = not any(x != x for x in (s7, s25, s50)) and (price > s7 > s25 > s50)
-        take_long = stacked
-        cond = "sma_stack_rising" if stacked else "sma_stack_flat"
-        if not any(x != x for x in (s7, s25, s50)):
-            spread = (s7 / s50 - 1) if s50 else 0
-            score = max(-1.0, min(1.0, spread * 60))
-        else:
-            score = 0.0
+    from hedge_fund.signals.dynamic import parse_strategy
+    pred = parse_strategy(strategy)
+    i = len(closes) - 1
+    take_long = bool(pred(closes, i))
 
-    elif strategy == "sma_stack_5_20_50":
-        s5 = sma(closes, 5); s20 = sma(closes, 20); s50 = sma(closes, 50)
-        stacked = not any(x != x for x in (s5, s20, s50)) and (price > s5 > s20 > s50)
-        take_long = stacked
-        cond = "sma_stack5_rising" if stacked else "sma_stack5_flat"
-        score = max(-1.0, min(1.0, (s5 / s50 - 1) * 60)) if not any(x != x for x in (s5, s20, s50)) else 0.0
-
-    elif strategy == "sma_stack_7_25_50":
-        s7 = sma(closes, 7); s25 = sma(closes, 25); s50 = sma(closes, 50)
-        stacked = not any(x != x for x in (s7, s25, s50)) and (price > s7 > s25 > s50)
-        take_long = stacked
-        cond = "sma_stack7_rising" if stacked else "sma_stack7_flat"
-        score = max(-1.0, min(1.0, (s7 / s50 - 1) * 60)) if not any(x != x for x in (s7, s25, s50)) else 0.0
-
-    elif strategy.startswith("sma_stack_"):
-        # generic sma_stack_<a>_<b>_<c> from the evolution pool (any periods)
-        parts = strategy.split("_")
-        try:
-            periods = tuple(int(p) for p in parts[2:])
-        except ValueError:
-            periods = (7, 25, 50)
-        if len(periods) < 2:
-            periods = (7, 25, 50)
-        vals = [sma(closes, p) for p in periods]
-        stacked = not any(v != v for v in vals) and price > vals[0] and \
-            all(vals[j] > vals[j + 1] for j in range(len(vals) - 1))
-        take_long = stacked
-        cond = "sma_stackgen_rising" if stacked else "sma_stackgen_flat"
-        score = max(-1.0, min(1.0, (vals[0] / vals[-1] - 1) * 60)) if not any(v != v for v in vals) else 0.0
-
-    elif strategy == "sma_100_abv":
-        s100 = sma(closes, 100)
-        above = not (s100 != s100) and price > s100
-        take_long = above
-        cond = "sma100_above" if above else "sma100_below"
-        score = max(-1.0, min(1.0, (price / s100 - 1) * 20)) if not (s100 != s100) else 0.0
-
-    elif strategy == "robust_open":  # stack + RSI>55
-        s7 = sma(closes, 7); s25 = sma(closes, 25); s50 = sma(closes, 50)
-        stacked = not any(x != x for x in (s7, s25, s50)) and (price > s7 > s25 > s50)
-        r = rsi(closes, 20)
-        take_long = stacked and r > 55
-        cond = "robust_open" if take_long else ("robust_open_cool" if stacked else "robust_open_flat")
-        score = (1.0 if stacked else -0.5) + (0.3 if r > 55 else 0)
-        score = max(-1.0, min(1.0, score))
-
-    elif strategy == "rsi_trend_50":  # 30-period RSI trending >55
-        r = rsi(closes, 30)
-        take_long = r > 55 and price > ema(closes, 20)
-        cond = "rsi_trend50_high" if r > 55 else "rsi_trend50_low"
-        score = max(-1.0, min(1.0, (r - 50) / 20))
-
-    elif strategy.startswith("rsi_"):
-        # generic rsi_<period>_<threshold> (e.g. rsi_30_55)
-        parts = strategy.split("_")
-        try:
-            p = int(parts[1]); th = int(parts[2])
-        except (ValueError, IndexError):
-            p, th = 30, 55
-        r = rsi(closes, p)
-        take_long = r > th
-        cond = f"rsi_{p}_>_{th}" if take_long else f"rsi_{p}_<={th}"
-        score = max(-1.0, min(1.0, (r - 50) / 20))
-
-    else:
-        # Evaluate against the shared backtest predicate registry if available
-        try:
-            import hedge_fund.backtest.strategies as bs
-            from scripts.sweep import build_pool
-            pred_dict = getattr(bs, "_PRED", {})
-            if strategy in pred_dict:
-                pred = pred_dict[strategy]
-            else:
-                # search in sweep pool
-                pool_map = dict(build_pool())
-                pred = pool_map.get(strategy)
-            
-            if pred:
-                i = len(closes) - 1
-                take_long = bool(pred(closes, i))
-                cond = f"{strategy}_long" if take_long else f"{strategy}_flat"
-                score = 0.5 if take_long else -0.5
-            else:
-                trend_up = price > f.ema_20
-                cond = "baseline_flat"
-                score = 0.0
-                take_long = False
-        except Exception:
-            trend_up = price > f.ema_20
-            cond = "baseline_flat"
-            score = 0.0
-            take_long = False
-
+    cond = f"{strategy}_long" if take_long else f"{strategy}_flat"
+    score = 0.5 if take_long else -0.5
     direction = "long" if take_long else "flat"
 
     return Signal(symbol=symbol, timeframe=timeframe, condition=cond,

@@ -219,29 +219,9 @@ def backtest(closes, highs, lows, strategy, start_cash=10_000.0,
 
         # --- decide signal ---
         take = False
-        if not callable(strategy):
-            strategy = strategy.lower()
-        if strategy == "rsi_momentum":
-            take = (closes[i] > sma(closes, 20, i) and rsi(closes, 14, i) > 50)
-        elif strategy == "sma_stack":
-            s7 = sma(closes, long_stack[0], i)
-            s25 = sma(closes, long_stack[1], i)
-            s50 = sma(closes, long_stack[2], i)
-            take = not any(math.isnan(x) for x in (s7, s25, s50)) and (closes[i] > s7 > s25 > s50)
-        elif strategy == "momentum_gt":
-            if i >= momentum_lookback:
-                take = closes[i] / closes[i - momentum_lookback] - 1 > momentum_thr
-        elif strategy == "multi_timeframe":
-            sma_20 = sma(closes, 20, i)
-            sma_50 = sma(closes, 50, i)
-            mom = (closes[i] / closes[i - 6] - 1) if i >= 6 else 0
-            take = (not math.isnan(sma_50)) and closes[i] > sma_20 and closes[i] > sma_50 and mom > 0
-        elif callable(strategy):
-            take = strategy(closes, i)
-        elif strategy in _PRED:
-            take = _PRED[strategy](closes, i)
-        else:
-            take = False
+        from hedge_fund.signals.dynamic import parse_strategy
+        pred = parse_strategy(strategy)
+        take = bool(pred(closes, i))
 
         # --- manage open position: exit at stop, TP, or signal invalidation ---
         if open_qty > 0:
