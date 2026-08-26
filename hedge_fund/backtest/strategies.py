@@ -217,7 +217,13 @@ def backtest(closes, highs, lows, strategy, start_cash=10_000.0,
     for i in range(warmup, n):
         cur = closes[i]
 
-        # --- manage open position: exit at stop or TP ---
+        # --- decide signal ---
+        take = False
+        from hedge_fund.signals.dynamic import parse_strategy
+        pred = parse_strategy(strategy)
+        take = bool(pred(closes, i))
+
+        # --- manage open position: exit at stop, TP, or signal invalidation ---
         if open_qty > 0:
             risk_px = entry - stop
             tp = entry + rr * risk_px
@@ -228,6 +234,11 @@ def backtest(closes, highs, lows, strategy, start_cash=10_000.0,
             elif cur <= stop:
                 exit_px = stop * (1 - slippage)
                 hit = "stop"
+            elif not take:
+                # Strategy signal turned OFF / invalid -> close position immediately!
+                exit_px = cur * (1 - slippage)
+                hit = "signal_exit"
+
             if exit_px is not None:
                 proceeds = exit_px * open_qty
                 fee = proceeds * taker_fee
@@ -246,33 +257,7 @@ def backtest(closes, highs, lows, strategy, start_cash=10_000.0,
                 max_dd = max(max_dd, dd)
                 continue  # just closed, no re-entry this bar
             else:
-                continue  # still open, hold
-
-        # --- decide entry ---
-        take = False
-        if not callable(strategy):
-            strategy = strategy.lower()
-        if strategy == "rsi_momentum":
-            take = (closes[i] > sma(closes, 20, i) and rsi(closes, 14, i) > 50)
-        elif strategy == "sma_stack":
-            s7 = sma(closes, long_stack[0], i)
-            s25 = sma(closes, long_stack[1], i)
-            s50 = sma(closes, long_stack[2], i)
-            take = not any(math.isnan(x) for x in (s7, s25, s50)) and (closes[i] > s7 > s25 > s50)
-        elif strategy == "momentum_gt":
-            if i >= momentum_lookback:
-                take = closes[i] / closes[i - momentum_lookback] - 1 > momentum_thr
-        elif strategy == "multi_timeframe":
-            sma_20 = sma(closes, 20, i)
-            sma_50 = sma(closes, 50, i)
-            mom = (closes[i] / closes[i - 6] - 1) if i >= 6 else 0
-            take = (not math.isnan(sma_50)) and closes[i] > sma_20 and closes[i] > sma_50 and mom > 0
-        elif callable(strategy):
-            take = strategy(closes, i)
-        elif strategy in _PRED:
-            take = _PRED[strategy](closes, i)
-        else:
-            take = False
+                continue  # still open and signal still bullish, hold
 
         if not take:
             continue

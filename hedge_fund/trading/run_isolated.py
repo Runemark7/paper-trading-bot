@@ -19,7 +19,7 @@ from hedge_fund.data.binance import CcxtSource
 from hedge_fund.risk.managed import RiskManager
 from hedge_fund.trading.loop import TradingLoop
 from hedge_fund.trading.store import TradeStore
-from hedge_fund.trading.champions import load_pool, MAX_CHAMPIONS
+from hedge_fund.trading.champions import load_pool, MAX_ACTIVE_CHAMPIONS
 
 STATE = Path(os.environ.get("PAPER_STATE", "state"))
 SYMBOLS = ["BTC/USDT", "ETH/USDT"]

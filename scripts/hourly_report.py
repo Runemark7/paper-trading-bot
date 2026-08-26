@@ -40,7 +40,17 @@ def main():
         lines.append("_No isolated accounts yet._")
         print("\n".join(lines)); return
 
+    # Load graduated list for display
+    grad_list = []
+    grad_path = os.path.join(STATE, "graduated.json")
+    if os.path.exists(grad_path):
+        try:
+            grad_list = json.load(open(grad_path))
+        except Exception:
+            pass
+
     grand = 0.0
+    active_with_pos = 0
     for db in dbs:
         acct = _load_acct(db)
         strat = os.path.basename(db)[7:-7]
@@ -61,26 +71,33 @@ def main():
             held.append((o["symbol"], o["entry_price"], cur, o["size"], p))
         realized = sum((r["pnl"] or 0) for r in closed)
         equity = START_CASH + realized + unreal
-        grand += equity - START_CASH
+        grand += (equity - START_CASH)
 
         # account cash from persisted account_state (authoritative starting point)
         acct_cash = None
         if acct and acct.get("broker"):
             acct_cash = acct["broker"].get("cash")
 
-        lines.append(f"### {strat} — ${START_CASH:,.0f} acct")
+        lines.append(f"### {strat} — ${START_CASH:,.0f} acct ({len(closed)}/10 trades evaluated)")
         if not held and realized == 0:
-            lines.append("_Flat — no open positions, no closed trades._")
+            lines.append("_Flat — no open positions, waiting for setup._")
         for sym, ep, cur, qty, p in held:
             pct = (cur / ep - 1) * 100 if ep else 0
             lines.append(f"- **{sym}** long {qty:.4f} @ {ep:,.0f} → {cur:,.0f} = **{p:+,.2f} ({pct:+.2f}%)**")
         if realized:
-            lines.append(f"- Realized P&L: **{realized:+,.2f}**")
-        lines.append(f"- **Unrealized today: {unreal:+,.2f}** · equity ≈ **{equity:,.0f}**")
+            lines.append(f"- Realized P&L: **{realized:+,.2f}** ({len(closed)} trades)")
+        lines.append(f"- **Unrealized: {unreal:+,.2f}** · equity ≈ **{equity:,.0f}**")
         lines.append("")
 
-    lines.append(f"**Total unrealized across all {len(dbs)} accts: {grand:+,.2f}** (on ${START_CASH*len(dbs):,.0f} start)")
-    lines.append("**Closes since last report:** none fired unless listed above.")
+    lines.append(f"**Active Champions Tested:** {len(dbs)}/10 accounts (Total P&L: {grand:+,.2f})")
+    
+    if grad_list:
+        lines.append("\n🏆 **Graduated Production Strategy Candidates (10/10 trades completed):**")
+        for g in grad_list:
+            lines.append(f"- **{g['name']}**: P&L {g['total_pnl']:+,.2f} | WinRate: {g['win_rate_pct']}% | Status: `{g['status']}`")
+    else:
+        lines.append("\n🏆 **Graduated Strategies:** None yet (requires 10 closed entries to graduate).")
+
     print("\n".join(lines))
 
 
