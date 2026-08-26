@@ -13,6 +13,8 @@ spec:
       labels:
         app: paperbot-frontend
     spec:
+      imagePullSecrets:
+        - name: ghcr-secret
       containers:
         - name: frontend
           image: ghcr.io/runemark7/paperbot-frontend:latest
