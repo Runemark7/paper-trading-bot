@@ -5,6 +5,7 @@ import type {
   TradeRow,
   LearningMap,
   Champion,
+  GraduatedStrategy,
 } from "./types";
 
 async function get<T>(path: string): Promise<T> {
@@ -19,16 +20,25 @@ export const api = {
   regime: () => get<RegimeState>("/api/regime"),
   trades: () => get<TradeRow[]>("/api/trades"),
   learning: () => get<LearningMap>("/api/learning"),
+  graduated: () => get<GraduatedStrategy[]>("/api/graduated"),
   health: () => get<{ ok: boolean }>("/healthz"),
 };
 
 // Champion pool is served live; wrapped here so UI can poll it.
 export async function fetchChampions(): Promise<{
-  champions: Champion[];
-  count: number;
-  max: number;
+  active_champions: Champion[];
+  active_count: number;
+  target_active: number;
+  graduated_count: number;
+  graduated: GraduatedStrategy[];
 }> {
   const res = await fetch("/api/champions");
   if (!res.ok) throw new Error(`/api/champions -> ${res.status}`);
+  return res.json();
+}
+
+export async function fetchGraduated(): Promise<GraduatedStrategy[]> {
+  const res = await fetch("/api/graduated");
+  if (!res.ok) throw new Error(`/api/graduated -> ${res.status}`);
   return res.json();
 }

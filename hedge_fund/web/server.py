@@ -247,7 +247,13 @@ class Handler(BaseHTTPRequestHandler):
                 collect_live_results()
                 self._send_json(pool_status())
             except Exception as exc:
-                self._send_json({"error": str(exc), "champions": [], "count": 0, "max": 64}, 500)
+                self._send_json({"error": str(exc), "champions": [], "count": 0, "max": 10}, 500)
+        elif route == "/api/graduated":
+            try:
+                from hedge_fund.trading.champions import load_graduated
+                self._send_json(load_graduated())
+            except Exception as exc:
+                self._send_json({"error": str(exc)}, 500)
         else:
             self._send_json({"error": "unknown route"}, 404)
 

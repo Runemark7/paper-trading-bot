@@ -67,3 +67,27 @@ export interface Champion {
   wins: number;
   passed?: boolean;
 }
+
+export interface GraduatedTrade {
+  symbol: string;
+  entry_price: number;
+  exit_price: number;
+  entry_ts: string;
+  exit_ts: string;
+  size: number;
+  pnl: number;
+  pnl_pct: number;
+  hit: number;
+  exit_reason: string;
+}
+
+export interface GraduatedStrategy {
+  name: string;
+  closed_trades: number;
+  total_pnl: number;
+  wins: number;
+  win_rate_pct: number;
+  graduated_at: string;
+  status: "READY_FOR_LIVE" | "REJECTED_NEGATIVE_PNL";
+  trade_history: GraduatedTrade[];
+}

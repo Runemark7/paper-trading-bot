@@ -72,10 +72,14 @@ def collect_live_results() -> dict:
             if synced_until and ts.replace("T", " ")[:19] <= synced_until.replace("T", " ")[:19]:
                 continue
             updates.setdefault(strat, []).append({
+                "id": r["id"],
+                "symbol": r["symbol"],
+                "entry_price": float(r["entry_price"] or 0.0),
+                "exit_price": float(r["exit_price"] or 0.0),
+                "exit_ts": ts,
                 "pnl": float(r["pnl"] or 0.0),
                 "pnl_pct": float(r["pnl_pct"] or 0.0),
                 "hit": r["hit"],
-                "symbol": r["symbol"],
                 "reason": r["exit_reason"]
             })
             if ts and ts > max_ts:
@@ -105,6 +109,32 @@ def collect_live_results() -> dict:
     for c in st["champions"]:
         if c.get("closed", 0) >= TRADE_EVALUATION_LIMIT:
             win_rate = round((c["wins"] / c["closed"]) * 100, 1) if c["closed"] else 0.0
+            
+            # Fetch full trade history for this graduating strategy
+            strat_history = []
+            db_path = REPO / f"state/trades_{c['name'].replace('/','_').replace(':','_')}.sqlite"
+            if db_path.exists():
+                try:
+                    con = sqlite3.connect(str(db_path))
+                    con.row_factory = sqlite3.Row
+                    all_rows = con.execute("SELECT symbol, entry_price, exit_price, entry_ts, exit_ts, size, pnl, pnl_pct, hit, exit_reason FROM trades WHERE exit_ts IS NOT NULL ORDER BY id ASC").fetchall()
+                    con.close()
+                    for ar in all_rows:
+                        strat_history.append({
+                            "symbol": ar["symbol"],
+                            "entry_price": ar["entry_price"],
+                            "exit_price": ar["exit_price"],
+                            "entry_ts": ar["entry_ts"],
+                            "exit_ts": ar["exit_ts"],
+                            "size": ar["size"],
+                            "pnl": round(ar["pnl"], 2) if ar["pnl"] is not None else 0.0,
+                            "pnl_pct": round(ar["pnl_pct"], 4) if ar["pnl_pct"] is not None else 0.0,
+                            "hit": ar["hit"],
+                            "exit_reason": ar["exit_reason"]
+                        })
+                except Exception:
+                    pass
+
             grad_entry = {
                 "name": c["name"],
                 "closed_trades": c["closed"],
@@ -112,11 +142,18 @@ def collect_live_results() -> dict:
                 "wins": c["wins"],
                 "win_rate_pct": win_rate,
                 "graduated_at": datetime.now(timezone.utc).isoformat(),
-                "status": "READY_FOR_LIVE" if c["pnl"] > 0 else "REJECTED_NEGATIVE_PNL"
+                "status": "READY_FOR_LIVE" if c["pnl"] > 0 else "REJECTED_NEGATIVE_PNL",
+                "trade_history": strat_history
             }
             if c["name"] not in existing_grad_names:
                 grad_list.append(grad_entry)
                 existing_grad_names.add(c["name"])
+            else:
+                # Update with latest history
+                for i_g, g_item in enumerate(grad_list):
+                    if g_item["name"] == c["name"]:
+                        grad_list[i_g] = grad_entry
+                        break
             graduated_now.append(grad_entry)
         else:
             remaining_champions.append(c)
