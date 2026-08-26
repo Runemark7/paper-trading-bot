@@ -133,6 +133,24 @@ class TradingLoop:
                                            reason=f"data error: {exc}"))
                 continue
 
+            # Active signal exit: if we have open lots for this symbol and the strategy
+            # no longer says "long" (setup broke / invalidated), close them immediately!
+            if sig.direction != "long":
+                lots_to_close = [lot for lot in self.broker.lots if lot.ticker == sym]
+                if lots_to_close:
+                    cur = px.get(sym)
+                    if cur is not None:
+                        for lot in lots_to_close:
+                            fill = self.broker.close_lot(lot, cur)
+                            pnl = (fill.price - lot.entry_price) * lot.quantity - fill.fee
+                            self._record_outcome(sym, lot, fill, tp=(pnl > 0))
+                            self._close_store_lot(lot, fill, f"signal_exit_{sig.condition}")
+                            results.append(CycleResult(
+                                sym, now, sig.condition, 0.0, "flat", "CLOSE_SIGNAL",
+                                reason=f"strategy exit: {sig.condition} (cur={cur:.2f})",
+                                equity=self.broker.equity(px)
+                            ))
+
             key = condition_key(sym, self.timeframe, sig.condition)
             proposed = self._propose_probability(sig, sig.features)
             prob, _ = self.calib.calibrated_probability(key, proposed=proposed)
@@ -173,12 +191,35 @@ class TradingLoop:
             # Stop: ~2.5% below entry (simple initial risk). Deterministic.
             stop = entry * (1 - 0.025)
 
+            # Pyramiding guardrails:
+            # 1. Max 3 lots per symbol
+            # 2. If existing lots exist for this symbol, only allow adding if all existing lots are in profit
+            existing_sym_lots = [lot for lot in self.broker.lots if lot.ticker == sym]
+            if len(existing_sym_lots) >= 3:
+                results.append(CycleResult(
+                    sym, now, sig.condition, prob, sig.direction, "REJECTED",
+                    reason=f"max lots reached (3 lots open for {sym})", equity=equity))
+                continue
+
+            if existing_sym_lots:
+                # Require previous lots to be in profit before pyramiding up
+                unrealized_lots_pnl = [(entry - lot.entry_price) * lot.quantity for lot in existing_sym_lots]
+                if any(p <= 0 for p in unrealized_lots_pnl):
+                    results.append(CycleResult(
+                        sym, now, sig.condition, prob, sig.direction, "HOLD",
+                        reason=f"pyramid hold: prior {sym} lots not in profit yet", equity=equity))
+                    continue
+
+            # Confidence multiplier based on probability / raw score
+            # Base probability is 0.50. Range: p=0.40 -> 0.6x, p=0.60 -> 1.2x, p=0.75 -> 1.5x, max 2.0x
+            conf_mult = max(0.5, min(2.0, (prob / 0.50)))
+
             # Existing open risk (for the cap): account for ALL open lots.
             open_pos = [
                 (p.entry_price, p.stop_loss, p.quantity)
                 for p in self.broker.lots
             ]
-            rd = self.risk.size_position(equity, entry, stop, open_pos)
+            rd = self.risk.size_position(equity, entry, stop, open_pos, confidence=conf_mult)
             if not rd.approved:
                 results.append(CycleResult(
                     sym, now, sig.condition, prob, sig.direction, "REJECTED",

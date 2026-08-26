@@ -217,38 +217,7 @@ def backtest(closes, highs, lows, strategy, start_cash=10_000.0,
     for i in range(warmup, n):
         cur = closes[i]
 
-        # --- manage open position: exit at stop or TP ---
-        if open_qty > 0:
-            risk_px = entry - stop
-            tp = entry + rr * risk_px
-            exit_px = None
-            if cur >= tp:
-                exit_px = tp * (1 - slippage)
-                hit = "tp"
-            elif cur <= stop:
-                exit_px = stop * (1 - slippage)
-                hit = "stop"
-            if exit_px is not None:
-                proceeds = exit_px * open_qty
-                fee = proceeds * taker_fee
-                cash += proceeds - fee
-                fees += fee
-                pnl = (exit_px - entry) * open_qty
-                pnl_pct = (exit_px - entry) / entry
-                pnl_pcts.append(pnl_pct)
-                wins += 1 if pnl > 0 else 0
-                trades += 1
-                open_qty = 0.0
-                # update peak/drawdown at this close
-                if cash > peak:
-                    peak = cash
-                dd = (peak - cash) / peak if peak > 0 else 0.0
-                max_dd = max(max_dd, dd)
-                continue  # just closed, no re-entry this bar
-            else:
-                continue  # still open, hold
-
-        # --- decide entry ---
+        # --- decide signal ---
         take = False
         if not callable(strategy):
             strategy = strategy.lower()
@@ -273,6 +242,42 @@ def backtest(closes, highs, lows, strategy, start_cash=10_000.0,
             take = _PRED[strategy](closes, i)
         else:
             take = False
+
+        # --- manage open position: exit at stop, TP, or signal invalidation ---
+        if open_qty > 0:
+            risk_px = entry - stop
+            tp = entry + rr * risk_px
+            exit_px = None
+            if cur >= tp:
+                exit_px = tp * (1 - slippage)
+                hit = "tp"
+            elif cur <= stop:
+                exit_px = stop * (1 - slippage)
+                hit = "stop"
+            elif not take:
+                # Strategy signal turned OFF / invalid -> close position immediately!
+                exit_px = cur * (1 - slippage)
+                hit = "signal_exit"
+
+            if exit_px is not None:
+                proceeds = exit_px * open_qty
+                fee = proceeds * taker_fee
+                cash += proceeds - fee
+                fees += fee
+                pnl = (exit_px - entry) * open_qty
+                pnl_pct = (exit_px - entry) / entry
+                pnl_pcts.append(pnl_pct)
+                wins += 1 if pnl > 0 else 0
+                trades += 1
+                open_qty = 0.0
+                # update peak/drawdown at this close
+                if cash > peak:
+                    peak = cash
+                dd = (peak - cash) / peak if peak > 0 else 0.0
+                max_dd = max(max_dd, dd)
+                continue  # just closed, no re-entry this bar
+            else:
+                continue  # still open and signal still bullish, hold
 
         if not take:
             continue

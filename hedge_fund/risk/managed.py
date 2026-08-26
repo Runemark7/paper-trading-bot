@@ -75,9 +75,11 @@ class RiskManager:
         entry: float,
         stop: float,
         open_positions: list[tuple[float, float, float]] | None = None,
+        confidence: float = 1.0,
     ) -> RiskDecision:
         """Compute the position size for a proposed long.
 
+        confidence: 0.5 (low conviction probe) to 2.0 (high conviction).
         open_positions: list of (entry_price, stop_loss, quantity) for risks
         already on. Returns a RiskDecision.
         """
@@ -87,7 +89,9 @@ class RiskManager:
         if stop <= 0 or entry <= stop:
             return RiskDecision(False, "stop must be below entry for a long")
 
-        risk_cash = equity * self.risk_frac
+        # Bound confidence multiplier between 0.5x and 2.0x base risk (0.5% - 2.0% equity)
+        conf_clamped = max(0.5, min(2.0, float(confidence)))
+        risk_cash = equity * self.risk_frac * conf_clamped
         size = risk_cash / (entry - stop)
 
         # open risk cap

@@ -196,28 +196,34 @@ def compute_signal(
         cond = f"rsi_{p}_>_{th}" if take_long else f"rsi_{p}_<={th}"
         score = max(-1.0, min(1.0, (r - 50) / 20))
 
-    else:  # rsi_momentum (baseline)
-        trend_up = price > f.ema_20
-        if trend_up:
-            if f.rsi >= 70:
-                cond = "uptrend_rsi_high"
-            elif f.rsi >= 55:
-                cond = "uptrend_rsi_mid"
+    else:
+        # Evaluate against the shared backtest predicate registry if available
+        try:
+            import hedge_fund.backtest.strategies as bs
+            from scripts.sweep import build_pool
+            pred_dict = getattr(bs, "_PRED", {})
+            if strategy in pred_dict:
+                pred = pred_dict[strategy]
             else:
-                cond = "uptrend_rsi_low"
-        else:
-            if f.rsi <= 30:
-                cond = "downtrend_rsi_low"
-            elif f.rsi <= 45:
-                cond = "downtrend_rsi_mid"
+                # search in sweep pool
+                pool_map = dict(build_pool())
+                pred = pool_map.get(strategy)
+            
+            if pred:
+                i = len(closes) - 1
+                take_long = bool(pred(closes, i))
+                cond = f"{strategy}_long" if take_long else f"{strategy}_flat"
+                score = 0.5 if take_long else -0.5
             else:
-                cond = "downtrend_rsi_high"
-        score = 0.0
-        score += 1.0 if trend_up else -1.0
-        score += 0.5 * math.tanh(f.mom_4h * 20)
-        score += 0.5 * math.tanh(f.mom_1d * 10)
-        score = max(-1.0, min(1.0, score))
-        take_long = trend_up and f.rsi > 50 and score > 0.15
+                trend_up = price > f.ema_20
+                cond = "baseline_flat"
+                score = 0.0
+                take_long = False
+        except Exception:
+            trend_up = price > f.ema_20
+            cond = "baseline_flat"
+            score = 0.0
+            take_long = False
 
     direction = "long" if take_long else "flat"
 

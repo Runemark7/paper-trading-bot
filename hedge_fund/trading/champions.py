@@ -1,23 +1,23 @@
-"""Champion pool manager — bridges LIVE paper-trade results back into evolution.
+"""Champion pool manager — continuous pipeline.
 
-Keeps a shortlist of up to MAX_CHAMPIONS strategy champions being evaluated in
-live paper trading. When a paper trade closes, its realized P&L is attributed
-to the strategy that opened it and recorded. A champion accumulates live
-evidence; the cap (MAX_CHAMPIONS) is the 'wait for new evaluations' limit —
-candidates only enter when there is room or they beat an existing champion.
-
-State lives in state/champions.json so it survives restarts.
+Rules:
+1. Target active capacity: MAX_ACTIVE_CHAMPIONS (10).
+2. Evaluation threshold: 10 closed trades (entries). Once a champion hits 10 closed trades,
+   it is GRADUATED / PASSED into the graduated strategy board (`state/graduated.json`).
+3. If active champions < 10, backtest candidates and promote the top performers to fill slots.
 """
 from __future__ import annotations
 
 import json
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 
 REPO = Path("/opt/data/paper-trading-bot")
-TRADES_DB = REPO / "state/trades.sqlite"
 CHAMP_FILE = REPO / "state/champions.json"
-MAX_CHAMPIONS = 64
+GRADUATED_FILE = REPO / "state/graduated.json"
+MAX_ACTIVE_CHAMPIONS = 10
+TRADE_EVALUATION_LIMIT = 10
 
 
 def load_pool() -> dict:
@@ -33,114 +33,144 @@ def save_pool(st: dict):
     CHAMP_FILE.write_text(json.dumps(st, indent=2))
 
 
-def _get_iso(s) -> str:
-    return (s or "").replace("Z", "+00:00")
+def load_graduated() -> list[dict]:
+    if GRADUATED_FILE.exists():
+        try:
+            return json.loads(GRADUATED_FILE.read_text())
+        except Exception:
+            pass
+    return []
 
 
-def _derive_strategy(condition: str) -> str:
-    c = (condition or "").lower()
-    if "rsi_" in c:
-        return "rsi_30_57"      # current self-learned champion family
-    if "sma_stack5" in c:
-        return "sma_stack_5_20_50"
-    if "sma_stack" in c:
-        return "sma_stack_7_25_50"
-    if "sma100" in c:
-        return "sma_abv_150"
-    return c or "unknown"
+def save_graduated(grad_list: list[dict]):
+    GRADUATED_FILE.write_text(json.dumps(grad_list, indent=2))
 
 
 def collect_live_results() -> dict:
-    """Sync closed paper trades from ALL per-strategy accounts into the pool.
-
-    Each isolated account lives in state/trades_<strategy>.sqlite; the strategy
-    is the filename (authoritative), not a guess from the signal condition.
-    Returns strat -> [pnls] updates applied.
+    """Sync closed paper trades from ALL per-strategy accounts.
+    
+    Graduates strategies with >= 10 closed trades and removes them from the active testing pool.
     """
     st = load_pool()
     synced_until = st.get("synced_until", "")
 
-    updates: dict[str, list[float]] = {}
+    updates: dict[str, list[dict]] = {}
     max_ts = synced_until
 
     for db in sorted(REPO.glob("state/trades_*.sqlite")):
         strat = db.name[len("trades_"):-len(".sqlite")]
         try:
             con = sqlite3.connect(str(db))
-            cur = con.cursor()
-            cur.execute("SELECT id,condition,exit_ts,pnl,pnl_pct,hit,exit_reason "
-                        "FROM trades WHERE exit_ts IS NOT NULL AND exit_ts != ''")
-            rows = cur.fetchall()
+            con.row_factory = sqlite3.Row
+            rows = con.execute("SELECT id, symbol, entry_price, exit_price, exit_ts, pnl, pnl_pct, hit, exit_reason "
+                               "FROM trades WHERE exit_ts IS NOT NULL AND exit_ts != ''").fetchall()
             con.close()
         except Exception:
             continue
-        for _tid, _condition, exit_ts, pnl, _pct, _hit, _reason in rows:
-            ts = exit_ts or ""
+        for r in rows:
+            ts = r["exit_ts"] or ""
             if synced_until and ts.replace("T", " ")[:19] <= synced_until.replace("T", " ")[:19]:
                 continue
-            updates.setdefault(strat, []).append(float(pnl or 0.0))
+            updates.setdefault(strat, []).append({
+                "pnl": float(r["pnl"] or 0.0),
+                "pnl_pct": float(r["pnl_pct"] or 0.0),
+                "hit": r["hit"],
+                "symbol": r["symbol"],
+                "reason": r["exit_reason"]
+            })
             if ts and ts > max_ts:
                 max_ts = ts
 
+    # Update active champions
     idx = {c["name"]: i for i, c in enumerate(st["champions"])}
-    for strat, pnls in updates.items():
+    for strat, trade_list in updates.items():
         if strat in idx:
             c = st["champions"][idx[strat]]
         else:
             c = {"name": strat, "closed": 0, "pnl": 0.0, "wins": 0}
             st["champions"].append(c)
             idx[strat] = len(st["champions"]) - 1
-        for p in pnls:
+        for t in trade_list:
             c["closed"] += 1
-            c["pnl"] += p
-            if p > 0:
+            c["pnl"] += t["pnl"]
+            if t["pnl"] > 0:
                 c["wins"] += 1
 
-    st["champions"] = st["champions"][:MAX_CHAMPIONS]
-    # Mark champions "passed" once they have enough live closes to judge.
+    # Check for Graduation (>= 10 trades)
+    graduated_now = []
+    remaining_champions = []
+    grad_list = load_graduated()
+    existing_grad_names = {g["name"] for g in grad_list}
+
     for c in st["champions"]:
-        if c.get("closed", 0) >= 10 and not c.get("passed"):
-            c["passed"] = True
-            c["passed_at"] = "now"
+        if c.get("closed", 0) >= TRADE_EVALUATION_LIMIT:
+            win_rate = round((c["wins"] / c["closed"]) * 100, 1) if c["closed"] else 0.0
+            grad_entry = {
+                "name": c["name"],
+                "closed_trades": c["closed"],
+                "total_pnl": round(c["pnl"], 2),
+                "wins": c["wins"],
+                "win_rate_pct": win_rate,
+                "graduated_at": datetime.now(timezone.utc).isoformat(),
+                "status": "READY_FOR_LIVE" if c["pnl"] > 0 else "REJECTED_NEGATIVE_PNL"
+            }
+            if c["name"] not in existing_grad_names:
+                grad_list.append(grad_entry)
+                existing_grad_names.add(c["name"])
+            graduated_now.append(grad_entry)
+        else:
+            remaining_champions.append(c)
+
+    st["champions"] = remaining_champions
     if max_ts:
         st["synced_until"] = max_ts
+
     save_pool(st)
-    return updates
+    if graduated_now:
+        save_graduated(grad_list)
+
+    return {
+        "updates": updates,
+        "graduated": graduated_now,
+        "active_count": len(st["champions"])
+    }
 
 
 def promote_candidates(candidates: list[dict]) -> dict:
-    """Slot backtest top-candidates into the live pool, respecting the cap."""
+    """Add top backtested candidate strategies until pool reaches MAX_ACTIVE_CHAMPIONS (10)."""
     st = load_pool()
-    existing = {c["name"] for c in st["champions"]}
-    room = MAX_CHAMPIONS - len(st["champions"])
+    grad_list = load_graduated()
+    existing = {c["name"] for c in st["champions"]}.union({g["name"] for g in grad_list})
+    
+    needed = MAX_ACTIVE_CHAMPIONS - len(st["champions"])
     added = []
-    for cand in candidates:
-        if room <= 0:
-            break
-        name = cand.get("strategy")
-        if name and name not in existing:
-            st["champions"].append({
-                "name": name, "closed": 0, "pnl": 0.0, "wins": 0,
-                "source": "backtest_promotion",
-            })
-            existing.add(name)
-            room -= 1
-            added.append(name)
-    st["champions"] = st["champions"][:MAX_CHAMPIONS]
+    if needed > 0:
+        for cand in candidates:
+            if len(added) >= needed:
+                break
+            name = cand.get("strategy")
+            if name and name not in existing:
+                st["champions"].append({
+                    "name": name,
+                    "closed": 0,
+                    "pnl": 0.0,
+                    "wins": 0,
+                    "source": "sweep_promotion"
+                })
+                existing.add(name)
+                added.append(name)
+
     save_pool(st)
-    return {"added": added, "pool_size": len(st["champions"])}
+    return {"added": added, "active_count": len(st["champions"]), "target": MAX_ACTIVE_CHAMPIONS}
 
 
 def pool_status() -> dict:
     st = load_pool()
-    return {"champions": st["champions"], "count": len(st["champions"]),
-            "max": MAX_CHAMPIONS}
-
-
-if __name__ == "__main__":
-    updates = collect_live_results()
-    st = load_pool()
-    print(f"synced {len(updates)} strategies; champion pool {len(st['champions'])}/{MAX_CHAMPIONS}")
-    for c in st["champions"]:
-        print(f"  {c['name']:<28} closed={c.get('closed',0):>3} "
-              f"pnl={c.get('pnl',0):>7.0f} wins={c.get('wins',0)}")
+    grad = load_graduated()
+    return {
+        "active_champions": st["champions"],
+        "active_count": len(st["champions"]),
+        "target_active": MAX_ACTIVE_CHAMPIONS,
+        "graduated_count": len(grad),
+        "graduated": grad
+    }
