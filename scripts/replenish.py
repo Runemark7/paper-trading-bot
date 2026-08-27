@@ -21,7 +21,9 @@ from hedge_fund.trading.champions import (
 )
 from scripts.sweep import build_pool
 
-HIST = "/opt/data/paper-trading-bot/state/crypto_history_1h.json"
+HIST_1H = "/opt/data/paper-trading-bot/state/crypto_history_1h.json"
+HIST_5M = "/opt/data/paper-trading-bot/state/crypto_history_5m.json"
+HIST = HIST_5M if Path(HIST_5M).exists() else HIST_1H
 
 
 def replenish_pool(stride: int = 12, recent_bars: int = 15000) -> dict:
