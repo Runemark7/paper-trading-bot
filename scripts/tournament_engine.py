@@ -98,11 +98,21 @@ def generate_candidate_pool() -> list[str]:
         candidates.add(f"vol_lowsm_{s_lb}_{l_lb}")
 
     # 6. Hybrid Multi-Indicator Composites (Trend + Momentum / RSI)
-    for ma in [50, 100, 200]:
-        for r_th in [45, 50, 55]:
+    for ma in [20, 50, 100, 200]:
+        for r_th in [40, 45, 50, 55, 60]:
             candidates.add(f"sma{ma}_rsi{r_th}")
-        for lb, thr in [(6, 1), (12, 2), (24, 3)]:
+        for lb, thr in [(3, 1), (6, 1), (12, 2), (24, 3), (48, 5)]:
             candidates.add(f"sma{ma}_mom{lb}_{thr}")
+
+    # 7. Combinatorial Logical AND pairs (e.g., Dip + Trend, RSI + Volatility)
+    base_dips = [f"dip_{lb}b_lt{thr}pc" for lb in [6, 12, 24] for thr in [1, 2, 3, 5]]
+    base_trends = [f"sma_abv_{ma}" for ma in [50, 100, 200]] + [f"ema_abv_{ma}" for ma in [50, 100]]
+    for d, t in itertools.product(base_dips, base_trends):
+        candidates.add(f"{d}&{t}")
+
+    base_rsi = [f"rsi_{p}_>{th}" for p in [14, 21] for th in [45, 50, 55]]
+    for r, t in itertools.product(base_rsi, base_trends):
+        candidates.add(f"{r}&{t}")
 
     return sorted(list(candidates))
 
@@ -255,7 +265,7 @@ def discover_and_qualify(batch_size: int = 80, window_size: int = 25000, n_windo
     return qualified, all_evaluated
 
 
-def replenish_and_evaluate(batch_size: int = 100) -> dict:
+def replenish_and_evaluate(batch_size: int = 250) -> dict:
     """Discovers qualified champions and admits them to the unlimited live tournament arena."""
     st = load_pool()
     existing_names = {c["name"] for c in st["champions"]}
