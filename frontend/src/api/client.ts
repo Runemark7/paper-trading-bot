@@ -6,6 +6,7 @@ import type {
   LearningMap,
   Champion,
   GraduatedStrategy,
+  DiscoveryEvaluation,
 } from "./types";
 
 async function get<T>(path: string): Promise<T> {
@@ -21,6 +22,7 @@ export const api = {
   trades: () => get<TradeRow[]>("/api/trades"),
   learning: () => get<LearningMap>("/api/learning"),
   graduated: () => get<GraduatedStrategy[]>("/api/graduated"),
+  discovery: () => get<DiscoveryEvaluation[]>("/api/discovery"),
   health: () => get<{ ok: boolean }>("/healthz"),
 };
 
@@ -40,5 +42,11 @@ export async function fetchChampions(): Promise<{
 export async function fetchGraduated(): Promise<GraduatedStrategy[]> {
   const res = await fetch("/api/graduated");
   if (!res.ok) throw new Error(`/api/graduated -> ${res.status}`);
+  return res.json();
+}
+
+export async function fetchDiscovery(): Promise<DiscoveryEvaluation[]> {
+  const res = await fetch("/api/discovery");
+  if (!res.ok) throw new Error(`/api/discovery -> ${res.status}`);
   return res.json();
 }

@@ -254,6 +254,15 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(load_graduated())
             except Exception as exc:
                 self._send_json({"error": str(exc)}, 500)
+        elif route == "/api/discovery":
+            try:
+                log_path = STATE_DIR / "discovery_log.json"
+                if log_path.exists():
+                    self._send_json(json.loads(log_path.read_text()))
+                else:
+                    self._send_json([])
+            except Exception as exc:
+                self._send_json({"error": str(exc)}, 500)
         else:
             self._send_json({"error": "unknown route"}, 404)
 

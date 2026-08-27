@@ -1,17 +1,19 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { fetchChampions, fetchGraduated } from "../api/client";
+import { fetchChampions, fetchGraduated, fetchDiscovery } from "../api/client";
 import { Card, fmt, Badge } from "../components/ui";
 
 export default function Champions() {
   const qChamps = useQuery({ queryKey: ["champions"], queryFn: fetchChampions, refetchInterval: 30_000 });
   const qGrad = useQuery({ queryKey: ["graduated"], queryFn: fetchGraduated, refetchInterval: 30_000 });
+  const qDisc = useQuery({ queryKey: ["discovery"], queryFn: fetchDiscovery, refetchInterval: 30_000 });
 
   const [expandedStrat, setExpandedStrat] = useState<string | null>(null);
 
   const champs = qChamps.data?.active_champions ?? [];
   const targetMax = qChamps.data?.target_active ?? 10;
   const graduated = qGrad.data ?? [];
+  const discoveryLog = qDisc.data ?? [];
 
   return (
     <div className="space-y-6">
@@ -139,6 +141,54 @@ export default function Champions() {
                 </div>
               );
             })}
+          </div>
+        )}
+      </Card>
+
+      {/* 3. Continuous Backtest Discovery Stream */}
+      <Card title={`🔍 Continuous Strategy Backtest Log (Latest ${discoveryLog.length} Evaluations)`}>
+        <div className="text-sm text-white/60 mb-3">
+          Real-time stream of candidate strategy rules being backtested on 5m candles across out-of-sample periods.
+        </div>
+
+        {!discoveryLog.length ? (
+          <div className="text-white/40 text-sm">No discovery backtests recorded yet.</div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead className="text-white/40 uppercase">
+                <tr>
+                  <th className="text-left py-1">Strategy Rule</th>
+                  <th className="text-left">Tested At</th>
+                  <th className="text-right">Win Rate</th>
+                  <th className="text-right">Sharpe</th>
+                  <th className="text-right">Train P&L</th>
+                  <th className="text-right">Test P&L</th>
+                  <th className="text-left">Result</th>
+                </tr>
+              </thead>
+              <tbody>
+                {discoveryLog.slice(0, 40).map((d, i) => (
+                  <tr key={i} className="border-t border-white/5">
+                    <td className="py-1 font-mono font-medium text-white">{d.strategy}</td>
+                    <td className="text-white/50">{d.tested_at?.replace("T", " ").slice(0, 16)}</td>
+                    <td className="text-right">{d.win_rate_pct}%</td>
+                    <td className="text-right font-mono">{d.sharpe.toFixed(2)}</td>
+                    <td className={`text-right font-mono ${d.train_pnl >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
+                      {fmt(d.train_pnl)}
+                    </td>
+                    <td className={`text-right font-mono font-bold ${d.test_pnl >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
+                      {fmt(d.test_pnl)}
+                    </td>
+                    <td>
+                      <Badge tone={d.qualified ? "pos" : "neg"}>
+                        {d.qualified ? "QUALIFIED" : "REJECTED"}
+                      </Badge>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         )}
       </Card>

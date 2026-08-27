@@ -91,3 +91,15 @@ export interface GraduatedStrategy {
   status: "READY_FOR_LIVE" | "REJECTED_NEGATIVE_PNL";
   trade_history: GraduatedTrade[];
 }
+
+export interface DiscoveryEvaluation {
+  strategy: string;
+  tested_at: string;
+  train_pnl: number;
+  test_pnl: number;
+  sharpe: number;
+  win_rate_pct: number;
+  trades: number;
+  qualified: boolean;
+  score?: number;
+}

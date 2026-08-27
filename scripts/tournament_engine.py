@@ -107,11 +107,26 @@ def generate_candidate_pool() -> list[str]:
     return sorted(list(candidates))
 
 
-def discover_and_qualify(batch_size: int = 100, recent_bars: int = 20000, stride: int = 12) -> list[dict]:
+DISCOVERY_LOG_FILE = STATE_DIR / "discovery_log.json"
+
+def log_discovery_evaluations(eval_records: list[dict]):
+    """Persist a log of all tested candidate evaluations for visibility."""
+    log = []
+    if DISCOVERY_LOG_FILE.exists():
+        try:
+            log = json.loads(DISCOVERY_LOG_FILE.read_text())
+        except Exception:
+            pass
+    # Keep last 300 evaluations
+    log = (eval_records + log)[:300]
+    DISCOVERY_LOG_FILE.write_text(json.dumps(log, indent=2))
+
+
+def discover_and_qualify(batch_size: int = 100, recent_bars: int = 20000, stride: int = 12) -> tuple[list[dict], list[dict]]:
     """Runs high-speed backtest on 5m data and filters candidates by strict qualification criteria."""
     hist_file = HIST_5M if HIST_5M.exists() else HIST_1H
     if not hist_file.exists():
-        return []
+        return [], []
 
     data = json.load(open(hist_file))
     sampled = {s: downsample(rows[-recent_bars:], stride) for s, rows in data.items()}
@@ -123,9 +138,9 @@ def discover_and_qualify(batch_size: int = 100, recent_bars: int = 20000, stride
     universe = generate_candidate_pool()
     untested = [cand for cand in universe if cand not in active_names]
 
-    # Sample a batch to evaluate continuously
     sample_batch = random.sample(untested, min(batch_size, len(untested))) if untested else []
     qualified = []
+    all_evaluated = []
 
     for name in sample_batch:
         try:
@@ -158,27 +173,34 @@ def discover_and_qualify(batch_size: int = 100, recent_bars: int = 20000, stride
         avg_sharpe = sum(r.sharpe for r in test_results) / len(test_results)
         win_rate = (tot_wins / tot_trades) if tot_trades > 0 else 0.0
 
-        # Deterministic Qualification Filter
-        if (
+        is_passed = (
             tot_train_pnl > 0
             and tot_test_pnl > 0
             and avg_sharpe >= MIN_BACKTEST_SHARPE
             and win_rate >= MIN_BACKTEST_WIN_RATE
             and tot_trades >= MIN_BACKTEST_TRADES
-        ):
-            composite_score = tot_test_pnl + (tot_train_pnl * 0.5) + (avg_sharpe * 100)
-            qualified.append({
-                "strategy": name,
-                "score": round(composite_score, 2),
-                "sharpe": round(avg_sharpe, 2),
-                "win_rate_pct": round(win_rate * 100, 1),
-                "test_pnl": round(tot_test_pnl, 2),
-                "train_pnl": round(tot_train_pnl, 2),
-                "trades": tot_trades
-            })
+        )
 
+        record = {
+            "strategy": name,
+            "tested_at": datetime.now(timezone.utc).isoformat(),
+            "train_pnl": round(tot_train_pnl, 2),
+            "test_pnl": round(tot_test_pnl, 2),
+            "sharpe": round(avg_sharpe, 2),
+            "win_rate_pct": round(win_rate * 100, 1),
+            "trades": tot_trades,
+            "qualified": is_passed
+        }
+        all_evaluated.append(record)
+
+        if is_passed:
+            composite_score = tot_test_pnl + (tot_train_pnl * 0.5) + (avg_sharpe * 100)
+            record["score"] = round(composite_score, 2)
+            qualified.append(record)
+
+    log_discovery_evaluations(all_evaluated)
     qualified.sort(key=lambda x: x["score"], reverse=True)
-    return qualified
+    return qualified, all_evaluated
 
 
 def replenish_and_evaluate(batch_size: int = 100) -> dict:
@@ -186,7 +208,7 @@ def replenish_and_evaluate(batch_size: int = 100) -> dict:
     st = load_pool()
     existing_names = {c["name"] for c in st["champions"]}
 
-    qualified = discover_and_qualify(batch_size=batch_size)
+    qualified, all_eval = discover_and_qualify(batch_size=batch_size)
     admitted = []
 
     for q in qualified:
@@ -208,6 +230,7 @@ def replenish_and_evaluate(batch_size: int = 100) -> dict:
     save_pool(st)
     return {
         "active_champions_count": len(st["champions"]),
+        "total_tested_in_batch": len(all_eval),
         "admitted_new_count": len(admitted),
         "admitted": admitted
     }
