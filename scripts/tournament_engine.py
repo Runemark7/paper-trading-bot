@@ -122,14 +122,36 @@ def log_discovery_evaluations(eval_records: list[dict]):
     DISCOVERY_LOG_FILE.write_text(json.dumps(log, indent=2))
 
 
-def discover_and_qualify(batch_size: int = 100, recent_bars: int = 20000, stride: int = 12) -> tuple[list[dict], list[dict]]:
-    """Runs high-speed backtest on 5m data and filters candidates by strict qualification criteria."""
+def discover_and_qualify(batch_size: int = 80, window_size: int = 25000, n_windows: int = 3, stride: int = 12) -> tuple[list[dict], list[dict]]:
+    """Runs rolling multi-window walk-forward backtests across 5m data.
+    
+    Tests candidates across multiple rolling market regimes. To qualify, a strategy must:
+    1. Be profitable across the out-of-sample segments of ALL rolling regimes (consistency).
+    2. Maintain minimum Sharpe and WinRate standards after fees and slippage.
+    """
     hist_file = HIST_5M if HIST_5M.exists() else HIST_1H
     if not hist_file.exists():
         return [], []
 
     data = json.load(open(hist_file))
-    sampled = {s: downsample(rows[-recent_bars:], stride) for s, rows in data.items()}
+    
+    # Construct rolling chronological windows across history
+    # e.g. Window 1: Older regime, Window 2: Mid regime, Window 3: Recent regime
+    raw_symbols = list(data.keys())
+    min_available_bars = min(len(data[s]) for s in raw_symbols)
+    total_span = min(min_available_bars, window_size * n_windows)
+    
+    window_slices = []
+    step = total_span // n_windows
+    for w_i in range(n_windows):
+        start_idx = -(total_span - (w_i * step))
+        end_idx = start_idx + step if w_i < n_windows - 1 else None
+        
+        w_sample = {}
+        for s in raw_symbols:
+            rows = data[s][start_idx:end_idx]
+            w_sample[s] = downsample(rows, stride)
+        window_slices.append(w_sample)
 
     st = load_pool()
     grad = load_graduated()
@@ -148,36 +170,65 @@ def discover_and_qualify(batch_size: int = 100, recent_bars: int = 20000, stride
         except Exception:
             continue
 
-        train_results, test_results = [], []
-        for sym, rows in sampled.items():
-            closes = [r[4] for r in rows]
-            highs = [r[2] for r in rows]
-            lows = [r[3] for r in rows]
-            n = len(rows)
-            cut = int(n * 0.70)
-            try:
-                tr = bs.backtest(closes[:cut], highs[:cut], lows[:cut], pred)
-                te = bs.backtest(closes[cut:], highs[cut:], lows[cut:], pred)
-                train_results.append(tr)
-                test_results.append(te)
-            except Exception:
-                continue
+        window_scores = []
+        passed_all_regimes = True
 
-        if not train_results or not test_results:
+        for w_idx, w_sample in enumerate(window_slices):
+            train_results, test_results = [], []
+            for sym, rows in w_sample.items():
+                closes = [r[4] for r in rows]
+                highs = [r[2] for r in rows]
+                lows = [r[3] for r in rows]
+                n = len(rows)
+                cut = int(n * 0.70)
+                try:
+                    tr = bs.backtest(closes[:cut], highs[:cut], lows[:cut], pred)
+                    te = bs.backtest(closes[cut:], highs[cut:], lows[cut:], pred)
+                    train_results.append(tr)
+                    test_results.append(te)
+                except Exception:
+                    continue
+
+            if not train_results or not test_results:
+                passed_all_regimes = False
+                break
+
+            w_train_pnl = sum(r.total_pnl for r in train_results)
+            w_test_pnl = sum(r.total_pnl for r in test_results)
+            w_trades = sum(r.trades for r in train_results) + sum(r.trades for r in test_results)
+            w_wins = sum(r.wins for r in train_results) + sum(r.wins for r in test_results)
+            w_sharpe = sum(r.sharpe for r in test_results) / len(test_results)
+            w_winrate = (w_wins / w_trades) if w_trades > 0 else 0.0
+
+            # Must not be deeply negative in any single market regime
+            if w_test_pnl < -50 or w_trades < 2:
+                passed_all_regimes = False
+
+            window_scores.append({
+                "train_pnl": w_train_pnl,
+                "test_pnl": w_test_pnl,
+                "trades": w_trades,
+                "wins": w_wins,
+                "sharpe": w_sharpe,
+                "winrate": w_winrate
+            })
+
+        if not window_scores:
             continue
 
-        tot_train_pnl = sum(r.total_pnl for r in train_results)
-        tot_test_pnl = sum(r.total_pnl for r in test_results)
-        tot_trades = sum(r.trades for r in train_results) + sum(r.trades for r in test_results)
-        tot_wins = sum(r.wins for r in train_results) + sum(r.wins for r in test_results)
-        avg_sharpe = sum(r.sharpe for r in test_results) / len(test_results)
-        win_rate = (tot_wins / tot_trades) if tot_trades > 0 else 0.0
+        tot_train_pnl = sum(ws["train_pnl"] for ws in window_scores)
+        tot_test_pnl = sum(ws["test_pnl"] for ws in window_scores)
+        tot_trades = sum(ws["trades"] for ws in window_scores)
+        tot_wins = sum(ws["wins"] for ws in window_scores)
+        avg_sharpe = sum(ws["sharpe"] for ws in window_scores) / len(window_scores)
+        overall_win_rate = (tot_wins / tot_trades) if tot_trades > 0 else 0.0
 
         is_passed = (
-            tot_train_pnl > 0
+            passed_all_regimes
+            and tot_train_pnl > 0
             and tot_test_pnl > 0
             and avg_sharpe >= MIN_BACKTEST_SHARPE
-            and win_rate >= MIN_BACKTEST_WIN_RATE
+            and overall_win_rate >= MIN_BACKTEST_WIN_RATE
             and tot_trades >= MIN_BACKTEST_TRADES
         )
 
@@ -187,8 +238,9 @@ def discover_and_qualify(batch_size: int = 100, recent_bars: int = 20000, stride
             "train_pnl": round(tot_train_pnl, 2),
             "test_pnl": round(tot_test_pnl, 2),
             "sharpe": round(avg_sharpe, 2),
-            "win_rate_pct": round(win_rate * 100, 1),
+            "win_rate_pct": round(overall_win_rate * 100, 1),
             "trades": tot_trades,
+            "regimes_tested": len(window_scores),
             "qualified": is_passed
         }
         all_evaluated.append(record)

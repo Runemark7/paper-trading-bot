@@ -228,14 +228,24 @@ def backtest(closes, highs, lows, strategy, start_cash=10_000.0,
             risk_px = entry - stop
             tp = entry + rr * risk_px
             exit_px = None
-            if cur >= tp:
-                exit_px = tp * (1 - slippage)
-                hit = "tp"
-            elif cur <= stop:
+
+            # Intrabar realistic order evaluation:
+            # Check if high breached TP or low breached Stop during candle i
+            high_i = highs[i] if i < len(highs) else cur
+            low_i = lows[i] if i < len(lows) else cur
+
+            if low_i <= stop and high_i >= tp:
+                # Ambiguous intrabar breach: be conservative and assume Stop hit first
                 exit_px = stop * (1 - slippage)
                 hit = "stop"
+            elif low_i <= stop:
+                exit_px = stop * (1 - slippage)
+                hit = "stop"
+            elif high_i >= tp:
+                exit_px = tp * (1 - slippage)
+                hit = "tp"
             elif not take:
-                # Strategy signal turned OFF / invalid -> close position immediately!
+                # Strategy signal turned OFF / invalid -> close position at bar close
                 exit_px = cur * (1 - slippage)
                 hit = "signal_exit"
 

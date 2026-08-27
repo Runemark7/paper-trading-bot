@@ -25,10 +25,12 @@ from datetime import datetime, timezone
 
 from hedge_fund.brokers.paper import PaperBroker, Order
 from hedge_fund.calibration import CalibrationStore, condition_key
-from hedge_fund.data.binance import CcxtSource
+from hedge_fund.data.binance import Candle, CcxtSource
 from hedge_fund.risk.managed import RiskManager
-from hedge_fund.signals.momentum import compute_signal
+from hedge_fund.signals.momentum import Signal, compute_signal
 from hedge_fund.trading.store import TradeStore
+from hedge_fund.backtest.strategies import atr
+import math
 
 TAKE_PROFIT_RR = 2.0  # 2:1 reward:risk
 
@@ -188,8 +190,16 @@ class TradingLoop:
                                            "REJECTED", reason="no price", equity=equity))
                 continue
 
-            # Stop: ~2.5% below entry (simple initial risk). Deterministic.
-            stop = entry * (1 - 0.025)
+            # ATR dynamic volatility stop: 2.0x ATR_14 below entry (floored between 1.5% and 4.0%)
+            highs_k = [c.high for c in klines]
+            lows_k = [c.low for c in klines]
+            closes_k = [c.close for c in klines]
+            a = atr(highs_k, lows_k, closes_k, 14)
+            if math.isnan(a) or a <= 0:
+                stop_dist = entry * 0.025
+            else:
+                stop_dist = max(entry * 0.015, min(entry * 0.040, 2.0 * a))
+            stop = entry - stop_dist
 
             # Pyramiding guardrails:
             # 1. Max 3 lots per symbol
