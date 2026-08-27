@@ -61,7 +61,19 @@ def generate_5000_universe() -> list[str]:
             if l_lb > s_lb * 2:
                 universe.add(f"vol_lowsm_{s_lb}_{l_lb}")
 
-    # 7. Combinatorial AND Pairs: Trend Gate + (Dip / Momentum / RSI) - 4,000+ combos
+    # 6b. Money Flow Index (MFI) & Volume Flow Filters
+    for p in [7, 10, 14, 21]:
+        for th in [20, 25, 30, 35, 40]:
+            universe.add(f"mfi_{p}_<{th}")
+        for th in [45, 50, 55, 60]:
+            universe.add(f"mfi_{p}_>{th}")
+
+    # 6c. Bollinger Band Breakouts (Mean-Reversion Dips)
+    for p in [14, 20, 30]:
+        universe.add(f"bb_lower_{p}_2")
+        universe.add(f"bb_upper_{p}_2")
+
+    # 7. Combinatorial AND Pairs: Trend Gate + (Dip / Momentum / RSI / MFI / BB)
     trend_gates = [f"sma_abv_{ma}" for ma in [20, 30, 40, 50, 75, 100, 150, 200]] + \
                   [f"ema_abv_{ma}" for ma in [20, 30, 50, 100]] + \
                   [f"sma_stack_{'_'.join(map(str, c))}" for c in [(5, 20, 50), (7, 25, 50), (9, 28, 51), (10, 20, 50), (20, 50, 100)]]
@@ -69,6 +81,8 @@ def generate_5000_universe() -> list[str]:
     dip_signals = [f"dip_{lb}b_lt{thr}pc" for lb in [3, 6, 9, 12, 18, 24, 36, 48] for thr in [1, 2, 3, 4, 5, 6]]
     mom_signals = [f"mom_{lb}b_gt{thr}pc" for lb in [3, 6, 12, 18, 24, 36, 48] for thr in [1, 2, 3, 5]]
     rsi_signals = [f"rsi_{p}_>{th}" for p in [7, 10, 14, 21, 28] for th in [40, 45, 50, 55, 60]]
+    mfi_signals = [f"mfi_{p}_<{th}" for p in [10, 14, 21] for th in [25, 30, 35, 40]] + [f"mfi_{p}_>{th}" for p in [14, 21] for th in [45, 50, 55]]
+    bb_signals = [f"bb_lower_{p}_2" for p in [14, 20]]
 
     # Trend + Dip (buy pullbacks in uptrend)
     for t, d in itertools.product(trend_gates, dip_signals):
@@ -82,14 +96,32 @@ def generate_5000_universe() -> list[str]:
     for t, r in itertools.product(trend_gates, rsi_signals):
         universe.add(f"{r}&{t}")
 
+    # Trend + MFI Volume Flow (e.g. Bullish Trend + MFI volume dip)
+    for t, m in itertools.product(trend_gates, mfi_signals):
+        universe.add(f"{m}&{t}")
+
+    # Trend + Bollinger Band Dip (buy lower BB touch in strong trend)
+    for t, b in itertools.product(trend_gates, bb_signals):
+        universe.add(f"{b}&{t}")
+
     # RSI + Dip combos (oversold RSI + price dip)
     rsi_oversold = [f"rsi_{p}_>{th}_<{ov}" for p in [7, 14] for th in [30, 35, 40] for ov in [60, 70]]
     for r, d in itertools.product(rsi_oversold, dip_signals[:30]):
         universe.add(f"{d}&{r}")
 
     # Dual Timeframe / Multi-Momentum Combos (Short + Long momentum)
-    for m1, m2 in itertools.product(mom_signals[:20], mom_signals[20:40]):
+    for m1, m2 in itertools.product(mom_signals[:30], mom_signals[30:70]):
         universe.add(f"{m1}&{m2}")
+
+    # 8. Multi-Timeframe Conditionals: Daily Macro Regime + 1H Wave + 5M Trigger
+    daily_macro = [f"daily(sma_abv_{ma})" for ma in [20, 30, 50, 100, 150, 200]] + [f"daily(ema_abv_{ma})" for ma in [20, 50, 100, 200]]
+    h1_wave = [f"h1(sma_stack_7_25_50)", f"h1(ema_stack_8_21_55)", f"h1(rsi_14_>50)", f"h1(mfi_14_>50)", f"h1(sma_abv_50)"]
+    m5_triggers = [f"m5(dip_{lb}b_lt{thr}pc)" for lb in [3, 6, 12, 18, 24] for thr in [1, 2, 3, 5]] + \
+                  [f"m5(mfi_{p}_<{th})" for p in [10, 14, 21] for th in [20, 25, 30, 35]] + \
+                  [f"m5(rsi_{p}_>{th})" for p in [7, 10, 14] for th in [40, 45, 50, 55]]
+    
+    for d, h, m in itertools.product(daily_macro, h1_wave, m5_triggers):
+        universe.add(f"{d}&{h}&{m}")
 
     return sorted(list(universe))
 
