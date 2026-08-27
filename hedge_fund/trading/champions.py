@@ -16,8 +16,8 @@ from pathlib import Path
 REPO = Path("/opt/data/paper-trading-bot")
 CHAMP_FILE = REPO / "state/champions.json"
 GRADUATED_FILE = REPO / "state/graduated.json"
-MAX_ACTIVE_CHAMPIONS = 10
-TRADE_EVALUATION_LIMIT = 10
+TRADE_EVALUATION_LIMIT = 25
+MAX_ACTIVE_CHAMPIONS = 1000  # Unlimited arena capacity
 
 
 def load_pool() -> dict:

@@ -37,7 +37,7 @@ def main():
 
     dbs = sorted(glob.glob(os.path.join(STATE, "trades_*.sqlite")))
     if not dbs:
-        lines.append("_No isolated accounts yet._")
+        lines.append("_No active tournament accounts yet._")
         print("\n".join(lines)); return
 
     # Load graduated list for display
@@ -49,8 +49,9 @@ def main():
         except Exception:
             pass
 
-    grand = 0.0
-    active_with_pos = 0
+    grand_pnl = 0.0
+    active_accounts_summary = []
+
     for db in dbs:
         acct = _load_acct(db)
         strat = os.path.basename(db)[7:-7]
@@ -59,44 +60,51 @@ def main():
         closed = c.execute("SELECT symbol,entry_price,exit_price,pnl,exit_reason,hit FROM trades WHERE exit_ts IS NOT NULL").fetchall()
         c.close()
 
-        # live mark-to-market
         unreal = 0.0
-        held = []
+        held_desc = []
         for o in opens:
             cur = px.get(o["symbol"])
             if cur is None:
                 continue
             p = (cur - o["entry_price"]) * o["size"]
             unreal += p
-            held.append((o["symbol"], o["entry_price"], cur, o["size"], p))
+            pct = (cur / o["entry_price"] - 1) * 100 if o["entry_price"] else 0
+            held_desc.append(f"{o['symbol']} {pct:+.1f}%")
+
         realized = sum((r["pnl"] or 0) for r in closed)
-        equity = START_CASH + realized + unreal
-        grand += (equity - START_CASH)
+        tot_strat_pnl = realized + unreal
+        grand_pnl += tot_strat_pnl
 
-        # account cash from persisted account_state (authoritative starting point)
-        acct_cash = None
-        if acct and acct.get("broker"):
-            acct_cash = acct["broker"].get("cash")
+        active_accounts_summary.append({
+            "name": strat,
+            "closed": len(closed),
+            "open_count": len(opens),
+            "held_desc": ", ".join(held_desc) if held_desc else "flat",
+            "realized": realized,
+            "unrealized": unreal,
+            "total_pnl": tot_strat_pnl,
+        })
 
-        lines.append(f"### {strat} — ${START_CASH:,.0f} acct ({len(closed)}/10 trades evaluated)")
-        if not held and realized == 0:
-            lines.append("_Flat — no open positions, waiting for setup._")
-        for sym, ep, cur, qty, p in held:
-            pct = (cur / ep - 1) * 100 if ep else 0
-            lines.append(f"- **{sym}** long {qty:.4f} @ {ep:,.0f} → {cur:,.0f} = **{p:+,.2f} ({pct:+.2f}%)**")
-        if realized:
-            lines.append(f"- Realized P&L: **{realized:+,.2f}** ({len(closed)} trades)")
-        lines.append(f"- **Unrealized: {unreal:+,.2f}** · equity ≈ **{equity:,.0f}**")
-        lines.append("")
+    # Sort leaderboard by total PnL desc
+    active_accounts_summary.sort(key=lambda x: x["total_pnl"], reverse=True)
 
-    lines.append(f"**Active Champions Tested:** {len(dbs)}/10 accounts (Total P&L: {grand:+,.2f})")
+    lines.append(f"🏆 **Active Tournament Leaderboard** ({len(dbs)} Strategies in Arena · Target: 25 Trades):")
+    lines.append(f"{'Strategy':<26} {'Trades':<8} {'Open Positions':<18} {'Net P&L'}")
+    lines.append("-" * 68)
+
+    for item in active_accounts_summary:
+        pnl_str = f"+${item['total_pnl']:,.2f}" if item['total_pnl'] >= 0 else f"-${abs(item['total_pnl']):,.2f}"
+        lines.append(f"{item['name']:<26} {item['closed']}/25     {item['held_desc']:<18} {pnl_str}")
+
+    lines.append("-" * 68)
+    lines.append(f"**Total Arena Net P&L:** {'+$' if grand_pnl >= 0 else '-$'}{abs(grand_pnl):,.2f}")
     
     if grad_list:
-        lines.append("\n🏆 **Graduated Production Strategy Candidates (10/10 trades completed):**")
+        lines.append("\n🎓 **Graduated Strategies (25/25 Trades Completed):**")
         for g in grad_list:
             lines.append(f"- **{g['name']}**: P&L {g['total_pnl']:+,.2f} | WinRate: {g['win_rate_pct']}% | Status: `{g['status']}`")
     else:
-        lines.append("\n🏆 **Graduated Strategies:** None yet (requires 10 closed entries to graduate).")
+        lines.append("\n🎓 **Graduated Strategies:** None yet (requires 25 closed entries to graduate).")
 
     print("\n".join(lines))
 

@@ -47,12 +47,19 @@ def main() -> None:
     state.mkdir(parents=True, exist_ok=True)
     data = CcxtSource()
     strategies = active_strategies()
-    print(f"[running {len(strategies)} isolated €10k accounts: {strategies}]")
+    print(f"[running {len(strategies)} isolated €10k accounts in arena]")
+
+    # Single batch fetch of klines and current prices per symbol to keep cycles sub-second
+    cached_klines = {}
+    cached_prices = {}
+    for sym in SYMBOLS:
+        try:
+            cached_prices[sym] = data.fetch_price(sym)
+            cached_klines[sym] = data.fetch_klines(sym, "4h", limit=300)
+        except Exception as e:
+            print(f"[data error for {sym}]: {e}")
 
     for strat in strategies:
-        # one isolated account per strategy — RESTORE its existing broker so the
-        # cycle trades the true open book (not a fresh empty account that would
-        # duplicate/re-open and leave phantom rows).
         db = state / f"trades_{strat.replace('/','_').replace(':','_')}.sqlite"
         store = TradeStore(db)
         calib = CalibrationStore(state / f"calibration_{strat.replace('/','_').replace(':','_')}.json")
@@ -63,22 +70,70 @@ def main() -> None:
             broker.restore_state(saved.get("broker", {}))
             peak = saved.get("risk_peak", START_CASH)
             risk = RiskManager(initial_equity=max(peak, START_CASH))
+        
         loop = TradingLoop(data, broker, risk, calib, store=store,
                            strategy=strat, strategy_file=None, regime=None)
-        for i in range(args.cycles):
-            try:
-                results = loop.run_cycle(SYMBOLS)
-                for r in results:
-                    print(f"  [{strat}] {r.symbol} {r.action:9s} cond={r.condition} "
-                          f"p={r.probability:.2f} eq={r.equity:.0f} {r.reason[:40]}")
-            except Exception as exc:
-                print(f"  [{strat}] cycle error: {exc}")
-        # persist each isolated account so it carries on next run
-        store.save_account_state(
-            {"broker": broker.to_state(), "risk_peak": risk.peak_equity,
-             "saved_at": datetime.now(timezone.utc).isoformat()})
-        print(f"  [{strat}] equity: {broker.equity({}) :,.0f} open: "
-              f"{ {t: round(broker.quantity(t), 4) for t in set(p.ticker for p in broker.lots)} }")
+        
+        # Override data source with cached klines/prices during cycle
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        loop._manage_open_positions(cached_prices, now)
+
+        for sym in SYMBOLS:
+            klines = cached_klines.get(sym)
+            if not klines:
+                continue
+            from hedge_fund.signals.momentum import compute_signal
+            sig = compute_signal(klines, sym, loop.timeframe, strategy=strat)
+
+            # Signal Invalidation Exit
+            if sig.direction != "long":
+                lots_to_close = [lot for lot in loop.broker.lots if lot.ticker == sym]
+                if lots_to_close:
+                    cur = cached_prices.get(sym)
+                    if cur is not None:
+                        for lot in lots_to_close:
+                            fill = loop.broker.close_lot(lot, cur)
+                            fee = fill.fee if fill else 0.0
+                            pnl = (cur - lot.entry_price) * lot.quantity - fee
+                            loop._record_outcome(sym, lot, fill, tp=(pnl > 0))
+                            loop._close_store_lot(lot, fill, f"signal_exit_{sig.condition}")
+
+            if sig.direction != "long":
+                continue
+
+            entry = cached_prices.get(sym)
+            if entry is None:
+                continue
+
+            stop = entry * (1 - 0.025)
+            existing_sym_lots = [lot for lot in loop.broker.lots if lot.ticker == sym]
+            if len(existing_sym_lots) >= 3:
+                continue
+            if existing_sym_lots:
+                unrealized_lots_pnl = [(entry - lot.entry_price) * lot.quantity for lot in existing_sym_lots]
+                if any(p <= 0 for p in unrealized_lots_pnl):
+                    continue
+
+            key = f"{sym}|4h|{sig.condition}"
+            prob = 0.60
+            conf_mult = max(0.5, min(2.0, (prob / 0.50)))
+            open_pos = [(p.entry_price, p.stop_loss, p.quantity) for p in loop.broker.lots]
+            rd = loop.risk.size_position(loop.broker.equity(cached_prices), entry, stop, open_pos, confidence=conf_mult)
+            if not rd.approved:
+                continue
+
+            from hedge_fund.brokers.paper import Order
+            fill = loop.broker.place_order(Order(sym, "buy", rd.size, entry, stop_loss=stop, condition=key), market_price=entry)
+            fee = fill.fee if fill else 0.0
+            if loop.store is not None and loop.broker.lots:
+                new_lot = loop.broker.lots[-1]
+                loop.store.open_trade(sym, "4h", key, prob, entry, rd.size, fee, lot_id=new_lot.lot_id)
+
+        store.save_account_state({
+            "broker": broker.to_state(),
+            "risk_peak": risk.peak_equity,
+            "saved_at": now
+        })
 
 
 if __name__ == "__main__":
