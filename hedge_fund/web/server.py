@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import threading
@@ -29,18 +30,30 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from hedge_fund.paths import state_root
 from hedge_fund.regime.gate import RegimeGate
+from hedge_fund.trading.constants import MAX_ACTIVE_CHAMPIONS
 from hedge_fund.trading.store import TradeStore
 from hedge_fund.web.live import live_preview, live_prices
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-STATE_DIR = REPO_ROOT / "state"
-DASHBOARD_HTML = STATE_DIR / "report.html"
-TRADES_DB = STATE_DIR / "trades.sqlite"
-CALIB_JSON = STATE_DIR / "calibration.json"
-
 RUN_LOCK = threading.Lock()
-CORE_DB = str(TRADES_DB)
+
+
+def _state_dir() -> Path:
+    return state_root()
+
+
+def _dashboard_html() -> Path:
+    return _state_dir() / "report.html"
+
+
+def _trades_db() -> Path:
+    return _state_dir() / "trades.sqlite"
+
+
+def _calib_json() -> Path:
+    return _state_dir() / "calibration.json"
 
 
 def _read_json(path):
@@ -51,8 +64,8 @@ def _read_json(path):
 
 
 def per_strategy_dbs() -> list[Path]:
-    """All isolated per-strategy account DBs in state/."""
-    return sorted(STATE_DIR.glob("trades_*.sqlite"))
+    """All isolated per-strategy account DBs in STATE_ROOT."""
+    return sorted(_state_dir().glob("trades_*.sqlite"))
 
 
 def store_dbs() -> list[str]:
@@ -60,7 +73,7 @@ def store_dbs() -> list[str]:
     dbs = per_strategy_dbs()
     if dbs:
         return [str(d) for d in dbs]
-    return [str(TRADES_DB)]
+    return [str(_trades_db())]
 
 
 def build_summary() -> dict:
@@ -95,7 +108,7 @@ def build_summary() -> dict:
 
 def build_learning() -> dict:
     out = {}
-    calib_files = sorted(STATE_DIR.glob("calibration_*.json"))
+    calib_files = sorted(_state_dir().glob("calibration_*.json"))
     for f in calib_files:
         calib = _read_json(f)
         if not calib:
@@ -122,7 +135,7 @@ def build_learning() -> dict:
 
 
 def build_regime() -> dict:
-    gate = RegimeGate(state_dir=STATE_DIR, cache_hours=24)
+    gate = RegimeGate(state_dir=_state_dir(), cache_hours=24)
     try:
         return {"zone": gate.zone(), "score": gate.score(), "allowed": gate.allowed_to_trade()}
     except Exception as exc:
@@ -136,6 +149,7 @@ def trigger_run() -> dict:
             proc = subprocess.run(
                 [sys.executable, "-m", "hedge_fund.trading.run_isolated", "--cycles", "1"],
                 capture_output=True, text=True, timeout=300, cwd=str(REPO_ROOT),
+                env={**os.environ, "PAPER_STATE": str(_state_dir())},
             )
         except subprocess.TimeoutExpired:
             return {"ok": False, "error": "timed out"}
@@ -160,10 +174,10 @@ def live_report(fresh_prices: bool = True) -> None:
 
     with _LIVE_LOCK:
         try:
-            live = live_preview(CORE_DB)
-            st = TradeStore(CORE_DB)
-            generate_dashboard(st, str(DASHBOARD_HTML),
-                               calib_path=str(CALIB_JSON), live=live)
+            live = live_preview(str(_trades_db()))
+            st = TradeStore(str(_trades_db()))
+            generate_dashboard(st, str(_dashboard_html()),
+                               calib_path=str(_calib_json()), live=live)
         except Exception as exc:  # noqa: BLE001
             print(f"[live_report] failed: {exc}")
 
@@ -200,7 +214,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({"ok": True, "ts": time.time()})
         elif route == "/dashboard" or route == "/":
             live_report()  # re-price open positions live before serving
-            self._send_html(DASHBOARD_HTML)
+            self._send_html(_dashboard_html())
         elif route == "/api/summary":
             live_report()  # ensure fresh
             self._send_json(build_summary())
@@ -247,7 +261,7 @@ class Handler(BaseHTTPRequestHandler):
                 collect_live_results()
                 self._send_json(pool_status())
             except Exception as exc:
-                self._send_json({"error": str(exc), "champions": [], "count": 0, "max": 10}, 500)
+                self._send_json({"error": str(exc), "champions": [], "count": 0, "max": MAX_ACTIVE_CHAMPIONS}, 500)
         elif route == "/api/graduated":
             try:
                 from hedge_fund.trading.champions import load_graduated
@@ -256,7 +270,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"error": str(exc)}, 500)
         elif route == "/api/discovery":
             try:
-                log_path = STATE_DIR / "discovery_log.json"
+                log_path = _state_dir() / "discovery_log.json"
                 if log_path.exists():
                     self._send_json(json.loads(log_path.read_text()))
                 else:

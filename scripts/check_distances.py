@@ -1,8 +1,8 @@
 import sqlite3, glob, os, sys
-sys.path.insert(0, '/opt/data/paper-trading-bot')
+from hedge_fund.paths import state_root
 from hedge_fund.data.binance import CcxtSource
 
-state = '/opt/data/paper-trading-bot/state'
+state = str(state_root())
 src = CcxtSource()
 px = {s: src.fetch_price(s) for s in ('BTC/USDT', 'ETH/USDT')}
 print('Live Prices:', px)

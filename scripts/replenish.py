@@ -1,8 +1,8 @@
 """Fast candidate backtesting & replenishment engine.
 
 Checks active champions count in champions.json.
-If active < 10, runs a fast backtest sweep over candidate strategy templates
-and immediately promotes the top performers until active champions == 10.
+If active < MAX_ACTIVE_CHAMPIONS, runs a fast backtest sweep over candidate strategy templates
+and immediately promotes the top performers until the arena is full.
 """
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import json
 import sys
 from pathlib import Path
 
-sys.path.insert(0, "/opt/data/paper-trading-bot")
+from hedge_fund.paths import state_root
 import hedge_fund.backtest.strategies as bs
 from hedge_fund.backtest.stride import downsample
 from hedge_fund.trading.champions import (
@@ -21,8 +21,8 @@ from hedge_fund.trading.champions import (
 )
 from scripts.sweep import build_pool
 
-HIST_1H = "/opt/data/paper-trading-bot/state/crypto_history_1h.json"
-HIST_5M = "/opt/data/paper-trading-bot/state/crypto_history_5m.json"
+HIST_1H = str(state_root() / "crypto_history_1h.json")
+HIST_5M = str(state_root() / "crypto_history_5m.json")
 HIST = HIST_5M if Path(HIST_5M).exists() else HIST_1H
 
 

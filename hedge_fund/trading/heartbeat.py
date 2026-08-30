@@ -1,7 +1,7 @@
 """Rapid position heartbeat — enforce stop-loss / take-profit fast.
 
 Runs frequently (a few minutes cadence) to re-price open paper positions and
-close any lot that breaches its stop or hits take-profit IMMEDIATELY (not 6h
+close any lot that breaches its stop or hits take-profit IMMEDIATELY (not 4h
 later). This is the essential risk-management heartbeat: a 2.5% stop can be
 breached in minutes in crypto, and a slow check lets it blow straight through.
 
@@ -23,14 +23,14 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from hedge_fund.paths import state_root
 from hedge_fund.brokers.paper import PaperBroker
 from hedge_fund.calibration import CalibrationStore
 from hedge_fund.data.binance import CcxtSource
 from hedge_fund.risk.managed import RiskManager
 from hedge_fund.trading.store import TradeStore
-from hedge_fund.trading.loop import TradingLoop, CycleResult
+from hedge_fund.trading.loop import TradingLoop
 
-STATE = Path(os.environ.get("PAPER_STATE", "state"))
 SYMBOLS = ["BTC/USDT", "ETH/USDT"]
 START_CASH = 10_000.0
 LIVE_STRATEGY = os.environ.get("PAPER_STRATEGY", "sma_stack")
@@ -55,7 +55,7 @@ def _build_for(db_path: str, strat: str):
 def _account_dbs() -> list[tuple[str, str]]:
     """All per-strategy sqlite dbs -> (db_path, strategy_name)."""
     dbs = []
-    for p in STATE.glob("trades_*.sqlite"):
+    for p in state_root().glob("trades_*.sqlite"):
         strat = p.name[len("trades_"):-len(".sqlite")]
         dbs.append((str(p), strat))
     return dbs
@@ -64,7 +64,7 @@ def _account_dbs() -> list[tuple[str, str]]:
 def heartbeat_once() -> int:
     closed_total = 0
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    accounts = _account_dbs() or [(str(STATE / "trades.sqlite"), LIVE_STRATEGY)]
+    accounts = _account_dbs() or [(str(state_root() / "trades.sqlite"), LIVE_STRATEGY)]
     data = CcxtSource()
     # one shared price fetch
     px = {}

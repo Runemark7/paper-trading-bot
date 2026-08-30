@@ -86,7 +86,7 @@ class DashboardRulesTests(unittest.TestCase):
         from hedge_fund.dashboard.report import strategy_rules_section
         from hedge_fund.risk.managed import RISK_FRAC, MAX_OPEN_RISK_FRAC, MAX_DRAWDOWN
         from hedge_fund.trading.loop import ATR_STOP_MULT, ATR_PERIOD, STOP_FLOOR_FRAC
-        from hedge_fund.trading.champions import TRADE_EVALUATION_LIMIT
+        from hedge_fund.trading.constants import GRADUATED_PAPER, TRADE_EVALUATION_LIMIT
 
         html = strategy_rules_section()
         self.assertNotIn("2.5% below entry (hard)", html)
@@ -102,6 +102,8 @@ class DashboardRulesTests(unittest.TestCase):
         self.assertIn(f"{MAX_DRAWDOWN:.0%}", html)
         self.assertIn(str(TRADE_EVALUATION_LIMIT), html)
         self.assertIn("TradingLoop.run_cycle", html)
+        self.assertIn(GRADUATED_PAPER, html)
+        self.assertNotIn("READY_FOR_LIVE", html)
 
 
 class SharedCycleTests(unittest.TestCase):

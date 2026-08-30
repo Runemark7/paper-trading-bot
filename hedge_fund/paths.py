@@ -1,23 +1,32 @@
-"""Where user data lives: ~/.hedge-fund/.
+"""Shared filesystem anchors.
 
-Everything the user owns — mandates, run/backtest receipts, API caches, and
-the .env key file — lives under one home directory, outside the package. The
-package directory stays read-only code, so a pipx install behaves exactly
-like a checkout.
+Paper-trading state lives under STATE_ROOT (PAPER_STATE, default ``state``).
+Web, champions, tournament, run, and heartbeat all resolve paths through
+``state_root()`` so a k8s PVC at /app/state and a local checkout agree.
 
-Textual-free and import-light on purpose: every layer (CLI, TUI, caches)
-anchors its paths here, and nothing here may import them back.
+The fork leftover ~/.hedge-fund/ tree (mandates, caches, .env) is still
+declared here for non-trading tools. Trading code must not read ENV_PATH
+for API keys and must not construct a private-key ccxt client.
 """
 
 from __future__ import annotations
 
+import os
 import shutil
 from pathlib import Path
 
 USER_DIR = Path.home() / ".hedge-fund"
 MANDATES_DIR = USER_DIR / "mandates"
 CACHE_DIR = USER_DIR / "cache"
-ENV_PATH = USER_DIR / ".env"
+ENV_PATH = USER_DIR / ".env"  # fork leftover; do not load for trading
+
+
+def state_root() -> Path:
+    """Paper-trading state directory. Honors PAPER_STATE at call time."""
+    return Path(os.environ.get("PAPER_STATE", "state"))
+
+
+STATE_ROOT = state_root()
 
 # The example mandate ships inside the package; it is copied out (never read
 # in place) so users edit their copy, not the install.

@@ -1,7 +1,7 @@
 """Live preview — current market prices + live paper equity/P&L.
 
-The dashboard is normally a static snapshot regenerated after each cron
-cycle (every 6h). This module lets the web service re-fetch live prices and
+The dashboard is normally a static snapshot regenerated after each
+4h cycle. This module lets the web service re-fetch live prices and
 recompute the account's real-time value on every page load, so the dashboard
 feels live between cycles.
 

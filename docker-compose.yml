@@ -14,6 +14,7 @@ services:
     environment:
       PAPER_STATE: /app/state
       PAPER_STRATEGY: ${PAPER_STRATEGY:-sma_stack}
+      PAPER_ONLY: "1"
     restart: unless-stopped
 
   scheduler:
@@ -27,7 +28,8 @@ services:
     environment:
       PAPER_STATE: /app/state
       PAPER_STRATEGY: ${PAPER_STRATEGY:-sma_stack}
-    command: ["sh", "-c", "while true; do python -m hedge_fund.trading.run --cycles 1; sleep 21600; done"]
+      PAPER_ONLY: "1"
+    command: ["sh", "-c", "while true; do python -m hedge_fund.trading.run --cycles 1; sleep 14400; done"]
     restart: unless-stopped
 
   heartbeat:
@@ -41,6 +43,7 @@ services:
     environment:
       PAPER_STATE: /app/state
       PAPER_STRATEGY: ${PAPER_STRATEGY:-sma_stack}
+      PAPER_ONLY: "1"
     command: ["python", "-m", "hedge_fund.trading.heartbeat", "--interval", "30"]
     restart: unless-stopped
 

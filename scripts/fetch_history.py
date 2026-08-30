@@ -10,13 +10,13 @@ Usage:
 """
 import sys, json, os, time
 from pathlib import Path
-sys.path.insert(0, "/opt/data/paper-trading-bot")
+from hedge_fund.paths import state_root
 from hedge_fund.data.binance import CcxtSource
 from datetime import datetime, timezone
 
 DEFAULT_TF = os.environ.get("HIST_TIMEFRAME", "1h")
 DEFAULT_BARS = int(os.environ.get("HIST_BARS", "70000"))  # ~7 years of 1h bars
-STATE_DIR = Path(os.environ.get("PAPER_STATE", "/opt/data/paper-trading-bot/state"))
+STATE_DIR = state_root()
 OUT = STATE_DIR / f"crypto_history_{DEFAULT_TF}.json"
 SYMBOLS = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT"]
 

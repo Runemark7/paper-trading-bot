@@ -31,6 +31,7 @@ export async function fetchChampions(): Promise<{
   active_champions: Champion[];
   active_count: number;
   target_active: number;
+  evaluation_limit: number;
   graduated_count: number;
   graduated: GraduatedStrategy[];
 }> {

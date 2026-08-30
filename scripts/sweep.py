@@ -25,11 +25,11 @@ import json
 import sys
 from pathlib import Path
 
-sys.path.insert(0, "/opt/data/paper-trading-bot")
+from hedge_fund.paths import state_root
 import hedge_fund.backtest.strategies as bs
 
 HIST = "/tmp/crypto_history.json"
-OUT = "/opt/data/paper-trading-bot/state/sweep.json"
+OUT = str(state_root() / "sweep.json")
 
 
 def build_pool() -> list[tuple[str, callable]]:

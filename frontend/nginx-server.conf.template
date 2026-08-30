@@ -14,7 +14,13 @@ server {
 
     # ── API proxy ───────────────────────────────────────────────────────────
     # In docker-compose BACKEND_URL=http://web:8787.
-    # In k8s the Ingress routes /api to the backend Service directly.
+    # Ingress paperbot.local points only at this frontend. Backend is not on
+    # Ingress. POST /run is intentionally NOT proxied — unauthenticated cycle
+    # trigger must not be on the public host.
+    location = /run {
+        return 404;
+    }
+
     location /api/ {
         proxy_pass         ${BACKEND_URL}/api/;
         proxy_http_version 1.1;

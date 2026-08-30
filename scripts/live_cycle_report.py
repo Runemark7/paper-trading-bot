@@ -1,6 +1,6 @@
 """Live cycle report data: prices + signals (run set) + live PnL for open trades."""
 import json, sqlite3, sys
-sys.path.insert(0, '/opt/data/paper-trading-bot')
+from hedge_fund.paths import state_root
 from hedge_fund.data.binance import CcxtSource
 from hedge_fund.signals.momentum import compute_signal
 
@@ -44,7 +44,7 @@ for strat in STRATS:
     print("SIG", strat, json.dumps(row))
 
 # --- live PnL for open trades ---
-con = sqlite3.connect('/opt/data/paper-trading-bot/state/trades.sqlite')
+con = sqlite3.connect(str(state_root() / 'trades.sqlite'))
 con.row_factory = sqlite3.Row
 print("=== OPEN TRADES (live PnL) ===")
 for r in con.execute("SELECT * FROM trades WHERE exit_ts IS NULL ORDER BY id"):
@@ -64,7 +64,7 @@ print("=== CLOSED Trades ===")
 for r in con.execute("SELECT * FROM trades WHERE exit_ts IS NOT NULL ORDER BY id"):
     print(json.dumps(dict(r), default=str))
 print("=== EVOLVE CHAMPION ===")
-champ = json.load(open('/opt/data/paper-trading-bot/state/evolve.json')).get('champion')
+champ = json.load(open(state_root() / 'evolve.json')).get('champion')
 print(json.dumps(champ))
 print("=== ACCOUNT ===")
 for r in con.execute("SELECT * FROM account_state"):

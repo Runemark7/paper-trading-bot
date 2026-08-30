@@ -1,6 +1,7 @@
-import sys, json
-sys.path.insert(0, "/opt/data/paper-trading-bot")
-from scripts.tournament_engine import generate_candidate_pool, HIST_5M
+import json
+from hedge_fund.paths import state_root
+from hedge_fund.trading.universe import generate_5000_universe as generate_candidate_pool
+HIST_5M = state_root() / "crypto_history_5m.json"
 import hedge_fund.backtest.strategies as bs
 from hedge_fund.backtest.stride import downsample
 from hedge_fund.signals.dynamic import parse_strategy

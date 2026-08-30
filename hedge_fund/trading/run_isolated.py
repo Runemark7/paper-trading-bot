@@ -6,7 +6,7 @@ longer crowd each other out of a shared risk budget, so we can genuinely see
 which one performs best. All accounts persist in a per-strategy sqlite.
 
 The decision cycle is TradingLoop.run_cycle — the same loop, stops, sizing,
-and strategy path as hedge_fund.trading.run (the CronJob). This module is
+and strategy path as hedge_fund.trading.run (the cycle sidecar). This module is
 not a second hardcoded book.
 """
 from __future__ import annotations
@@ -16,6 +16,7 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
+from hedge_fund.paths import state_root
 from hedge_fund.brokers.paper import PaperBroker, SLIPPAGE, TAKER_FEE
 from hedge_fund.calibration import CalibrationStore
 from hedge_fund.data.binance import CcxtSource
@@ -24,7 +25,6 @@ from hedge_fund.trading.loop import TradingLoop
 from hedge_fund.trading.store import TradeStore
 from hedge_fund.trading.champions import load_pool
 
-STATE = Path(os.environ.get("PAPER_STATE", "state"))
 SYMBOLS = ["BTC/USDT", "ETH/USDT"]
 START_CASH = 10_000.0
 LIVE_STRATEGY = os.environ.get("PAPER_STRATEGY", "sma_stack")
@@ -105,7 +105,7 @@ def _run_one_account(strat: str, state: Path, market: _CachedMarket, now: str) -
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--cycles", type=int, default=1)
-    ap.add_argument("--state", default=str(STATE))
+    ap.add_argument("--state", default=str(state_root()))
     args = ap.parse_args()
 
     state = Path(args.state)

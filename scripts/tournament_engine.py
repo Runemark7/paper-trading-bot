@@ -1,147 +1,90 @@
 """Tournament Arena & Continuous Discovery Engine.
 
 1. Continuous generation & backtesting of strategy candidates over 5m history.
-2. Hard qualification score filter (Sharpe >= 0.8, Win Rate >= 45%, Net PnL > 0 on Train + Test).
-3. Unlimited active champions arena (each gets an isolated $10k paper account).
-4. Graduation threshold: 25 closed live trades.
+2. Hard qualification filter (hedge_fund.trading.constants):
+   Sharpe >= 0.10, win rate >= 38%, >= 4 trades, train PnL > 0 and test PnL > 0.
+3. Arena capacity MAX_ACTIVE_CHAMPIONS (1000); each champion gets an isolated €10k paper account.
+4. Graduation: TRADE_EVALUATION_LIMIT (25) closed paper trades.
+
+Qualification uses hedge_fund.backtest.strategies (fees in that engine), not
+fast_quant or fee-free SimBroker.
 """
 from __future__ import annotations
 
-import itertools
 import json
-import os
 import random
-import sys
 from datetime import datetime, timezone
-from pathlib import Path
 
-sys.path.insert(0, "/opt/data/paper-trading-bot")
 import hedge_fund.backtest.strategies as bs
 from hedge_fund.backtest.stride import downsample
+from hedge_fund.paths import state_root
 from hedge_fund.signals.dynamic import parse_strategy
-
-STATE_DIR = Path(os.environ.get("PAPER_STATE", "/opt/data/paper-trading-bot/state"))
-HIST_5M = STATE_DIR / "crypto_history_5m.json"
-HIST_1H = STATE_DIR / "crypto_history_1h.json"
-CHAMP_FILE = STATE_DIR / "champions.json"
-GRADUATED_FILE = STATE_DIR / "graduated.json"
-
-GRADUATION_TRADE_TARGET = 25  # Increased from 10 to 25 trades per champion
-
-# Qualification Criteria on 5m Backtest (Deterministic Minimum Edge)
-MIN_BACKTEST_SHARPE = 0.10
-MIN_BACKTEST_WIN_RATE = 0.38
-MIN_BACKTEST_TRADES = 4
+from hedge_fund.trading.champions import load_graduated, load_pool, save_pool
+from hedge_fund.trading.constants import (
+    MAX_ACTIVE_CHAMPIONS,
+    MIN_BACKTEST_SHARPE,
+    MIN_BACKTEST_TRADES,
+    MIN_BACKTEST_WIN_RATE,
+    TRADE_EVALUATION_LIMIT,
+)
+from hedge_fund.trading.universe import generate_5000_universe
 
 
-def load_pool() -> dict:
-    if CHAMP_FILE.exists():
-        try:
-            return json.loads(CHAMP_FILE.read_text())
-        except Exception:
-            pass
-    return {"champions": [], "synced_until": ""}
+def _hist_5m():
+    return state_root() / "crypto_history_5m.json"
 
 
-def save_pool(st: dict):
-    CHAMP_FILE.write_text(json.dumps(st, indent=2))
+def _hist_1h():
+    return state_root() / "crypto_history_1h.json"
 
 
-def load_graduated() -> list[dict]:
-    if GRADUATED_FILE.exists():
-        try:
-            return json.loads(GRADUATED_FILE.read_text())
-        except Exception:
-            pass
-    return []
-
-
-def save_graduated(grad_list: list[dict]):
-    GRADUATED_FILE.write_text(json.dumps(grad_list, indent=2))
+def _discovery_log_file():
+    return state_root() / "discovery_log.json"
 
 
 def generate_candidate_pool() -> list[str]:
-    """Generates an extensive universe of hundreds of parameterized strategy rules."""
-    candidates = set()
-
-    # 1. Multi-MA Stacks (SMA & EMA)
-    ma_combos = [
-        (3, 8, 21), (5, 10, 20), (5, 20, 50), (7, 25, 50), (9, 28, 51),
-        (10, 20, 50), (10, 30, 60), (12, 26, 60), (20, 50, 100), (50, 100, 200),
-        (8, 21, 55), (13, 34, 89), (21, 55, 144)
-    ]
-    for c in ma_combos:
-        s_name = "_".join(map(str, c))
-        candidates.add(f"sma_stack_{s_name}")
-        candidates.add(f"ema_stack_{s_name}")
-
-    # 2. Single MA Regime Breakouts
-    for ma in [10, 20, 30, 40, 50, 75, 100, 150, 200, 300]:
-        candidates.add(f"sma_abv_{ma}")
-        candidates.add(f"ema_abv_{ma}")
-
-    # 3. RSI Bands & Breakouts
-    for p in [7, 10, 14, 21, 28, 30]:
-        for th in [35, 40, 45, 50, 52, 55, 57, 60]:
-            candidates.add(f"rsi_{p}_>{th}")
-            for ov in [75, 80, 85, 90]:
-                candidates.add(f"rsi_{p}_>{th}_<{ov}")
-
-    # 4. Momentum Thrusts & Mean-Reversion Dips
-    for lb in [3, 6, 12, 18, 24, 36, 48, 72]:
-        for thr in [1, 2, 3, 5, 8]:
-            candidates.add(f"mom_{lb}b_gt{thr}pc")
-            candidates.add(f"dip_{lb}b_lt{thr}pc")
-
-    # 5. Volatility Squeeze & Smoothing
-    for s_lb, l_lb in [(20, 60), (30, 90), (50, 150), (40, 120)]:
-        candidates.add(f"vol_lowsm_{s_lb}_{l_lb}")
-
-    # 6. Hybrid Multi-Indicator Composites (Trend + Momentum / RSI)
-    from scripts.generate_universe import generate_5000_universe
+    """Generates the combinatorial universe (no daily()/h1()/m5() or MFI)."""
     return generate_5000_universe()
 
 
-DISCOVERY_LOG_FILE = STATE_DIR / "discovery_log.json"
-
 def log_discovery_evaluations(eval_records: list[dict]):
     """Persist a log of all tested candidate evaluations for visibility."""
+    path = _discovery_log_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
     log = []
-    if DISCOVERY_LOG_FILE.exists():
+    if path.exists():
         try:
-            log = json.loads(DISCOVERY_LOG_FILE.read_text())
+            log = json.loads(path.read_text())
         except Exception:
             pass
-    # Keep last 300 evaluations
     log = (eval_records + log)[:300]
-    DISCOVERY_LOG_FILE.write_text(json.dumps(log, indent=2))
+    path.write_text(json.dumps(log, indent=2))
 
 
 def discover_and_qualify(batch_size: int = 150, window_size: int = 20000, n_windows: int = 3, stride: int = 12) -> tuple[list[dict], list[dict]]:
     """Runs rolling multi-window walk-forward backtests across 5m data.
-    
+
     Tests candidates across multiple rolling market regimes. To qualify, a strategy must:
     1. Be profitable across the out-of-sample segments of ALL rolling regimes (consistency).
-    2. Maintain minimum Sharpe and WinRate standards after fees and slippage.
+    2. Maintain MIN_BACKTEST_SHARPE / MIN_BACKTEST_WIN_RATE / MIN_BACKTEST_TRADES after fees.
     """
-    hist_file = HIST_5M if HIST_5M.exists() else HIST_1H
+    hist_5m, hist_1h = _hist_5m(), _hist_1h()
+    hist_file = hist_5m if hist_5m.exists() else hist_1h
     if not hist_file.exists():
         return [], []
 
     data = json.load(open(hist_file))
-    
-    # Construct rolling chronological windows across history
-    # e.g. Window 1: Older regime, Window 2: Mid regime, Window 3: Recent regime
+
     raw_symbols = list(data.keys())
     min_available_bars = min(len(data[s]) for s in raw_symbols)
     total_span = min(min_available_bars, window_size * n_windows)
-    
+
     window_slices = []
     step = total_span // n_windows
     for w_i in range(n_windows):
         start_idx = -(total_span - (w_i * step))
         end_idx = start_idx + step if w_i < n_windows - 1 else None
-        
+
         w_sample = {}
         for s in raw_symbols:
             rows = data[s][start_idx:end_idx]
@@ -195,7 +138,6 @@ def discover_and_qualify(batch_size: int = 150, window_size: int = 20000, n_wind
             w_sharpe = sum(r.sharpe for r in test_results) / len(test_results)
             w_winrate = (w_wins / w_trades) if w_trades > 0 else 0.0
 
-            # Must not be deeply negative in any single market regime
             if w_test_pnl < -50 or w_trades < 2:
                 passed_all_regimes = False
 
@@ -251,14 +193,17 @@ def discover_and_qualify(batch_size: int = 150, window_size: int = 20000, n_wind
 
 
 def replenish_and_evaluate(batch_size: int = 150) -> dict:
-    """Discovers qualified champions and admits them to the unlimited live tournament arena."""
+    """Discovers qualified champions and admits them up to MAX_ACTIVE_CHAMPIONS (1000)."""
     st = load_pool()
     existing_names = {c["name"] for c in st["champions"]}
 
     qualified, all_eval = discover_and_qualify(batch_size=batch_size)
     admitted = []
+    needed = MAX_ACTIVE_CHAMPIONS - len(st["champions"])
 
     for q in qualified:
+        if needed <= 0:
+            break
         name = q["strategy"]
         if name not in existing_names:
             st["champions"].append({
@@ -273,10 +218,12 @@ def replenish_and_evaluate(batch_size: int = 150) -> dict:
             })
             existing_names.add(name)
             admitted.append(q)
+            needed -= 1
 
     save_pool(st)
     return {
         "active_champions_count": len(st["champions"]),
+        "evaluation_limit": TRADE_EVALUATION_LIMIT,
         "total_tested_in_batch": len(all_eval),
         "admitted_new_count": len(admitted),
         "admitted": admitted

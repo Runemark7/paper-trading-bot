@@ -4,7 +4,8 @@ import json
 import os
 import sys
 
-STATE_DIR = os.environ.get("PAPER_STATE", "/opt/data/paper-trading-bot/state")
+from hedge_fund.paths import state_root
+STATE_DIR = str(state_root())
 LOG_FILE = os.path.join(STATE_DIR, "discovery_log.json")
 
 def main():

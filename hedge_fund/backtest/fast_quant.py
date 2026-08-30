@@ -1,19 +1,19 @@
 """Fast Vectorized Multi-Candidate Backtester using Pandas & QuantStats.
 
-Replaces slow iterative bar-loops with vectorized matrix calculations.
-Evaluates candidates across Sortino, Calmar, Max Drawdown, and Profit Factor.
+NOT the live qualification filter. Tournament admission uses
+hedge_fund.backtest.strategies via scripts/tournament_engine.py.
+This module is leftover and is not imported on the live or CI path.
+quantstats is intentionally not a package dependency.
 """
 from __future__ import annotations
 
 import json
-import os
-import sys
 import numpy as np
 import pandas as pd
 import quantstats as qs
-from pathlib import Path
+from hedge_fund.paths import state_root
 
-STATE_DIR = Path(os.environ.get("PAPER_STATE", "/opt/data/paper-trading-bot/state"))
+STATE_DIR = state_root()
 HIST_5M = STATE_DIR / "crypto_history_5m.json"
 
 

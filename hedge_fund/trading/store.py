@@ -17,22 +17,50 @@ outcome that resolved it, in the same row.
 
 from __future__ import annotations
 
+import fcntl
 import json
 import sqlite3
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+
+SQLITE_BUSY_TIMEOUT_MS = 30_000
 
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def connect_sqlite(path: str | Path) -> sqlite3.Connection:
+    """Open SQLite with WAL + busy timeout so sidecar/heartbeat/web can share a file."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(path), timeout=SQLITE_BUSY_TIMEOUT_MS / 1000)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute(f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_MS}")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    return conn
+
+
+@contextmanager
+def sqlite_write_lock(db_path: Path):
+    """Exclusive file lock around a SQLite writer. Stops split-brain commits."""
+    lock_path = Path(str(db_path) + ".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(lock_path, "a") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
+
+
 class TradeStore:
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(str(self.path))
-        self.conn.row_factory = sqlite3.Row
+        self.conn = connect_sqlite(self.path)
         self._init_schema()
 
     def _init_schema(self) -> None:
@@ -108,16 +136,17 @@ class TradeStore:
         entry=0.0,
         raw_signal=None,
     ) -> int:
-        cur = self.conn.execute(
-            """INSERT INTO decisions
-               (ts,symbol,timeframe,condition,proposed_prob,calibrated_prob,
-                direction,action,reason,equity,size,entry,raw_signal)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (_now(), symbol, timeframe, condition, proposed_prob,
-             calibrated_prob, direction, action, reason, equity, size, entry,
-             json.dumps(raw_signal) if raw_signal else None),
-        )
-        self.conn.commit()
+        with sqlite_write_lock(self.path):
+            cur = self.conn.execute(
+                """INSERT INTO decisions
+                   (ts,symbol,timeframe,condition,proposed_prob,calibrated_prob,
+                    direction,action,reason,equity,size,entry,raw_signal)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (_now(), symbol, timeframe, condition, proposed_prob,
+                 calibrated_prob, direction, action, reason, equity, size, entry,
+                 json.dumps(raw_signal) if raw_signal else None),
+            )
+            self.conn.commit()
         return cur.lastrowid
 
     def open_trade(
@@ -131,14 +160,15 @@ class TradeStore:
         entry_fee: float,
         lot_id: int | None = None,
     ) -> int:
-        cur = self.conn.execute(
-            """INSERT INTO trades (symbol,timeframe,condition,stated_prob,
-               entry_ts,entry_price,size,entry_fee,lot_id)
-               VALUES (?,?,?,?,?,?,?,?,?)""",
-            (symbol, timeframe, condition, stated_prob, _now(),
-             entry_price, size, entry_fee, lot_id),
-        )
-        self.conn.commit()
+        with sqlite_write_lock(self.path):
+            cur = self.conn.execute(
+                """INSERT INTO trades (symbol,timeframe,condition,stated_prob,
+                   entry_ts,entry_price,size,entry_fee,lot_id)
+                   VALUES (?,?,?,?,?,?,?,?,?)""",
+                (symbol, timeframe, condition, stated_prob, _now(),
+                 entry_price, size, entry_fee, lot_id),
+            )
+            self.conn.commit()
         return cur.lastrowid
 
     def close_trade(
@@ -151,20 +181,22 @@ class TradeStore:
         pnl_pct: float,
         hit: int,
     ) -> None:
-        self.conn.execute(
-            """UPDATE trades SET exit_ts=?, exit_price=?, exit_reason=?,
-               exit_fee=?, pnl=?, pnl_pct=?, hit=?
-               WHERE id=?""",
-            (_now(), exit_price, exit_reason, exit_fee, pnl, pnl_pct, hit, trade_id),
-        )
-        self.conn.commit()
+        with sqlite_write_lock(self.path):
+            self.conn.execute(
+                """UPDATE trades SET exit_ts=?, exit_price=?, exit_reason=?,
+                   exit_fee=?, pnl=?, pnl_pct=?, hit=?
+                   WHERE id=?""",
+                (_now(), exit_price, exit_reason, exit_fee, pnl, pnl_pct, hit, trade_id),
+            )
+            self.conn.commit()
 
     def snapshot_equity(self, equity: float, baseline: float | None, note: str = "") -> None:
-        self.conn.execute(
-            "INSERT INTO equity_snapshots (ts,equity,baseline,note) VALUES (?,?,?,?)",
-            (_now(), equity, baseline, note),
-        )
-        self.conn.commit()
+        with sqlite_write_lock(self.path):
+            self.conn.execute(
+                "INSERT INTO equity_snapshots (ts,equity,baseline,note) VALUES (?,?,?,?)",
+                (_now(), equity, baseline, note),
+            )
+            self.conn.commit()
 
     # -- reads ------------------------------------------------------------
     def decisions(self, limit: int = 500) -> list[sqlite3.Row]:
@@ -206,16 +238,17 @@ class TradeStore:
     # -- broker/account state persistence ------------------------------------
     def save_account_state(self, state: dict) -> None:
         """Persist broker + risk state so the account survives across runs."""
-        self.conn.execute(
-            """CREATE TABLE IF NOT EXISTS account_state (
-                   k TEXT PRIMARY KEY, v TEXT
-               )"""
-        )
-        self.conn.execute(
-            "INSERT OR REPLACE INTO account_state (k, v) VALUES ('broker', ?)",
-            (json.dumps(state),),
-        )
-        self.conn.commit()
+        with sqlite_write_lock(self.path):
+            self.conn.execute(
+                """CREATE TABLE IF NOT EXISTS account_state (
+                       k TEXT PRIMARY KEY, v TEXT
+                   )"""
+            )
+            self.conn.execute(
+                "INSERT OR REPLACE INTO account_state (k, v) VALUES ('broker', ?)",
+                (json.dumps(state),),
+            )
+            self.conn.commit()
 
     def load_account_state(self) -> dict | None:
         try:
