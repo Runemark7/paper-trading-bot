@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchChampions, fetchGraduated, fetchDiscovery, api } from "../api/client";
-import { Card, fmt, Badge, Empty } from "../components/ui";
+import { Card, fmt, Badge, Empty, MonoName, Field, PhoneCards, DesktopTable } from "../components/ui";
 import { certaintyLabel, fmtWhen } from "../status/format";
 
 export default function Champions() {
@@ -21,7 +21,7 @@ export default function Champions() {
   const prog = status.data?.in_progress;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 min-w-0">
       <p className="text-sm text-white/55">
         Names in the first table are on the live paper book (isolated €10k accounts).
         Discovery and graduation below are last-known pipeline results — not a live job
@@ -48,34 +48,53 @@ export default function Champions() {
             <code>{run?.strategy.fallback ?? "sma_stack"}</code> until discovery admits names.
           </Empty>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="text-white/40 text-xs uppercase">
-                <tr>
-                  <th className="text-left py-2">Strategy</th>
-                  <th className="text-right">Closed (of {evalLimit})</th>
-                  <th className="text-right">Wins</th>
-                  <th className="text-right">Paper P&L</th>
-                  <th className="text-left">On book</th>
-                </tr>
-              </thead>
-              <tbody>
-                {champs.map((c) => (
-                  <tr key={c.name} className="border-t border-white/5">
-                    <td className="py-2 font-mono text-sm">{c.name}</td>
-                    <td className="text-right">{c.closed} / {evalLimit}</td>
-                    <td className="text-right">{c.wins}</td>
-                    <td className={`text-right font-medium ${c.pnl >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
-                      {fmt(c.pnl)}
-                    </td>
-                    <td>
-                      <Badge tone="run">running now</Badge>
-                    </td>
+          <>
+            <PhoneCards>
+              {champs.map((c) => (
+                <li key={c.name} className="rounded-lg border border-white/10 p-3 space-y-2">
+                  <div className="flex items-start justify-between gap-2">
+                    <MonoName className="text-sm font-medium text-white min-w-0">{c.name}</MonoName>
+                    <Badge tone="run">running now</Badge>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2">
+                    <Field label={`Closed (of ${evalLimit})`}>{c.closed} / {evalLimit}</Field>
+                    <Field label="Wins">{c.wins}</Field>
+                    <Field label="Paper P&L" className={c.pnl >= 0 ? "text-emerald-400" : "text-rose-400"}>
+                      <span className="font-medium">{fmt(c.pnl)}</span>
+                    </Field>
+                  </div>
+                </li>
+              ))}
+            </PhoneCards>
+            <DesktopTable>
+              <table className="w-full text-sm">
+                <thead className="text-white/40 text-xs uppercase">
+                  <tr>
+                    <th className="text-left py-2">Strategy</th>
+                    <th className="text-right">Closed (of {evalLimit})</th>
+                    <th className="text-right">Wins</th>
+                    <th className="text-right">Paper P&L</th>
+                    <th className="text-left">On book</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {champs.map((c) => (
+                    <tr key={c.name} className="border-t border-white/5">
+                      <td className="py-2 font-mono text-sm">{c.name}</td>
+                      <td className="text-right">{c.closed} / {evalLimit}</td>
+                      <td className="text-right">{c.wins}</td>
+                      <td className={`text-right font-medium ${c.pnl >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
+                        {fmt(c.pnl)}
+                      </td>
+                      <td>
+                        <Badge tone="run">running now</Badge>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </DesktopTable>
+          </>
         )}
         {qChamps.data?.synced_until && (
           <div className="text-xs text-white/40 mt-3">
@@ -104,16 +123,16 @@ export default function Champions() {
             {graduated.map((g) => {
               const isExpanded = expandedStrat === g.name;
               return (
-                <div key={g.name} className="border border-white/10 rounded-lg p-4 bg-white/[0.02]">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <div className="font-mono text-base font-semibold text-white">{g.name}</div>
-                      <div className="text-xs text-white/50 mt-1">
+                <div key={g.name} className="border border-white/10 rounded-lg p-3 sm:p-4 bg-white/[0.02] min-w-0">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="min-w-0">
+                      <MonoName className="text-base font-semibold text-white">{g.name}</MonoName>
+                      <div className="text-xs text-white/50 mt-1 break-words">
                         {fmtWhen(g.graduated_at)} · {g.closed_trades} trades evaluated
                       </div>
                     </div>
-                    <div className="flex items-center gap-4">
-                      <div className="text-right">
+                    <div className="flex flex-wrap items-center gap-3">
+                      <div className="sm:text-right">
                         <div className={`text-base font-bold ${g.total_pnl >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
                           {fmt(g.total_pnl)}
                         </div>
@@ -121,8 +140,9 @@ export default function Champions() {
                       </div>
                       <Badge tone={g.status === "GRADUATED_PAPER" ? "pos" : "neg"}>{g.status}</Badge>
                       <button
+                        type="button"
                         onClick={() => setExpandedStrat(isExpanded ? null : g.name)}
-                        className="px-3 py-1 text-xs bg-white/10 hover:bg-white/20 rounded text-white transition"
+                        className="min-h-11 px-3 py-2 text-xs bg-white/10 hover:bg-white/20 rounded text-white transition"
                       >
                         {isExpanded ? "Hide History" : `View ${evalLimit} Trades`}
                       </button>
@@ -130,40 +150,66 @@ export default function Champions() {
                   </div>
 
                   {isExpanded && (
-                    <div className="mt-4 pt-4 border-t border-white/10 overflow-x-auto">
+                    <div className="mt-4 pt-4 border-t border-white/10 min-w-0">
                       <div className="text-xs font-semibold uppercase text-white/40 mb-2">Detailed Trade History</div>
-                      <table className="w-full text-xs">
-                        <thead className="text-white/40 uppercase">
-                          <tr>
-                            <th className="text-left py-1">Symbol</th>
-                            <th className="text-left">Entry Time</th>
-                            <th className="text-right">Entry $</th>
-                            <th className="text-right">Exit $</th>
-                            <th className="text-right">Qty</th>
-                            <th className="text-right">P&L</th>
-                            <th className="text-right">Return</th>
-                            <th className="text-left">Exit Reason</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {g.trade_history?.map((t, idx) => (
-                            <tr key={idx} className="border-t border-white/5">
-                              <td className="py-1 font-medium">{t.symbol}</td>
-                              <td className="text-white/60">{t.entry_ts?.replace("T", " ").slice(0, 16)}</td>
-                              <td className="text-right font-mono">${t.entry_price.toLocaleString()}</td>
-                              <td className="text-right font-mono">${t.exit_price.toLocaleString()}</td>
-                              <td className="text-right font-mono">{t.size.toFixed(4)}</td>
-                              <td className={`text-right font-bold ${t.pnl >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
+                      <PhoneCards>
+                        {g.trade_history?.map((t, idx) => (
+                          <li key={idx} className="rounded-lg border border-white/10 p-3 space-y-2">
+                            <div className="flex items-baseline justify-between gap-2">
+                              <span className="font-medium">{t.symbol}</span>
+                              <span className={`shrink-0 font-bold ${t.pnl >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
                                 {fmt(t.pnl)}
-                              </td>
-                              <td className={`text-right ${t.pnl_pct >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
-                                {(t.pnl_pct * 100).toFixed(2)}%
-                              </td>
-                              <td className="text-white/70">{t.exit_reason}</td>
+                              </span>
+                            </div>
+                            <div className="grid grid-cols-2 gap-2">
+                              <Field label="Entry">{t.entry_ts?.replace("T", " ").slice(0, 16)}</Field>
+                              <Field label="Entry $">${t.entry_price.toLocaleString()}</Field>
+                              <Field label="Exit $">${t.exit_price.toLocaleString()}</Field>
+                              <Field label="Qty">{t.size.toFixed(4)}</Field>
+                              <Field label="Return">
+                                <span className={t.pnl_pct >= 0 ? "text-emerald-400" : "text-rose-400"}>
+                                  {(t.pnl_pct * 100).toFixed(2)}%
+                                </span>
+                              </Field>
+                              <Field label="Exit reason">{t.exit_reason}</Field>
+                            </div>
+                          </li>
+                        ))}
+                      </PhoneCards>
+                      <DesktopTable>
+                        <table className="w-full text-xs">
+                          <thead className="text-white/40 uppercase">
+                            <tr>
+                              <th className="text-left py-1">Symbol</th>
+                              <th className="text-left">Entry Time</th>
+                              <th className="text-right">Entry $</th>
+                              <th className="text-right">Exit $</th>
+                              <th className="text-right">Qty</th>
+                              <th className="text-right">P&L</th>
+                              <th className="text-right">Return</th>
+                              <th className="text-left">Exit Reason</th>
                             </tr>
-                          ))}
-                        </tbody>
-                      </table>
+                          </thead>
+                          <tbody>
+                            {g.trade_history?.map((t, idx) => (
+                              <tr key={idx} className="border-t border-white/5">
+                                <td className="py-1 font-medium">{t.symbol}</td>
+                                <td className="text-white/60">{t.entry_ts?.replace("T", " ").slice(0, 16)}</td>
+                                <td className="text-right font-mono">${t.entry_price.toLocaleString()}</td>
+                                <td className="text-right font-mono">${t.exit_price.toLocaleString()}</td>
+                                <td className="text-right font-mono">{t.size.toFixed(4)}</td>
+                                <td className={`text-right font-bold ${t.pnl >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
+                                  {fmt(t.pnl)}
+                                </td>
+                                <td className={`text-right ${t.pnl_pct >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
+                                  {(t.pnl_pct * 100).toFixed(2)}%
+                                </td>
+                                <td className="text-white/70">{t.exit_reason}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </DesktopTable>
                     </div>
                   )}
                 </div>
@@ -194,42 +240,67 @@ export default function Champions() {
             Empty means nothing has been recorded — not that discovery is running.
           </Empty>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs">
-              <thead className="text-white/40 uppercase">
-                <tr>
-                  <th className="text-left py-1">Strategy Rule</th>
-                  <th className="text-left">Tested At</th>
-                  <th className="text-right">Win Rate</th>
-                  <th className="text-right">Sharpe</th>
-                  <th className="text-right">Train P&L</th>
-                  <th className="text-right">Test P&L</th>
-                  <th className="text-left">Result</th>
-                </tr>
-              </thead>
-              <tbody>
-                {discoveryLog.slice(0, 40).map((d, i) => (
-                  <tr key={i} className="border-t border-white/5">
-                    <td className="py-1 font-mono font-medium text-white">{d.strategy}</td>
-                    <td className="text-white/50">{d.tested_at?.replace("T", " ").slice(0, 16)}</td>
-                    <td className="text-right">{d.win_rate_pct}%</td>
-                    <td className="text-right font-mono">{d.sharpe.toFixed(2)}</td>
-                    <td className={`text-right font-mono ${d.train_pnl >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
-                      {fmt(d.train_pnl)}
-                    </td>
-                    <td className={`text-right font-mono font-bold ${d.test_pnl >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
-                      {fmt(d.test_pnl)}
-                    </td>
-                    <td>
-                      <Badge tone={d.qualified ? "pos" : "neg"}>
-                        {d.qualified ? "QUALIFIED" : "REJECTED"}
-                      </Badge>
-                    </td>
+          <>
+            <PhoneCards>
+              {discoveryLog.slice(0, 40).map((d, i) => (
+                <li key={i} className="rounded-lg border border-white/10 p-3 space-y-2">
+                  <div className="flex items-start justify-between gap-2">
+                    <MonoName className="text-xs font-medium text-white min-w-0">{d.strategy}</MonoName>
+                    <Badge tone={d.qualified ? "pos" : "neg"}>
+                      {d.qualified ? "QUALIFIED" : "REJECTED"}
+                    </Badge>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <Field label="Tested">{d.tested_at?.replace("T", " ").slice(0, 16)}</Field>
+                    <Field label="Win rate">{d.win_rate_pct}%</Field>
+                    <Field label="Sharpe">{d.sharpe.toFixed(2)}</Field>
+                    <Field label="Train P&L">
+                      <span className={d.train_pnl >= 0 ? "text-emerald-400" : "text-rose-400"}>{fmt(d.train_pnl)}</span>
+                    </Field>
+                    <Field label="Test P&L">
+                      <span className={`font-bold ${d.test_pnl >= 0 ? "text-emerald-400" : "text-rose-400"}`}>{fmt(d.test_pnl)}</span>
+                    </Field>
+                  </div>
+                </li>
+              ))}
+            </PhoneCards>
+            <DesktopTable>
+              <table className="w-full text-xs">
+                <thead className="text-white/40 uppercase">
+                  <tr>
+                    <th className="text-left py-1">Strategy Rule</th>
+                    <th className="text-left">Tested At</th>
+                    <th className="text-right">Win Rate</th>
+                    <th className="text-right">Sharpe</th>
+                    <th className="text-right">Train P&L</th>
+                    <th className="text-right">Test P&L</th>
+                    <th className="text-left">Result</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {discoveryLog.slice(0, 40).map((d, i) => (
+                    <tr key={i} className="border-t border-white/5">
+                      <td className="py-1 font-mono font-medium text-white">{d.strategy}</td>
+                      <td className="text-white/50">{d.tested_at?.replace("T", " ").slice(0, 16)}</td>
+                      <td className="text-right">{d.win_rate_pct}%</td>
+                      <td className="text-right font-mono">{d.sharpe.toFixed(2)}</td>
+                      <td className={`text-right font-mono ${d.train_pnl >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
+                        {fmt(d.train_pnl)}
+                      </td>
+                      <td className={`text-right font-mono font-bold ${d.test_pnl >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
+                        {fmt(d.test_pnl)}
+                      </td>
+                      <td>
+                        <Badge tone={d.qualified ? "pos" : "neg"}>
+                          {d.qualified ? "QUALIFIED" : "REJECTED"}
+                        </Badge>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </DesktopTable>
+          </>
         )}
       </Card>
     </div>

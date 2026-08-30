@@ -12,27 +12,39 @@ const nav = [
   { to: "/learning", label: "Learning" },
 ];
 
+function navClass(isActive: boolean, compact: boolean) {
+  const base = compact
+    ? "flex min-h-12 flex-col items-center justify-center px-1 text-xs font-medium"
+    : "px-3 py-1.5 rounded-md text-sm font-medium transition";
+  return `${base} ${
+    isActive
+      ? compact
+        ? "text-white bg-white/10"
+        : "bg-indigo-600 text-white"
+      : compact
+        ? "text-white/55"
+        : "text-white/70 hover:text-white hover:bg-white/5"
+  }`;
+}
+
 export default function App() {
   return (
-    <div className="min-h-screen">
-      <header className="border-b border-white/10 bg-[#0d1430]/80 px-6 py-3">
-        <div className="flex items-center gap-8">
-          <h1 className="text-lg font-semibold tracking-tight">
-            PaperBot <span className="text-white/40 font-normal">— paper tournament · BTC/ETH</span>
+    <div className="min-h-screen min-w-0">
+      <header className="border-b border-white/10 bg-[#0d1430]/80 px-4 py-3 md:px-6">
+        <div className="flex items-center justify-between gap-4 min-w-0">
+          <h1 className="text-base md:text-lg font-semibold tracking-tight min-w-0 truncate">
+            PaperBot{" "}
+            <span className="text-white/40 font-normal hidden sm:inline">
+              — paper tournament · BTC/ETH
+            </span>
           </h1>
-          <nav className="flex gap-1">
+          <nav className="hidden md:flex gap-1 shrink-0">
             {nav.map((n) => (
               <NavLink
                 key={n.to}
                 to={n.to}
                 end={n.to === "/"}
-                className={({ isActive }) =>
-                  `px-3 py-1.5 rounded-md text-sm font-medium transition ${
-                    isActive
-                      ? "bg-indigo-600 text-white"
-                      : "text-white/70 hover:text-white hover:bg-white/5"
-                  }`
-                }
+                className={({ isActive }) => navClass(isActive, false)}
               >
                 {n.label}
               </NavLink>
@@ -41,7 +53,7 @@ export default function App() {
         </div>
       </header>
       <StatusBar />
-      <main className="max-w-7xl mx-auto px-6 py-6">
+      <main className="max-w-7xl mx-auto min-w-0 px-4 py-4 md:px-6 md:py-6 pb-24 md:pb-6">
         <Routes>
           <Route path="/" element={<Overview />} />
           <Route path="/positions" element={<Positions />} />
@@ -50,6 +62,23 @@ export default function App() {
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </main>
+      <nav
+        className="md:hidden fixed bottom-0 inset-x-0 z-40 border-t border-white/10 bg-[#0d1430]/95 pb-[env(safe-area-inset-bottom)]"
+        aria-label="Primary"
+      >
+        <div className="grid grid-cols-4">
+          {nav.map((n) => (
+            <NavLink
+              key={n.to}
+              to={n.to}
+              end={n.to === "/"}
+              className={({ isActive }) => navClass(isActive, true)}
+            >
+              {n.label}
+            </NavLink>
+          ))}
+        </div>
+      </nav>
     </div>
   );
 }

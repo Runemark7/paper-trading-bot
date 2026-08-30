@@ -12,13 +12,13 @@ export function Card({
   aside?: ReactNode;
 }) {
   return (
-    <div className={`rounded-xl border border-white/10 bg-white/[0.03] p-4 ${className}`}>
+    <div className={`min-w-0 rounded-xl border border-white/10 bg-white/[0.03] p-3 sm:p-4 ${className}`}>
       {(title || aside) && (
-        <div className="flex items-start justify-between gap-3 mb-3">
+        <div className="flex flex-col gap-1 mb-3 sm:flex-row sm:items-start sm:justify-between sm:gap-3">
           {title && (
-            <div className="text-xs uppercase tracking-wider text-white/40">{title}</div>
+            <div className="text-xs uppercase tracking-wider text-white/40 min-w-0 break-words">{title}</div>
           )}
-          {aside && <div className="text-xs text-white/40">{aside}</div>}
+          {aside && <div className="text-xs text-white/40 min-w-0 break-words sm:text-right">{aside}</div>}
         </div>
       )}
       {children}
@@ -42,13 +42,13 @@ export function Section({
   const bar = tone === "running" ? "border-l-emerald-400" : "border-l-amber-400";
   const kick = tone === "running" ? "text-emerald-300" : "text-amber-300";
   return (
-    <section className={`rounded-xl border border-white/10 bg-white/[0.03] p-4 border-l-4 ${bar}`}>
-      <div className="flex items-start justify-between gap-4 mb-3">
-        <div>
+    <section className={`min-w-0 rounded-xl border border-white/10 bg-white/[0.03] p-3 sm:p-4 border-l-4 ${bar}`}>
+      <div className="flex flex-col gap-2 mb-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
+        <div className="min-w-0">
           <div className={`text-xs uppercase tracking-wider font-semibold ${kick}`}>{kicker}</div>
           <h2 className="text-lg font-semibold text-white mt-0.5">{title}</h2>
         </div>
-        {aside && <div className="text-xs text-white/45 text-right max-w-sm">{aside}</div>}
+        {aside && <div className="text-xs text-white/45 min-w-0 break-words sm:text-right sm:max-w-sm">{aside}</div>}
       </div>
       {children}
     </section>
@@ -59,10 +59,10 @@ export function Stat({ label, value, tone, hint }: { label: string; value: strin
   const color =
     tone === "pos" ? "text-emerald-400" : tone === "neg" ? "text-rose-400" : "text-white";
   return (
-    <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4">
+    <div className="min-w-0 rounded-xl border border-white/10 bg-white/[0.03] p-3 sm:p-4">
       <div className="text-xs uppercase tracking-wider text-white/40">{label}</div>
-      <div className={`text-2xl font-semibold mt-1 ${color}`}>{value}</div>
-      {hint && <div className="text-xs text-white/40 mt-1">{hint}</div>}
+      <div className={`text-xl sm:text-2xl font-semibold mt-1 break-words ${color}`}>{value}</div>
+      {hint && <div className="text-xs text-white/40 mt-1 break-words">{hint}</div>}
     </div>
   );
 }
@@ -77,10 +77,52 @@ export function Badge({ children, tone = "neutral" }: { children: ReactNode; ton
     wait: "bg-amber-500/20 text-amber-200 ring-1 ring-amber-400/30",
   };
   return (
-    <span className={`inline-block px-2.5 py-0.5 rounded-full text-xs font-medium ${map[tone]}`}>
+    <span className={`inline-block max-w-full px-2.5 py-1 rounded-full text-xs font-medium break-words whitespace-normal ${map[tone]}`}>
       {children}
     </span>
   );
+}
+
+/** Long strategy / account names: wrap on phones, keep the full string in title. */
+export function MonoName({
+  children,
+  className = "",
+}: {
+  children: ReactNode;
+  className?: string;
+}) {
+  const title = typeof children === "string" ? children : undefined;
+  return (
+    <span title={title} className={`font-mono break-words [overflow-wrap:anywhere] ${className}`}>
+      {children}
+    </span>
+  );
+}
+
+export function Field({
+  label,
+  children,
+  className = "",
+}: {
+  label: string;
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <div className={`min-w-0 ${className}`}>
+      <div className="text-[11px] uppercase tracking-wider text-white/40">{label}</div>
+      <div className="mt-0.5 text-sm">{children}</div>
+    </div>
+  );
+}
+
+/** Phone: stacked cards. md+: keep the existing table (caller supplies both). */
+export function PhoneCards({ children }: { children: ReactNode }) {
+  return <ul className="md:hidden space-y-3">{children}</ul>;
+}
+
+export function DesktopTable({ children }: { children: ReactNode }) {
+  return <div className="hidden md:block overflow-x-auto min-w-0">{children}</div>;
 }
 
 export function Empty({ children }: { children: ReactNode }) {
