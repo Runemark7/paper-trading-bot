@@ -15,6 +15,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from itertools import count
 
+# PROTOCOL §6 — charged on every simulated fill. Dashboard imports these.
+TAKER_FEE = 0.001    # 0.1%
+SLIPPAGE = 0.0002    # 2 bps
+
 
 @dataclass
 class Fill:
@@ -58,8 +62,8 @@ class PaperBroker:
     def __init__(
         self,
         cash: float,
-        taker_fee: float = 0.001,
-        slippage: float = 0.0002,
+        taker_fee: float = TAKER_FEE,
+        slippage: float = SLIPPAGE,
         fee_asset: str = "quote",
     ) -> None:
         self._cash = cash

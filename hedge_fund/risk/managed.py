@@ -26,6 +26,13 @@ from dataclasses import dataclass
 
 MAX_REASON_LEN = 120
 
+# PROTOCOL §7 / amendment 2026-08-30 — live RiskManager defaults.
+RISK_FRAC = 0.01              # 1% of equity risked per trade (before confidence)
+MAX_OPEN_RISK_FRAC = 0.05     # 5% max open risk
+MAX_DRAWDOWN = 0.15           # 15% halt
+CONFIDENCE_MIN = 0.5          # size_position clamp
+CONFIDENCE_MAX = 2.0
+
 
 @dataclass
 class RiskDecision:
@@ -38,9 +45,9 @@ class RiskDecision:
 class RiskManager:
     def __init__(
         self,
-        risk_frac: float = 0.01,      # 1 % risked per trade
-        max_open_risk_frac: float = 0.05,  # 5 % max open risk
-        max_drawdown: float = 0.15,   # 15 % halt
+        risk_frac: float = RISK_FRAC,
+        max_open_risk_frac: float = MAX_OPEN_RISK_FRAC,
+        max_drawdown: float = MAX_DRAWDOWN,
         initial_equity: float = 10_000.0,
     ) -> None:
         self.risk_frac = risk_frac
@@ -89,8 +96,8 @@ class RiskManager:
         if stop <= 0 or entry <= stop:
             return RiskDecision(False, "stop must be below entry for a long")
 
-        # Bound confidence multiplier between 0.5x and 2.0x base risk (0.5% - 2.0% equity)
-        conf_clamped = max(0.5, min(2.0, float(confidence)))
+        # Bound confidence multiplier between CONFIDENCE_MIN and CONFIDENCE_MAX.
+        conf_clamped = max(CONFIDENCE_MIN, min(CONFIDENCE_MAX, float(confidence)))
         risk_cash = equity * self.risk_frac * conf_clamped
         size = risk_cash / (entry - stop)
 

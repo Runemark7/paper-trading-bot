@@ -1,10 +1,12 @@
 """Static HTML dashboard generator.
 
 Reads the SQLite store and emits a self-contained `report.html` with:
-  - Equity curve (paper P&L) overlaid with the buy-and-hold baseline so
-    "am I profitable?" is always answered against a benchmark, not in a vacuum.
+  - Paper equity curve. Buy-and-hold overlay is charted when snapshots
+    include a baseline; live snapshots currently store baseline=None
+    (PROTOCOL amendment 2026-08-30).
   - Trade log table: entry/exit, size, stop, stated probability vs outcome.
   - Calibration view: stated vs measured reliability per condition + Brier.
+  - Strategy rules imported from TradingLoop / RiskManager / PaperBroker.
 
 No server, no login — just open the HTML. Uses chart.js from a CDN for the
 curve (degrades gracefully to a table if offline).
@@ -16,7 +18,26 @@ import html
 import json
 from collections import defaultdict
 
+from hedge_fund.brokers.paper import SLIPPAGE, TAKER_FEE
 from hedge_fund.calibration import compute_calibration
+from hedge_fund.risk.managed import (
+    CONFIDENCE_MAX,
+    CONFIDENCE_MIN,
+    MAX_DRAWDOWN,
+    MAX_OPEN_RISK_FRAC,
+    RISK_FRAC,
+)
+from hedge_fund.trading.champions import TRADE_EVALUATION_LIMIT
+from hedge_fund.trading.loop import (
+    ATR_PERIOD,
+    ATR_STOP_MULT,
+    CONFIDENCE_REF_PROB,
+    MAX_LOTS_PER_SYMBOL,
+    STOP_CAP_FRAC,
+    STOP_FALLBACK_FRAC,
+    STOP_FLOOR_FRAC,
+    TAKE_PROFIT_RR,
+)
 from hedge_fund.trading.store import TradeStore
 
 
@@ -125,33 +146,45 @@ def _backtest_table(rows) -> str:
 
 
 def strategy_rules_section() -> str:
-    """Plain-language explainer of the strategies + live risk rules."""
-    return f"""
-<h2>Strategies & tests</h2>
-<div class="sm">Here are the strategies that were A/B backtested on real data, which one is
-currently live, and the risk rules applied to every trade.</div>
+    """Plain-language explainer of the live paper tournament + risk rules.
 
-<h3 style="margin:14px 0 4px">Candidate strategies (backtested)</h3>
+    Numbers are imported from TradingLoop / RiskManager / PaperBroker so this
+    blurb cannot describe a different experiment than the cycle that runs.
+    """
+    taker_pct = f"{TAKER_FEE * 100:.1f}%"
+    slip_bps = f"{SLIPPAGE * 10_000:.0f}bps"
+    return f"""
+<h2>Strategies &amp; tests</h2>
+<div class="sm">Live experiment (PROTOCOL amendment 2026-08-30): an isolated-account
+<b>paper</b> tournament of combinatorial TA rules on BTC/USDT and ETH/USDT.
+CronJob (<code>hedge_fund.trading.run</code>) and POST <code>/run</code>
+(<code>run_isolated</code>) both execute <code>TradingLoop.run_cycle</code> —
+same loop, stops, sizing, strategy. Not real money.</div>
+
+<h3 style="margin:14px 0 4px">What is live</h3>
 <div class="wrap"><table><thead><tr>
-<th>Strategy</th><th>What it does</th><th>Status</th>
+<th>Piece</th><th>What actually runs</th>
 </tr></thead><tbody>
-<tr><td><b>sma_stack</b></td><td>Trend-following. Buys only when price > SMA7 > SMA25 > SMA50 (rising moving-average stack). Rides uptrends, stays out of chop.</td><td><span class="badge badge-established">● LIVE (A/B winner)</span></td></tr>
-<tr><td>rsi_momentum</td><td>Baseline: 20-EMA trend + RSI(14) filter. Original heuristic.</td><td><span class="badge badge-learning">retired (weak)</span></td></tr>
-<tr><td>momentum_gt</td><td>Pure momentum: buys when 2-week return exceeds a threshold.</td><td><span class="badge badge-learning">tested / no edge</span></td></tr>
-<tr><td>multi_timeframe</td><td>1-day trend gate + 4h momentum timing.</td><td><span class="badge badge-learning">tested</span></td></tr>
+<tr><td>Universe</td><td>Combinatorial TA (MA stacks, RSI bands, momentum/dip, hybrids). Named <code>multi_timeframe_*</code> wrappers are <b>not</b> true multi-timeframe: the live cycle still signals on a single 4h series. Empty-pool fallback: <code>PAPER_STRATEGY=sma_stack</code>.</td></tr>
+<tr><td>Accounts</td><td>One €10k paper book per champion (<code>run_isolated</code>). <code>run.py</code> uses the same cycle on a single account (champion override, else sma_stack).</td></tr>
+<tr><td>Stated probability</td><td>Beta-Binomial calibration of a deterministic RSI/score heuristic — not an LLM, not a constant 0.60. Cold-start blends the proposal; after 20 trials the posterior mean dominates.</td></tr>
+<tr><td>Graduation</td><td>{TRADE_EVALUATION_LIMIT} closed paper trades. Status <code>READY_FOR_LIVE</code> means <b>graduated paper</b> (positive paper P&amp;L), not a real-money go-live.</td></tr>
+<tr><td>Buy-and-hold</td><td>&ldquo;Profitable&rdquo; still means vs buy-and-hold (PROTOCOL §3). The overlay is <b>not computed</b> today (<code>snapshot_equity(..., baseline=None)</code>).</td></tr>
 </tbody></table></div>
 
-<h3 style="margin:14px 0 4px">Risk rules (every trade, enforced in code)</h3>
+<h3 style="margin:14px 0 4px">Risk rules (every trade, from code constants)</h3>
 <div class="wrap"><table><thead><tr>
 <th>Rule</th><th>Value</th>
 </tr></thead><tbody>
-<tr><td>Position risk / trade</td><td>1% of equity</td></tr>
-<tr><td>Stop-loss</td><td>2.5% below entry (hard)</td></tr>
-<tr><td>Take-profit</td><td>5% above entry (2:1 reward:risk)</td></tr>
-<tr><td>Max open risk</td><td>5% of equity</td></tr>
-<tr><td>Max drawdown</td><td>15% → hard halt</td></tr>
-<tr><td>Regime gate</td><td>Longs only in RISK_ON / NEUTRAL; blocked in RISK_OFF</td></tr>
-<tr><td>Fees + slippage</td><td>0.1% taker fee + 2bps slippage per fill</td></tr>
+<tr><td>Position risk / trade</td><td>{RISK_FRAC:.0%} of equity × confidence [{CONFIDENCE_MIN:.1f}×, {CONFIDENCE_MAX:.1f}×] from stated p / {CONFIDENCE_REF_PROB:.2f}</td></tr>
+<tr><td>Stop-loss</td><td>{ATR_STOP_MULT:.1f}× ATR({ATR_PERIOD}), floored {STOP_FLOOR_FRAC:.1%} / capped {STOP_CAP_FRAC:.1%} of entry ({STOP_FALLBACK_FRAC:.1%} fallback if ATR unavailable)</td></tr>
+<tr><td>Take-profit</td><td>{TAKE_PROFIT_RR:.0f}:1 reward:risk vs stop distance (not a fixed 5%)</td></tr>
+<tr><td>Pyramiding</td><td>Max {MAX_LOTS_PER_SYMBOL} lots/symbol; add only if existing lots are in profit</td></tr>
+<tr><td>Signal exit</td><td>Close lots when the strategy is no longer long</td></tr>
+<tr><td>Max open risk</td><td>{MAX_OPEN_RISK_FRAC:.0%} of equity</td></tr>
+<tr><td>Max drawdown</td><td>{MAX_DRAWDOWN:.0%} → hard halt</td></tr>
+<tr><td>Regime gate</td><td>Off on the live path (<code>regime=None</code>). <code>/api/regime</code> is display-only.</td></tr>
+<tr><td>Fees + slippage</td><td>{taker_pct} taker fee + {slip_bps} slippage per fill</td></tr>
 </tbody></table></div>
 """
 
@@ -304,7 +337,7 @@ def generate_dashboard(store: TradeStore, out_path: str, calib_path: str | None 
            padding:2px 10px; }}
   .chip b {{ font-weight:600; }}
 </style></head><body>
-<h1>paper-trading-bot <span class="sm">— self-learning probabilities on BTC/ETH (paper)</span></h1>
+<h1>paper-trading-bot <span class="sm">— paper tournament on BTC/ETH (not real money)</span></h1>
 <div class="livebar">{_live_bar(live)}</div>
 
 <div class="cards">
@@ -317,6 +350,7 @@ def generate_dashboard(store: TradeStore, out_path: str, calib_path: str | None 
 </div>
 
 <h2>Equity curve vs buy-and-hold baseline</h2>
+<div class="sm">PROTOCOL §3 still defines &ldquo;profitable&rdquo; as vs buy-and-hold. The live cycle stores <code>baseline=None</code>, so the dashed overlay is empty until a real overlay exists. Paper equity is the solid line.</div>
 <div class="wrap"><canvas id="curve" height="120"></canvas></div>
 
 <h2>Calibration by condition</h2>
