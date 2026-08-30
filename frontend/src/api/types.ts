@@ -88,7 +88,7 @@ export interface GraduatedStrategy {
   wins: number;
   win_rate_pct: number;
   graduated_at: string;
-  status: "READY_FOR_LIVE" | "REJECTED_NEGATIVE_PNL";
+  status: "GRADUATED_PAPER" | "REJECTED_NEGATIVE_PNL";
   trade_history: GraduatedTrade[];
 }
 

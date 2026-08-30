@@ -8,5 +8,4 @@ resources:
   - pvc.yaml
   - backend.yaml
   - frontend.yaml
-  - cronjob.yaml
   - ingress.yaml

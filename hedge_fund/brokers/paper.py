@@ -12,12 +12,27 @@ the loop and dashboard.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from itertools import count
 
 # PROTOCOL §6 — charged on every simulated fill. Dashboard imports these.
 TAKER_FEE = 0.001    # 0.1%
 SLIPPAGE = 0.0002    # 2 bps
+
+# PAPER_ONLY defaults on. Unset or any value other than 0/false/no/off is paper.
+_PAPER_ONLY_OFF = frozenset({"0", "false", "no", "off"})
+
+
+def _assert_paper_only() -> None:
+    """Refuse to construct a live-path broker unless this process is paper-only."""
+    raw = os.environ.get("PAPER_ONLY", "1").strip().lower()
+    if raw in _PAPER_ONLY_OFF:
+        raise RuntimeError(
+            "REFUSING TO CONSTRUCT PaperBroker: PAPER_ONLY="
+            f"{os.environ.get('PAPER_ONLY')!r}. This process is paper-trading "
+            "only — no real-money broker. Set PAPER_ONLY=1 (the default) or unset it."
+        )
 
 
 @dataclass
@@ -66,6 +81,7 @@ class PaperBroker:
         slippage: float = SLIPPAGE,
         fee_asset: str = "quote",
     ) -> None:
+        _assert_paper_only()
         self._cash = cash
         self.taker_fee = taker_fee
         self.slippage = slippage

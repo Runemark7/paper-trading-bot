@@ -11,7 +11,8 @@ export default function Champions() {
   const [expandedStrat, setExpandedStrat] = useState<string | null>(null);
 
   const champs = qChamps.data?.active_champions ?? [];
-  const targetMax = qChamps.data?.target_active ?? 10;
+  const targetMax = qChamps.data?.target_active ?? 1000;
+  const evalLimit = qChamps.data?.evaluation_limit ?? 25;
   const graduated = qGrad.data ?? [];
   const discoveryLog = qDisc.data ?? [];
 
@@ -20,8 +21,8 @@ export default function Champions() {
       {/* 1. Active Champions in Testing */}
       <Card title={`Active Live Testing Pool (${champs.length} / ${targetMax})`}>
         <div className="text-sm text-white/60 mb-3">
-          Strategies are tested on live isolated $10,000 accounts. Once a strategy completes <b>10 closed entries</b>,
-          it graduates to the production board below with full trade execution logs.
+          Strategies are tested on live isolated $10,000 paper accounts. Once a strategy completes <b>{evalLimit} closed entries</b>,
+          it graduates to the board below with full trade execution logs. <code>GRADUATED_PAPER</code> means graduated paper, not live trading.
         </div>
 
         {qChamps.error && <div className="text-rose-400 text-sm">Error: {String(qChamps.error)}</div>}
@@ -34,7 +35,7 @@ export default function Champions() {
               <thead className="text-white/40 text-xs uppercase">
                 <tr>
                   <th className="text-left py-2">Strategy</th>
-                  <th className="text-right">Closed (Target: 10)</th>
+                  <th className="text-right">Closed (Target: {evalLimit})</th>
                   <th className="text-right">Wins</th>
                   <th className="text-right">Live P&L</th>
                   <th className="text-left">Status</th>
@@ -44,7 +45,7 @@ export default function Champions() {
                 {champs.map((c) => (
                   <tr key={c.name} className="border-t border-white/5">
                     <td className="py-2 font-mono text-sm">{c.name}</td>
-                    <td className="text-right">{c.closed} / 10</td>
+                    <td className="text-right">{c.closed} / {evalLimit}</td>
                     <td className="text-right">{c.wins}</td>
                     <td className={`text-right font-medium ${c.pnl >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
                       {fmt(c.pnl)}
@@ -61,14 +62,14 @@ export default function Champions() {
       </Card>
 
       {/* 2. Graduated Production Ready Strategies */}
-      <Card title={`🏆 Graduated Strategies (${graduated.length}) — 10/10 Trades Completed`}>
+      <Card title={`🏆 Graduated Paper Strategies (${graduated.length}) — ${evalLimit} trades completed`}>
         <div className="text-sm text-white/60 mb-3">
-          Evaluated strategies ready for live production deployment with complete trade breakdown.
+          Evaluated strategies. <code>GRADUATED_PAPER</code> is graduated paper (positive paper P&L), not a real-money go-live.
         </div>
 
         {!graduated.length ? (
           <div className="text-white/40 text-sm">
-            No strategies have completed 10 trades yet. Results will automatically appear here once evaluated.
+            No strategies have completed {evalLimit} trades yet. Results will automatically appear here once evaluated.
           </div>
         ) : (
           <div className="space-y-4">
@@ -90,12 +91,12 @@ export default function Champions() {
                         </div>
                         <div className="text-xs text-white/60">Win Rate: {g.win_rate_pct}%</div>
                       </div>
-                      <Badge tone={g.status === "READY_FOR_LIVE" ? "pos" : "neg"}>{g.status}</Badge>
+                      <Badge tone={g.status === "GRADUATED_PAPER" ? "pos" : "neg"}>{g.status}</Badge>
                       <button
                         onClick={() => setExpandedStrat(isExpanded ? null : g.name)}
                         className="px-3 py-1 text-xs bg-white/10 hover:bg-white/20 rounded text-white transition"
                       >
-                        {isExpanded ? "Hide History" : "View 10 Trades"}
+                        {isExpanded ? "Hide History" : `View ${evalLimit} Trades`}
                       </button>
                     </div>
                   </div>

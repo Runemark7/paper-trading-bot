@@ -15,10 +15,20 @@ spec:
     spec:
       imagePullSecrets:
         - name: ghcr-secret
+      securityContext:
+        runAsNonRoot: true
+        # nginx:1.27-alpine USER nginx is uid 101 (not 1000 — that's the backend image).
+        runAsUser: 101
+        runAsGroup: 101
       containers:
         - name: frontend
           image: ghcr.io/runemark7/paperbot-frontend:latest
           imagePullPolicy: Always
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 101
+            runAsGroup: 101
           ports:
             - containerPort: 8080
           env:

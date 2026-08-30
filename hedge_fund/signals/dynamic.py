@@ -186,15 +186,12 @@ def parse_strategy(expr: str | Callable | dict) -> Callable[[list[float], int | 
         s_lb, l_lb = int(m_vol.group(1)), int(m_vol.group(2))
         return lambda c, i=None: _eval_vol_low(c, s_lb, l_lb, i)
 
-    # 8b. MFI & Flow Indicators: mfi_14_<25 or mfi_14_>50
+    # 8b. MFI requires OHLCV volume. The close-only parser refuses a unit-volume proxy.
     m_mfi = re.match(r"^mfi_(\d+)_(>|<)_?(\d+)$", expr_clean)
     if m_mfi:
-        p, op, th = int(m_mfi.group(1)), m_mfi.group(2), int(m_mfi.group(3))
-        from hedge_fund.signals.indicators import mfi
-        # Proxy volume if only close series provided
-        return lambda c, i=None: (
-            (mfi(c, c, c, [1.0]*len(c), p, i) > th) if op == ">"
-            else (mfi(c, c, c, [1.0]*len(c), p, i) < th)
+        raise ValueError(
+            "MFI requires OHLCV volume; parse_strategy is close-only and "
+            "refuses a [1.0]*len(closes) proxy"
         )
 
     # 8c. Bollinger Band Breakouts: bb_lower_20_2 or bb_upper_20_2
@@ -207,13 +204,15 @@ def parse_strategy(expr: str | Callable | dict) -> Callable[[list[float], int | 
         else:
             return lambda c, i=None: (c[len(c)-1 if i is None else i] >= bollinger_bands(c, p, sd, i)[2])
 
-    # 8d. Multi-Timeframe Wrappers: daily(expr), h1(expr), m5(expr)
+    # 8d. Multi-timeframe wrappers are not implemented: the live cycle fetches
+    # a single 4h series. Refusing a silent same-series wrap.
     m_mtf = re.match(r"^(daily|h1|m5|1d|4h|15m)\((.*)\)$", expr_clean)
     if m_mtf:
-        tf, inner_expr = m_mtf.group(1), m_mtf.group(2)
-        inner_pred = parse_strategy(inner_expr)
-        # In a single series evaluation, step downsample or evaluate inner rule
-        return lambda c, i=None: inner_pred(c, i)
+        tf = m_mtf.group(1)
+        raise ValueError(
+            f"multi-timeframe prefix {tf}(...) is not supported: live cycle and "
+            "parse_strategy evaluate a single series; refusing silent same-series wrap"
+        )
 
     # 9. Composite patterns: sma200_rsi50, sma100_mom12_2
     m_sma_rsi = re.match(r"^sma(\d+)_rsi(\d+)$", expr_clean)

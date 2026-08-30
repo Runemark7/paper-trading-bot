@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""CLI utility to inspect graduated / archived strategies and their 10-trade histories."""
+"""CLI utility to inspect graduated / archived strategies and their trade histories."""
 import json
 import os
 import sys
 
-STATE_DIR = os.environ.get("PAPER_STATE", "/opt/data/paper-trading-bot/state")
+from hedge_fund.paths import state_root
+from hedge_fund.trading.constants import GRADUATED_PAPER, TRADE_EVALUATION_LIMIT
+STATE_DIR = str(state_root())
 GRAD_FILE = os.path.join(STATE_DIR, "graduated.json")
 
 def main():
@@ -19,7 +21,7 @@ def main():
         return
 
     if not data:
-        print("🏆 Graduated Strategies: None yet (requires 10 closed entries to graduate).")
+        print(f"🏆 Graduated Strategies: None yet (requires {TRADE_EVALUATION_LIMIT} closed entries to graduate).")
         return
 
     print("=" * 80)
@@ -27,7 +29,7 @@ def main():
     print("=" * 80)
 
     for idx, strat in enumerate(data, 1):
-        status_emoji = "✅" if strat.get("status") == "READY_FOR_LIVE" else "❌"
+        status_emoji = "✅" if strat.get("status") == GRADUATED_PAPER else "❌"
         pnl = strat.get("total_pnl", 0.0)
         pnl_str = f"+${pnl:,.2f}" if pnl >= 0 else f"-${abs(pnl):,.2f}"
         
@@ -38,7 +40,7 @@ def main():
         
         history = strat.get("trade_history", [])
         if history:
-            print("   Trade Breakdown (10 Trades):")
+            print(f"   Trade Breakdown ({TRADE_EVALUATION_LIMIT} Trades):")
             print(f"     {'#':<3} {'Symbol':<10} {'Entry $':<10} {'Exit $':<10} {'P&L ($)':<12} {'Return':<9} {'Reason'}")
             print("     " + "-" * 70)
             for t_idx, t in enumerate(history, 1):

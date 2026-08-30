@@ -14,6 +14,7 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
+from hedge_fund.paths import state_root
 from hedge_fund.brokers.paper import PaperBroker
 from hedge_fund.calibration import CalibrationStore
 from hedge_fund.data.binance import CcxtSource
@@ -23,7 +24,6 @@ from hedge_fund.trading.loop import TradingLoop
 from hedge_fund.trading.store import TradeStore
 from hedge_fund.trading.champions import load_pool
 
-STATE = Path(os.environ.get("PAPER_STATE", "state"))
 SYMBOLS = ["BTC/USDT", "ETH/USDT"]
 START_CASH = 10_000.0
 # Strategy the live loop runs. Default is the A/B backtest winner (sma_stack),
@@ -50,8 +50,8 @@ def resolve_champion() -> str | None:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--cycles", type=int, default=1)
-    ap.add_argument("--dashboard", default=str(STATE / "report.html"))
-    ap.add_argument("--state", default=str(STATE))
+    ap.add_argument("--dashboard", default=str(state_root() / "report.html"))
+    ap.add_argument("--state", default=str(state_root()))
     args = ap.parse_args()
 
     state = Path(args.state)

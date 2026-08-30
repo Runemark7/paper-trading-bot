@@ -1,9 +1,9 @@
 import sys, time, json
-sys.path.insert(0, '/opt/data/paper-trading-bot')
+from hedge_fund.paths import state_root
 import hedge_fund.backtest.strategies as bs
 from hedge_fund.backtest.stride import downsample
 
-data = json.load(open('/opt/data/paper-trading-bot/state/crypto_history_1h.json'))
+data = json.load(open(state_root() / 'crypto_history_1h.json'))
 btc_full = data['BTC/USDT']
 closes_full = [r[4] for r in btc_full]
 highs_full = [r[2] for r in btc_full]

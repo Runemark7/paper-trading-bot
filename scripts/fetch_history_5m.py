@@ -11,10 +11,10 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-sys.path.insert(0, "/opt/data/paper-trading-bot")
+from hedge_fund.paths import state_root
 from hedge_fund.data.binance import CcxtSource
 
-STATE_DIR = Path(os.environ.get("PAPER_STATE", "/opt/data/paper-trading-bot/state"))
+STATE_DIR = state_root()
 TIMEFRAME = "5m"
 MAX_BARS = int(os.environ.get("HIST_BARS", "900000"))  # Up to ~8.5 years of 5m bars
 OUT = STATE_DIR / f"crypto_history_{TIMEFRAME}.json"

@@ -1,6 +1,6 @@
 """Build live cycle report data: signals per strategy + positions + closes + champion."""
 import json, sqlite3, sys
-sys.path.insert(0, '/opt/data/paper-trading-bot')
+from hedge_fund.paths import state_root
 from hedge_fund.data.binance import CcxtSource
 from hedge_fund.signals.momentum import compute_signal
 
@@ -42,7 +42,7 @@ for strat in STRATS:
     print("SIG", strat, json.dumps(row))
 
 # --- trades from sqlite ---
-con = sqlite3.connect('/opt/data/paper-trading-bot/state/trades.sqlite')
+con = sqlite3.connect(str(state_root() / 'trades.sqlite'))
 con.row_factory = sqlite3.Row
 print("=== OPEN TRADES (exit_ts null) ===")
 for r in con.execute("SELECT id,symbol,timeframe,condition,entry_ts,entry_price,exit_ts,exit_price,size,exit_reason,pnl,pnl_pct FROM trades WHERE exit_ts IS NULL ORDER BY id"):

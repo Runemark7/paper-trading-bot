@@ -32,6 +32,8 @@ spec:
               value: /app/state
             - name: PAPER_STRATEGY
               value: sma_stack
+            - name: PAPER_ONLY
+              value: "1"
           livenessProbe:
             httpGet:
               path: /health
@@ -65,6 +67,8 @@ spec:
               value: /app/state
             - name: PAPER_STRATEGY
               value: sma_stack
+            - name: PAPER_ONLY
+              value: "1"
           resources:
             requests:
               cpu: 50m
@@ -72,6 +76,31 @@ spec:
             limits:
               cpu: 250m
               memory: 256Mi
+          volumeMounts:
+            - name: state-storage
+              mountPath: /app/state
+
+        # 4h decision cycle (CYCLE_INTERVAL_SECONDS = 14400). Same pod as
+        # heartbeat/web so they share the RWO PVC; SQLite WAL + file lock
+        # serializes writers. Replaces the former CronJob (two-pod split-brain).
+        - name: cycle
+          image: ghcr.io/runemark7/paperbot-backend:latest
+          imagePullPolicy: Always
+          command: ["sh", "-c", "while true; do python -m hedge_fund.trading.run --cycles 1; sleep 14400; done"]
+          env:
+            - name: PAPER_STATE
+              value: /app/state
+            - name: PAPER_STRATEGY
+              value: sma_stack
+            - name: PAPER_ONLY
+              value: "1"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
           volumeMounts:
             - name: state-storage
               mountPath: /app/state

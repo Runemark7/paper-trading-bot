@@ -27,7 +27,7 @@ from hedge_fund.risk.managed import (
     MAX_OPEN_RISK_FRAC,
     RISK_FRAC,
 )
-from hedge_fund.trading.champions import TRADE_EVALUATION_LIMIT
+from hedge_fund.trading.constants import GRADUATED_PAPER, TRADE_EVALUATION_LIMIT
 from hedge_fund.trading.loop import (
     ATR_PERIOD,
     ATR_STOP_MULT,
@@ -157,7 +157,7 @@ def strategy_rules_section() -> str:
 <h2>Strategies &amp; tests</h2>
 <div class="sm">Live experiment (PROTOCOL amendment 2026-08-30): an isolated-account
 <b>paper</b> tournament of combinatorial TA rules on BTC/USDT and ETH/USDT.
-CronJob (<code>hedge_fund.trading.run</code>) and POST <code>/run</code>
+Cycle sidecar (<code>hedge_fund.trading.run</code>) and POST <code>/run</code>
 (<code>run_isolated</code>) both execute <code>TradingLoop.run_cycle</code> —
 same loop, stops, sizing, strategy. Not real money.</div>
 
@@ -165,10 +165,10 @@ same loop, stops, sizing, strategy. Not real money.</div>
 <div class="wrap"><table><thead><tr>
 <th>Piece</th><th>What actually runs</th>
 </tr></thead><tbody>
-<tr><td>Universe</td><td>Combinatorial TA (MA stacks, RSI bands, momentum/dip, hybrids). Named <code>multi_timeframe_*</code> wrappers are <b>not</b> true multi-timeframe: the live cycle still signals on a single 4h series. Empty-pool fallback: <code>PAPER_STRATEGY=sma_stack</code>.</td></tr>
+<tr><td>Universe</td><td>Combinatorial TA (MA stacks, RSI bands, momentum/dip, hybrids, BB). <code>daily()</code>/<code>h1()</code>/<code>m5()</code> and MFI are not generated: the live cycle is a single 4h close series without a volume-aware MFI path. Empty-pool fallback: <code>PAPER_STRATEGY=sma_stack</code>.</td></tr>
 <tr><td>Accounts</td><td>One €10k paper book per champion (<code>run_isolated</code>). <code>run.py</code> uses the same cycle on a single account (champion override, else sma_stack).</td></tr>
 <tr><td>Stated probability</td><td>Beta-Binomial calibration of a deterministic RSI/score heuristic — not an LLM, not a constant 0.60. Cold-start blends the proposal; after 20 trials the posterior mean dominates.</td></tr>
-<tr><td>Graduation</td><td>{TRADE_EVALUATION_LIMIT} closed paper trades. Status <code>READY_FOR_LIVE</code> means <b>graduated paper</b> (positive paper P&amp;L), not a real-money go-live.</td></tr>
+<tr><td>Graduation</td><td>{TRADE_EVALUATION_LIMIT} closed paper trades. Status <code>{GRADUATED_PAPER}</code> means <b>graduated paper</b> (positive paper P&amp;L), not a real-money go-live.</td></tr>
 <tr><td>Buy-and-hold</td><td>&ldquo;Profitable&rdquo; still means vs buy-and-hold (PROTOCOL §3). The overlay is <b>not computed</b> today (<code>snapshot_equity(..., baseline=None)</code>).</td></tr>
 </tbody></table></div>
 
@@ -191,9 +191,9 @@ same loop, stops, sizing, strategy. Not real money.</div>
 
 def backtest_section() -> str:
     """Build the A/B backtest HTML section from state/abtest.json."""
-    from pathlib import Path
+    from hedge_fund.paths import state_root
     import json as _json
-    p = Path(__file__).resolve().parent.parent.parent / "state" / "abtest.json"
+    p = state_root() / "abtest.json"
     if not p.exists():
         return f'<h2>Strategy A/B backtest</h2><div class="sm">No backtest results yet. Run scripts/ab_test.py to generate.</div>'
     try:

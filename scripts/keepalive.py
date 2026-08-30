@@ -18,8 +18,10 @@ from pathlib import Path
 
 PORT = 8787
 SERVER_MODULE = "hedge_fund.web.server"
-VENV_PY = "/opt/data/paper-trading-bot/.venv/bin/python"
-REPO = "/opt/data/paper-trading-bot"
+REPO = Path(__file__).resolve().parents[1]
+VENV_PY = REPO / ".venv" / "bin" / "python"
+if not VENV_PY.exists():
+    VENV_PY = Path(sys.executable)
 
 
 def is_up(port: int, timeout: float = 2.0) -> bool:

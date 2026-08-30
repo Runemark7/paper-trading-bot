@@ -94,6 +94,10 @@ class BinState:
 # Calibration store
 # ---------------------------------------------------------------------------
 
+# Cold-start blend cutoff: after this many trials the posterior mean dominates
+# and the proposal is ignored (PROTOCOL amendment 2026-08-30).
+WARMUP_TRIALS = 20
+
 
 class CalibrationStore:
     """Persists per-condition Beta posteriors to a JSON file (state dir).
@@ -147,7 +151,7 @@ class CalibrationStore:
         """
         b = self.state(key)
         trials = b.trials()
-        if proposed is None or trials >= 20:  # past warm-up, data rules
+        if proposed is None or trials >= WARMUP_TRIALS:  # past warm-up, data rules
             return b.mean(), b.std()
         blended = (b.mean() * trials + proposed * min_weight) / (trials + min_weight)
         return blended, b.std()

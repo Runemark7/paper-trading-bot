@@ -6,16 +6,11 @@ FROM python:3.12-slim AS builder
 WORKDIR /build
 ENV PYTHONDONTWRITEBYTECODE=1 PIP_NO_CACHE_DIR=1
 
-# deps first (cache layer)
-COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
-
-# app code
-COPY hedge_fund ./hedge_fund
-COPY scripts ./scripts
 COPY pyproject.toml README.md ./
+COPY hedge_fund ./hedge_fund
+RUN pip install --no-cache-dir .
 
-# compile check
+COPY scripts ./scripts
 RUN python -m compileall -q hedge_fund scripts && echo "compile OK"
 
 # ── runtime ─────────────────────────────────────────────────────────────────
@@ -33,6 +28,7 @@ USER appuser:appgroup
 
 EXPOSE 8787
 ENV PAPER_STATE=/app/state
+ENV PAPER_ONLY=1
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD python -c "import urllib.request as u;u.urlopen('http://127.0.0.1:8787/healthz')" || exit 1

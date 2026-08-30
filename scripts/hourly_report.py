@@ -5,10 +5,10 @@ truthful numbers to send (rather than guessing from stale rows). Prints the
 report text to stdout for the scheduler to deliver.
 """
 import sqlite3, os, glob, json, sys
-sys.path.insert(0, "/opt/data/paper-trading-bot")
+from hedge_fund.paths import state_root
 from hedge_fund.data.binance import CcxtSource
 
-STATE = os.environ.get("PAPER_STATE", "/opt/data/paper-trading-bot/state")
+STATE = str(state_root())
 START_CASH = 10_000.0
 
 
