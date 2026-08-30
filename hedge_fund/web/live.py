@@ -52,9 +52,19 @@ def live_preview(db: str) -> dict:
     broker = PaperBroker(cash=10000)
     broker.restore_state(saved.get("broker", {}))
     prices = live_prices()
+    # prices.get(sym) can be None when the exchange fetch failed; the key
+    # still exists, so PaperBroker.equity would do float * None. Mark those
+    # lots at entry so the position still renders.
+    marks = {}
+    for lot in broker.lots:
+        px = prices.get(lot.ticker)
+        marks[lot.ticker] = px if px is not None else lot.entry_price
+    for sym, px in prices.items():
+        if sym not in marks:
+            marks[sym] = px if px is not None else 0.0
 
-    # live equity = cash + open positions at current price
-    live_equity = broker.equity(prices)
+    # live equity = cash + open positions at current (or entry) price
+    live_equity = broker.equity(marks)
 
     positions = []
     # group lots by symbol -> aggregate, and list lots individually

@@ -167,6 +167,30 @@ class LiveAliasTests(unittest.TestCase):
         self.assertEqual(pos["pnl_pct"], pos["unrealized_pct"])
         self.assertAlmostEqual(pos["entry_price"], 100_000.0)
 
+    def test_live_preview_survives_null_exchange_prices(self):
+        from hedge_fund.trading.store import TradeStore
+        from hedge_fund.web.live import live_preview
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "trades_sma_stack.sqlite"
+            store = TradeStore(db)
+            store.save_account_state({
+                "broker": {
+                    "cash": 8500.0,
+                    "lots": [{
+                        "lot_id": 1, "ticker": "BTC/USDT", "quantity": 0.01,
+                        "entry_price": 108_400.0, "stop_loss": 105_200.0,
+                        "entry_fee": 1.0, "entry_condition": "sma_stack_long",
+                    }],
+                },
+            })
+            with patch("hedge_fund.web.live.live_prices", return_value={"BTC/USDT": None, "ETH/USDT": None}):
+                prev = live_preview(str(db))
+        self.assertEqual(len(prev["positions"]), 1)
+        self.assertEqual(prev["positions"][0]["entry_price"], 108_400.0)
+        self.assertIsNone(prev["positions"][0]["current"])
+        self.assertGreater(prev["live_equity"], 0)
+
 
 class HeartbeatStampTests(unittest.TestCase):
     def test_heartbeat_once_writes_stamp_without_claiming_closes(self):
