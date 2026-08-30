@@ -10,10 +10,10 @@ spec:
   ingressClassName: nginx
   tls:
     - hosts:
-        - paperbot.runevibe.se
-      secretName: paperbot-runevibe-tls
+        - trading.runevibe.se
+      secretName: trading-runevibe-tls
   rules:
-    - host: paperbot.runevibe.se
+    - host: trading.runevibe.se
       http:
         paths:
           - path: /
