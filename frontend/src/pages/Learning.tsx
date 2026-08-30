@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
-import { fmt, Badge, Empty } from "../components/ui";
+import { fmt, Badge, Empty, MonoName, Field, PhoneCards, DesktopTable } from "../components/ui";
 
 function levelTone(level?: string) {
   switch ((level ?? "").toLowerCase()) {
@@ -28,7 +28,7 @@ export default function Learning() {
   }));
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 min-w-0">
       <div className="text-sm text-white/60">
         Last-known calibration from closed paper trades — not a running trainer.
         Each condition accumulates outcomes; calibrated p is measured proficiency.
@@ -37,32 +37,51 @@ export default function Learning() {
       {!rows.length ? (
         <Empty>No calibration rows yet. Skills appear after paper trades close.</Empty>
       ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="text-white/40 text-xs uppercase">
-              <tr>
-                <th className="text-left py-2">Symbol</th>
-                <th className="text-left">Condition</th>
-                <th className="text-right">Trials</th>
-                <th className="text-right">Calibrated p</th>
-                <th className="text-left">Level</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r) => (
-                <tr key={r.key} className="border-t border-white/5">
-                  <td className="py-2 font-medium">{r.symbol}</td>
-                  <td className="text-white/60 font-mono text-sm">{r.condition}</td>
-                  <td className="text-right">{r.trials}</td>
-                  <td className="text-right">{fmt(r.calibrated_prob)}</td>
-                  <td>
-                    <Badge tone={levelTone(r.level)}>{r.level ?? "learning"}</Badge>
-                  </td>
+        <>
+          <PhoneCards>
+            {rows.map((r) => (
+              <li key={r.key} className="rounded-lg border border-white/10 p-3 space-y-2">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="font-medium">{r.symbol}</div>
+                    <MonoName className="text-xs text-white/60">{r.condition}</MonoName>
+                  </div>
+                  <Badge tone={levelTone(r.level)}>{r.level ?? "learning"}</Badge>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <Field label="Trials">{r.trials}</Field>
+                  <Field label="Calibrated p">{fmt(r.calibrated_prob)}</Field>
+                </div>
+              </li>
+            ))}
+          </PhoneCards>
+          <DesktopTable>
+            <table className="w-full text-sm">
+              <thead className="text-white/40 text-xs uppercase">
+                <tr>
+                  <th className="text-left py-2">Symbol</th>
+                  <th className="text-left">Condition</th>
+                  <th className="text-right">Trials</th>
+                  <th className="text-right">Calibrated p</th>
+                  <th className="text-left">Level</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {rows.map((r) => (
+                  <tr key={r.key} className="border-t border-white/5">
+                    <td className="py-2 font-medium">{r.symbol}</td>
+                    <td className="text-white/60 font-mono text-sm">{r.condition}</td>
+                    <td className="text-right">{r.trials}</td>
+                    <td className="text-right">{fmt(r.calibrated_prob)}</td>
+                    <td>
+                      <Badge tone={levelTone(r.level)}>{r.level ?? "learning"}</Badge>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </DesktopTable>
+        </>
       )}
     </div>
   );

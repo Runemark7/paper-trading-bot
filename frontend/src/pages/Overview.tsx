@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
-import { Card, Stat, fmt, fmtPct, Badge, Section, Empty } from "../components/ui";
+import { Card, Stat, fmt, fmtPct, Badge, Section, Empty, MonoName, Field, PhoneCards, DesktopTable } from "../components/ui";
 import {
   accountLabel,
   cadenceLabel,
@@ -25,7 +25,7 @@ export default function Overview() {
   const hb = run?.heartbeat;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 min-w-0">
       <p className="text-sm text-white/55">
         Paper only. Glance here for what is on the live paper book versus last-known
         pipeline work. Spinners appear only from a sidecar stamp — never invented.
@@ -57,7 +57,7 @@ export default function Overview() {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm mb-4">
           <div>
             <div className="text-white/40 text-xs uppercase tracking-wider mb-1">Active on the book</div>
-            <div className="font-mono text-white">
+            <div className="font-mono text-white break-words [overflow-wrap:anywhere]">
               {(run?.strategy.active ?? []).join(", ") || "—"}
             </div>
             <div className="text-white/40 text-xs mt-1">
@@ -91,7 +91,7 @@ export default function Overview() {
           </div>
         </div>
 
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4 mb-4">
           <Stat
             label="Paper equity"
             value={l ? fmt(l.live_equity, 0) : "…"}
@@ -118,37 +118,60 @@ export default function Overview() {
               Empty is a state, not a missing feed.
             </Empty>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="text-white/40 text-xs uppercase">
-                  <tr>
-                    <th className="text-left py-2">Account</th>
-                    <th className="text-left">Symbol</th>
-                    <th className="text-left">Condition</th>
-                    <th className="text-right">Entry</th>
-                    <th className="text-right">Now</th>
-                    <th className="text-right">P&L %</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {l.positions.map((p, i) => {
-                    const pnlPct = positionPnlPct(p);
-                    return (
-                      <tr key={i} className="border-t border-white/5">
-                        <td className="py-2 font-mono text-xs">{accountLabel(p.account)}</td>
-                        <td className="font-medium">{p.symbol}</td>
-                        <td className="text-white/60">{p.condition ?? "—"}</td>
-                        <td className="text-right">{fmt(positionEntry(p))}</td>
-                        <td className="text-right">{p.current != null ? fmt(p.current) : "—"}</td>
-                        <td className={`text-right ${(pnlPct ?? 0) >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
+            <>
+              <PhoneCards>
+                {l.positions.map((p, i) => {
+                  const pnlPct = positionPnlPct(p);
+                  return (
+                    <li key={i} className="rounded-lg border border-white/10 p-3 space-y-2">
+                      <div className="flex items-baseline justify-between gap-2">
+                        <span className="font-medium">{p.symbol}</span>
+                        <span className={`shrink-0 ${(pnlPct ?? 0) >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
                           {fmtPct(pnlPct)}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+                        </span>
+                      </div>
+                      <MonoName className="text-xs text-white/50">{accountLabel(p.account)}</MonoName>
+                      <div className="grid grid-cols-2 gap-2">
+                        <Field label="Condition">{p.condition ?? "—"}</Field>
+                        <Field label="Entry">{fmt(positionEntry(p))}</Field>
+                        <Field label="Now">{p.current != null ? fmt(p.current) : "—"}</Field>
+                      </div>
+                    </li>
+                  );
+                })}
+              </PhoneCards>
+              <DesktopTable>
+                <table className="w-full text-sm">
+                  <thead className="text-white/40 text-xs uppercase">
+                    <tr>
+                      <th className="text-left py-2">Account</th>
+                      <th className="text-left">Symbol</th>
+                      <th className="text-left">Condition</th>
+                      <th className="text-right">Entry</th>
+                      <th className="text-right">Now</th>
+                      <th className="text-right">P&L %</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {l.positions.map((p, i) => {
+                      const pnlPct = positionPnlPct(p);
+                      return (
+                        <tr key={i} className="border-t border-white/5">
+                          <td className="py-2 font-mono text-xs">{accountLabel(p.account)}</td>
+                          <td className="font-medium">{p.symbol}</td>
+                          <td className="text-white/60">{p.condition ?? "—"}</td>
+                          <td className="text-right">{fmt(positionEntry(p))}</td>
+                          <td className="text-right">{p.current != null ? fmt(p.current) : "—"}</td>
+                          <td className={`text-right ${(pnlPct ?? 0) >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
+                            {fmtPct(pnlPct)}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </DesktopTable>
+            </>
           )}
         </Card>
       </Section>
@@ -237,12 +260,12 @@ function PipelineRow({
   body: string;
 }) {
   return (
-    <div className="rounded-lg border border-white/10 p-3">
-      <div className="flex items-center justify-between gap-2 mb-1">
+    <div className="min-w-0 rounded-lg border border-white/10 p-3">
+      <div className="flex flex-col gap-1.5 mb-1 sm:flex-row sm:items-start sm:justify-between sm:gap-2">
         <div className="font-medium text-white">{title}</div>
         <Badge tone={tone}>{chip}</Badge>
       </div>
-      <div className="text-white/50 text-xs leading-relaxed">{body}</div>
+      <div className="text-white/50 text-xs leading-relaxed break-words [overflow-wrap:anywhere]">{body}</div>
     </div>
   );
 }
