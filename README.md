@@ -4,8 +4,11 @@ Paper-trading bot for BTC/ETH. The experiment: can an LLM agent (Hermes) state
 probabilities that become both *calibrated* (stated = measured reliability) and
 *profitable* versus a buy-and-hold baseline?
 
-**Paper only. No real money until profitability vs baseline AND independent
-calibration are proven.** Rules live in [PROTOCOL.md](PROTOCOL.md) (no amendments yet).
+**Paper only. No real money.** Rules live in [PROTOCOL.md](PROTOCOL.md).
+Amendment 2026-08-30 names the live experiment: an isolated-account paper
+tournament of combinatorial TA strategies (not the original LLM-probability
+study). "Profitable" still means vs buy-and-hold; that overlay is not computed
+on the live path today.
 
 Built on **[ai-hedge-fund](https://github.com/virattt/ai-hedge-fund)** (MIT, © Virat Singh)
 for Signal models, sim broker, risk limits, portfolio, backtesting, and the LLM layer.

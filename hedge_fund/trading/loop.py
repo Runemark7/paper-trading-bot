@@ -26,13 +26,22 @@ from datetime import datetime, timezone
 from hedge_fund.brokers.paper import PaperBroker, Order
 from hedge_fund.calibration import CalibrationStore, condition_key
 from hedge_fund.data.binance import Candle, CcxtSource
-from hedge_fund.risk.managed import RiskManager
+from hedge_fund.risk.managed import RiskManager, CONFIDENCE_MAX, CONFIDENCE_MIN
 from hedge_fund.signals.momentum import Signal, compute_signal
 from hedge_fund.trading.store import TradeStore
 from hedge_fund.backtest.strategies import atr
 import math
 
-TAKE_PROFIT_RR = 2.0  # 2:1 reward:risk
+# Live-cycle constants. Dashboard `strategy_rules_section` imports these so the
+# rules blurb cannot drift from the paper cycle (PROTOCOL amendment 2026-08-30).
+TAKE_PROFIT_RR = 2.0  # 2:1 reward:risk vs stop distance
+MAX_LOTS_PER_SYMBOL = 3
+ATR_PERIOD = 14
+ATR_STOP_MULT = 2.0
+STOP_FLOOR_FRAC = 0.015  # 1.5% of entry
+STOP_CAP_FRAC = 0.040    # 4.0% of entry
+STOP_FALLBACK_FRAC = 0.025  # when ATR is unavailable
+CONFIDENCE_REF_PROB = 0.50
 
 
 @dataclass
@@ -190,25 +199,26 @@ class TradingLoop:
                                            "REJECTED", reason="no price", equity=equity))
                 continue
 
-            # ATR dynamic volatility stop: 2.0x ATR_14 below entry (floored between 1.5% and 4.0%)
+            # ATR dynamic volatility stop: ATR_STOP_MULT × ATR(ATR_PERIOD) below
+            # entry, floored/capped as fractions of entry.
             highs_k = [c.high for c in klines]
             lows_k = [c.low for c in klines]
             closes_k = [c.close for c in klines]
-            a = atr(highs_k, lows_k, closes_k, 14)
+            a = atr(highs_k, lows_k, closes_k, ATR_PERIOD)
             if math.isnan(a) or a <= 0:
-                stop_dist = entry * 0.025
+                stop_dist = entry * STOP_FALLBACK_FRAC
             else:
-                stop_dist = max(entry * 0.015, min(entry * 0.040, 2.0 * a))
+                stop_dist = max(entry * STOP_FLOOR_FRAC, min(entry * STOP_CAP_FRAC, ATR_STOP_MULT * a))
             stop = entry - stop_dist
 
             # Pyramiding guardrails:
-            # 1. Max 3 lots per symbol
+            # 1. Max MAX_LOTS_PER_SYMBOL lots per symbol
             # 2. If existing lots exist for this symbol, only allow adding if all existing lots are in profit
             existing_sym_lots = [lot for lot in self.broker.lots if lot.ticker == sym]
-            if len(existing_sym_lots) >= 3:
+            if len(existing_sym_lots) >= MAX_LOTS_PER_SYMBOL:
                 results.append(CycleResult(
                     sym, now, sig.condition, prob, sig.direction, "REJECTED",
-                    reason=f"max lots reached (3 lots open for {sym})", equity=equity))
+                    reason=f"max lots reached ({MAX_LOTS_PER_SYMBOL} lots open for {sym})", equity=equity))
                 continue
 
             if existing_sym_lots:
@@ -220,9 +230,8 @@ class TradingLoop:
                         reason=f"pyramid hold: prior {sym} lots not in profit yet", equity=equity))
                     continue
 
-            # Confidence multiplier based on probability / raw score
-            # Base probability is 0.50. Range: p=0.40 -> 0.6x, p=0.60 -> 1.2x, p=0.75 -> 1.5x, max 2.0x
-            conf_mult = max(0.5, min(2.0, (prob / 0.50)))
+            # Confidence multiplier from stated probability vs CONFIDENCE_REF_PROB.
+            conf_mult = max(CONFIDENCE_MIN, min(CONFIDENCE_MAX, (prob / CONFIDENCE_REF_PROB)))
 
             # Existing open risk (for the cap): account for ALL open lots.
             open_pos = [
