@@ -14,7 +14,7 @@ spec:
         app: paperbot-frontend
     spec:
       imagePullSecrets:
-        - name: ghcr-secret
+        - name: ghcr-pull-secret
       securityContext:
         runAsNonRoot: true
         # nginx:1.27-alpine USER nginx is uid 101 (not 1000 — that's the backend image).
@@ -22,8 +22,8 @@ spec:
         runAsGroup: 101
       containers:
         - name: frontend
-          image: ghcr.io/runemark7/paperbot-frontend:latest
-          imagePullPolicy: Always
+          image: ghcr.io/runemark7/paper-trading-bot/frontend:latest
+          imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false
             runAsNonRoot: true

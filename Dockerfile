@@ -15,6 +15,10 @@ RUN python -m compileall -q hedge_fund scripts && echo "compile OK"
 
 # ── runtime ─────────────────────────────────────────────────────────────────
 FROM python:3.12-slim AS runtime
+
+# Links this image to the GitHub repo so GHCR can inherit repo pull access.
+LABEL org.opencontainers.image.source=https://github.com/Runemark7/paper-trading-bot
+
 RUN groupadd -g 1000 appgroup && useradd -m -u 1000 -g appgroup appuser
 
 WORKDIR /app

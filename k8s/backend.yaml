@@ -16,15 +16,15 @@ spec:
         app: paperbot-backend
     spec:
       imagePullSecrets:
-        - name: ghcr-secret
+        - name: ghcr-pull-secret
       securityContext:
         runAsUser: 1000
         runAsGroup: 1000
         fsGroup: 1000
       containers:
         - name: web
-          image: ghcr.io/runemark7/paperbot-backend:latest
-          imagePullPolicy: Always
+          image: ghcr.io/runemark7/paper-trading-bot/backend:latest
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8787
           env:
@@ -59,8 +59,8 @@ spec:
 
         # Continuous price / stop-loss / take-profit watcher
         - name: heartbeat
-          image: ghcr.io/runemark7/paperbot-backend:latest
-          imagePullPolicy: Always
+          image: ghcr.io/runemark7/paper-trading-bot/backend:latest
+          imagePullPolicy: IfNotPresent
           command: ["python", "-m", "hedge_fund.trading.heartbeat", "--interval", "30"]
           env:
             - name: PAPER_STATE
@@ -84,8 +84,8 @@ spec:
         # heartbeat/web so they share the RWO PVC; SQLite WAL + file lock
         # serializes writers. Replaces the former CronJob (two-pod split-brain).
         - name: cycle
-          image: ghcr.io/runemark7/paperbot-backend:latest
-          imagePullPolicy: Always
+          image: ghcr.io/runemark7/paper-trading-bot/backend:latest
+          imagePullPolicy: IfNotPresent
           command: ["sh", "-c", "while true; do python -m hedge_fund.trading.run --cycles 1; sleep 14400; done"]
           env:
             - name: PAPER_STATE

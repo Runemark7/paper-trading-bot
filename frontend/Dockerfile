@@ -12,6 +12,10 @@ RUN npm run build
 
 # Minimal nginx image
 FROM nginx:1.27-alpine
+
+# Links this image to the GitHub repo so GHCR can inherit repo pull access.
+LABEL org.opencontainers.image.source=https://github.com/Runemark7/paper-trading-bot
+
 RUN rm -f /etc/nginx/conf.d/default.conf /etc/nginx/conf.d/default.conf.template
 
 COPY --from=builder /app/dist /usr/share/nginx/html

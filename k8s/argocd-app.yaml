@@ -1,13 +1,15 @@
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: paper-trading-bot
+  name: trading-bot
   namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
 spec:
   project: default
   source:
-    repoURL: git@github.com:Runemark7/paper-trading-bot.git
-    targetRevision: HEAD
+    repoURL: https://github.com/Runemark7/paper-trading-bot
+    targetRevision: main
     path: k8s
   destination:
     server: https://kubernetes.default.svc
@@ -18,3 +20,10 @@ spec:
       selfHeal: true
     syncOptions:
       - CreateNamespace=true
+      - ServerSideApply=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m

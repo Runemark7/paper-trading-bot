@@ -3,10 +3,17 @@ kind: Ingress
 metadata:
   name: paperbot-ingress
   namespace: trading
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
 spec:
-  ingressClassName: traefik
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - paperbot.runevibe.se
+      secretName: paperbot-runevibe-tls
   rules:
-    - host: paperbot.local
+    - host: paperbot.runevibe.se
       http:
         paths:
           - path: /
