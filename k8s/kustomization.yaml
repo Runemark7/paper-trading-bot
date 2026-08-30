@@ -1,17 +1,14 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
-
 namespace: trading
-
 resources:
   - namespace.yaml
   - pvc.yaml
   - backend.yaml
   - frontend.yaml
   - ingress.yaml
-
 images:
   - name: ghcr.io/runemark7/paper-trading-bot/backend
-    newTag: latest
+    newTag: 12ec8aaf1f07dd5bbadc930793c24cce3c7f7b79
   - name: ghcr.io/runemark7/paper-trading-bot/frontend
-    newTag: latest
+    newTag: 12ec8aaf1f07dd5bbadc930793c24cce3c7f7b79
