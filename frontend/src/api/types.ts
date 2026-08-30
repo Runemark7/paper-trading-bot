@@ -1,14 +1,21 @@
 // API contract — mirrors hedge_fund/web/server.py endpoints.
+
 export interface LivePosition {
   symbol: string;
-  entry_price: number;
-  entry_time: string;
+  entry_price?: number;
+  entry?: number;
+  entry_time?: string;
   current?: number;
   stop_loss?: number;
+  stop?: number;
   quantity: number;
   condition?: string;
   pnl?: number;
   pnl_pct?: number;
+  unrealized_pnl?: number;
+  unrealized_pct?: number;
+  account?: string;
+  lot_count?: number;
 }
 
 export interface LivePreview {
@@ -16,6 +23,7 @@ export interface LivePreview {
   cash: number;
   positions: LivePosition[];
   as_of?: string;
+  accounts?: number;
 }
 
 export interface RegimeState {
@@ -23,6 +31,7 @@ export interface RegimeState {
   score: number;
   allowed: boolean;
   components?: Record<string, unknown>;
+  error?: string;
 }
 
 export interface TradeRow {
@@ -37,15 +46,20 @@ export interface TradeRow {
   pnl: number | null;
   pnl_pct: number | null;
   hit: number | null;
+  account?: string;
 }
 
 export interface Summary {
-  live_equity: number;
+  equity?: number | null;
+  live_equity?: number;
   closed_trades: number;
-  win_rate: number;
+  win_rate: number | null;
   total_pnl: number | null;
-  brier: number;
-  calibrated_samples: number;
+  brier?: number;
+  calibrated_samples?: number;
+  updated?: string | null;
+  source?: string;
+  account_count?: number;
 }
 
 export interface LearningCondition {
@@ -102,4 +116,121 @@ export interface DiscoveryEvaluation {
   trades: number;
   qualified: boolean;
   score?: number;
+}
+
+export interface CertaintyNote {
+  certainty?: "stamp" | "last_known" | "inferred" | "no_signal";
+  running?: boolean;
+  note?: string;
+}
+
+export interface StatusSnapshot {
+  paper_only: boolean;
+  as_of: string;
+  running_now: {
+    label: string;
+    certainty: string;
+    strategy: {
+      mode: "champion_accounts" | "sma_stack_fallback" | string;
+      active: string[];
+      fallback: string;
+      source: string;
+    };
+    accounts: {
+      count: number;
+      kind: string;
+      names: string[];
+    };
+    cycle: {
+      interval_seconds: number;
+      bar_timeframe: string;
+      window: string;
+      last_cycle_at: string | null;
+      account_saved_at: string | null;
+      next: {
+        at: string | null;
+        inferred: boolean;
+        overdue?: boolean;
+        in_window_now: boolean;
+        note: string;
+      };
+    };
+    positions_open: number;
+    heartbeat: {
+      configured_interval_seconds: number;
+      role: string;
+      last_pass_at: string | null;
+      last_closed?: number;
+      accounts_checked?: number;
+      recent: boolean;
+      certainty: string;
+      on: boolean | null;
+      note: string;
+    };
+    regime: {
+      gates_live_book: boolean;
+      display_only: boolean;
+      note: string;
+    };
+  };
+  in_progress: {
+    job_runner: boolean;
+    note: string;
+    pipeline: {
+      job_runner: boolean;
+      phase: string | null;
+      status: string | null;
+      certainty: string;
+      running: boolean;
+      stamp_says_in_progress?: boolean;
+      stale: boolean;
+      started_at: string | null;
+      finished_at: string | null;
+      at: string | null;
+      source?: string;
+      note: string;
+    };
+    discovery: CertaintyNote & {
+      log_count: number;
+      last_tested_at: string | null;
+      last_strategy: string | null;
+      last_qualified: boolean | null;
+      file: { path: string; mtime: string | null; exists: boolean };
+    };
+    tournament: CertaintyNote & {
+      stamp_says_this_phase?: boolean;
+      active_count: number;
+      target_active: number;
+      slots_open: number;
+      evaluation_limit: number;
+      synced_until: string | null;
+      file: { path: string; mtime: string | null; exists: boolean };
+    };
+    replenish: CertaintyNote & {
+      needed: boolean;
+      slots_open: number;
+      stamp_says_this_phase?: boolean;
+    };
+    graduation: CertaintyNote & {
+      count: number;
+      last_name: string | null;
+      last_status: string | null;
+      last_graduated_at: string | null;
+      token: string;
+    };
+    isolated_cycle: CertaintyNote & {
+      stamp_says_this_phase?: boolean;
+      last_cycle_at: string | null;
+    };
+  };
+}
+
+export interface ChampionsPayload {
+  active_champions: Champion[];
+  active_count: number;
+  target_active: number;
+  evaluation_limit: number;
+  graduated_count: number;
+  graduated: GraduatedStrategy[];
+  synced_until?: string | null;
 }

@@ -1,12 +1,14 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { fetchChampions, fetchGraduated, fetchDiscovery } from "../api/client";
-import { Card, fmt, Badge } from "../components/ui";
+import { fetchChampions, fetchGraduated, fetchDiscovery, api } from "../api/client";
+import { Card, fmt, Badge, Empty } from "../components/ui";
+import { certaintyLabel, fmtWhen } from "../status/format";
 
 export default function Champions() {
   const qChamps = useQuery({ queryKey: ["champions"], queryFn: fetchChampions, refetchInterval: 30_000 });
   const qGrad = useQuery({ queryKey: ["graduated"], queryFn: fetchGraduated, refetchInterval: 30_000 });
   const qDisc = useQuery({ queryKey: ["discovery"], queryFn: fetchDiscovery, refetchInterval: 30_000 });
+  const status = useQuery({ queryKey: ["status"], queryFn: api.status, refetchInterval: 15_000 });
 
   const [expandedStrat, setExpandedStrat] = useState<string | null>(null);
 
@@ -15,30 +17,46 @@ export default function Champions() {
   const evalLimit = qChamps.data?.evaluation_limit ?? 25;
   const graduated = qGrad.data ?? [];
   const discoveryLog = qDisc.data ?? [];
+  const run = status.data?.running_now;
+  const prog = status.data?.in_progress;
 
   return (
     <div className="space-y-6">
-      {/* 1. Active Champions in Testing */}
-      <Card title={`Active Live Testing Pool (${champs.length} / ${targetMax})`}>
+      <p className="text-sm text-white/55">
+        Names in the first table are on the live paper book (isolated €10k accounts).
+        Discovery and graduation below are last-known pipeline results — not a live job
+        unless the sidecar stamp says so.
+      </p>
+
+      <Card
+        title={`On the paper book (${champs.length} / ${targetMax})`}
+        aside={run ? `last cycle ${fmtWhen(run.cycle.last_cycle_at)}` : undefined}
+      >
         <div className="text-sm text-white/60 mb-3">
-          Strategies are tested on live isolated $10,000 paper accounts. Once a strategy completes <b>{evalLimit} closed entries</b>,
-          it graduates to the board below with full trade execution logs. <code>GRADUATED_PAPER</code> means graduated paper, not live trading.
+          Each name is an isolated paper account. After <b>{evalLimit} closed entries</b> the
+          account leaves this list. <code>GRADUATED_PAPER</code> is graduated paper, not live money.
+          {run?.strategy.mode === "sma_stack_fallback" && (
+            <> Pool empty — book is running <code>sma_stack</code> fallback.</>
+          )}
         </div>
 
         {qChamps.error && <div className="text-rose-400 text-sm">Error: {String(qChamps.error)}</div>}
 
         {!champs.length ? (
-          <div className="text-white/40 text-sm">No champions currently testing.</div>
+          <Empty>
+            No champions in champions.json. The live book falls back to{" "}
+            <code>{run?.strategy.fallback ?? "sma_stack"}</code> until discovery admits names.
+          </Empty>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="text-white/40 text-xs uppercase">
                 <tr>
                   <th className="text-left py-2">Strategy</th>
-                  <th className="text-right">Closed (Target: {evalLimit})</th>
+                  <th className="text-right">Closed (of {evalLimit})</th>
                   <th className="text-right">Wins</th>
-                  <th className="text-right">Live P&L</th>
-                  <th className="text-left">Status</th>
+                  <th className="text-right">Paper P&L</th>
+                  <th className="text-left">On book</th>
                 </tr>
               </thead>
               <tbody>
@@ -51,7 +69,7 @@ export default function Champions() {
                       {fmt(c.pnl)}
                     </td>
                     <td>
-                      <Badge tone="neutral">evaluating</Badge>
+                      <Badge tone="run">running now</Badge>
                     </td>
                   </tr>
                 ))}
@@ -59,18 +77,28 @@ export default function Champions() {
             </table>
           </div>
         )}
+        {qChamps.data?.synced_until && (
+          <div className="text-xs text-white/40 mt-3">
+            Results synced through {fmtWhen(qChamps.data.synced_until)} ({certaintyLabel("last_known")}).
+          </div>
+        )}
       </Card>
 
-      {/* 2. Graduated Production Ready Strategies */}
-      <Card title={`🏆 Graduated Paper Strategies (${graduated.length}) — ${evalLimit} trades completed`}>
+      <Card
+        title={`Graduated paper (${graduated.length})`}
+        aside={`${evalLimit} closed trades, then ${"GRADUATED_PAPER"} or REJECTED_NEGATIVE_PNL`}
+      >
         <div className="text-sm text-white/60 mb-3">
-          Evaluated strategies. <code>GRADUATED_PAPER</code> is graduated paper (positive paper P&L), not a real-money go-live.
+          Off the live book. <code>GRADUATED_PAPER</code> is positive paper P&L after the
+          evaluation window — not authorization to trade real funds.
         </div>
 
         {!graduated.length ? (
-          <div className="text-white/40 text-sm">
-            No strategies have completed {evalLimit} trades yet. Results will automatically appear here once evaluated.
-          </div>
+          <Empty>
+            No graduations recorded yet. Silence here is last-known empty state, not a
+            graduation job in flight.
+            {prog?.graduation.note ? ` ${prog.graduation.note}` : ""}
+          </Empty>
         ) : (
           <div className="space-y-4">
             {graduated.map((g) => {
@@ -81,7 +109,7 @@ export default function Champions() {
                     <div>
                       <div className="font-mono text-base font-semibold text-white">{g.name}</div>
                       <div className="text-xs text-white/50 mt-1">
-                        Graduated: {new Date(g.graduated_at).toLocaleString()} · {g.closed_trades} trades evaluated
+                        {fmtWhen(g.graduated_at)} · {g.closed_trades} trades evaluated
                       </div>
                     </div>
                     <div className="flex items-center gap-4">
@@ -101,7 +129,6 @@ export default function Champions() {
                     </div>
                   </div>
 
-                  {/* Expanded Trade History Breakdown */}
                   {isExpanded && (
                     <div className="mt-4 pt-4 border-t border-white/10 overflow-x-auto">
                       <div className="text-xs font-semibold uppercase text-white/40 mb-2">Detailed Trade History</div>
@@ -146,14 +173,26 @@ export default function Champions() {
         )}
       </Card>
 
-      {/* 3. Continuous Backtest Discovery Stream */}
-      <Card title={`🔍 Continuous Strategy Backtest Log (Latest ${discoveryLog.length} Evaluations)`}>
+      <Card
+        title={`Discovery log (${discoveryLog.length} evaluations)`}
+        aside={
+          prog?.pipeline.stamp_says_in_progress && prog.pipeline.phase === "tournament"
+            ? `stamp: tournament since ${fmtWhen(prog.pipeline.started_at)} — liveness not verified`
+            : discoveryLog[0]?.tested_at
+              ? `last tested ${fmtWhen(discoveryLog[0].tested_at)}`
+              : "no live job signal"
+        }
+      >
         <div className="text-sm text-white/60 mb-3">
-          Real-time stream of candidate strategy rules being backtested on 5m candles across out-of-sample periods.
+          Last-known backtest evaluations (5m history, combinatorial TA). This is not a
+          live stream. If the API cannot see a running job, there is no spinner.
         </div>
 
         {!discoveryLog.length ? (
-          <div className="text-white/40 text-sm">No discovery backtests recorded yet.</div>
+          <Empty>
+            No discovery_log.json yet. Tournament writes it after a qualification batch.
+            Empty means nothing has been recorded — not that discovery is running.
+          </Empty>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-xs">

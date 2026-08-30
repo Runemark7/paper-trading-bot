@@ -3,6 +3,7 @@ import Overview from "./pages/Overview";
 import Positions from "./pages/Positions";
 import Champions from "./pages/Champions";
 import Learning from "./pages/Learning";
+import StatusBar from "./status/StatusBar";
 
 const nav = [
   { to: "/", label: "Overview" },
@@ -17,7 +18,7 @@ export default function App() {
       <header className="border-b border-white/10 bg-[#0d1430]/80 px-6 py-3">
         <div className="flex items-center gap-8">
           <h1 className="text-lg font-semibold tracking-tight">
-            PaperBot <span className="text-white/40 font-normal">— self-learning BTC/ETH</span>
+            PaperBot <span className="text-white/40 font-normal">— paper tournament · BTC/ETH</span>
           </h1>
           <nav className="flex gap-1">
             {nav.map((n) => (
@@ -39,6 +40,7 @@ export default function App() {
           </nav>
         </div>
       </header>
+      <StatusBar />
       <main className="max-w-7xl mx-auto px-6 py-6">
         <Routes>
           <Route path="/" element={<Overview />} />

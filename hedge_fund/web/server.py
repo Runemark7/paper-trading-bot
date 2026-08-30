@@ -7,6 +7,7 @@ A small, dependency-free HTTP server (stdlib only) that exposes:
   GET /api/learning     -> JSON: per-condition learning state (skills acquired)
   GET /api/regime       -> JSON: current regime zone/score
   GET /api/trades       -> JSON: recent closed trades
+  GET /api/status       -> running-now vs in-progress (last-known stamps)
   POST /run             -> trigger a live decision cycle, then regenerate
   GET /health           -> liveness probe
 
@@ -103,6 +104,8 @@ def build_summary() -> dict:
         "win_rate": round((total_hits / total_closed), 3) if total_closed else None,
         "total_pnl": total_pnl if total_closed else None,
         "updated": last_ts,
+        "source": "per-strategy paper accounts" if per_strategy_dbs() else "legacy trades.sqlite",
+        "account_count": len(dbs),
     }
 
 
@@ -227,12 +230,13 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 from hedge_fund.web.live import live_preview
                 dbs = store_dbs()
-                merged = {"live_equity": 0.0, "cash": 0.0, "positions": [], "accounts": len(dbs)}
+                merged = {"live_equity": 0.0, "cash": 0.0, "positions": [], "accounts": len(dbs), "as_of": None}
                 for db in dbs:
                     try:
                         lp = live_preview(db)
                         merged["live_equity"] += lp.get("live_equity", 0.0) or 0.0
                         merged["cash"] += lp.get("cash", 0.0) or 0.0
+                        merged["as_of"] = lp.get("as_of") or merged["as_of"]
                         for p in lp.get("positions", []):
                             p["account"] = Path(db).stem
                             merged["positions"].append(p)
@@ -275,6 +279,12 @@ class Handler(BaseHTTPRequestHandler):
                     self._send_json(json.loads(log_path.read_text()))
                 else:
                     self._send_json([])
+            except Exception as exc:
+                self._send_json({"error": str(exc)}, 500)
+        elif route == "/api/status":
+            try:
+                from hedge_fund.web.status import build_status
+                self._send_json(build_status())
             except Exception as exc:
                 self._send_json({"error": str(exc)}, 500)
         else:

@@ -15,13 +15,23 @@ import subprocess
 import sys
 from pathlib import Path
 
+from hedge_fund.trading.stamps import write_pipeline_stamp
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
 def _run(label: str, argv: list[str], *, critical: bool = False) -> int:
     print(f"live_cycle: {label}", flush=True)
     print("+", " ".join(argv), flush=True)
+    try:
+        write_pipeline_stamp(label, "started")
+    except Exception as exc:
+        print(f"live_cycle: stamp start failed: {exc}", flush=True)
     proc = subprocess.run(argv, cwd=str(ROOT))
+    try:
+        write_pipeline_stamp(label, "finished", exit_code=proc.returncode)
+    except Exception as exc:
+        print(f"live_cycle: stamp finish failed: {exc}", flush=True)
     if proc.returncode != 0:
         print(f"live_cycle: {label} failed rc={proc.returncode}", flush=True)
         if critical:
@@ -54,6 +64,10 @@ def main() -> int:
         "hourly_report",
         [sys.executable, str(ROOT / "scripts" / "hourly_report.py")],
     )
+    try:
+        write_pipeline_stamp("idle", "finished")
+    except Exception as exc:
+        print(f"live_cycle: idle stamp failed: {exc}", flush=True)
     return rc
 
 

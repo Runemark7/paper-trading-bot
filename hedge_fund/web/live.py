@@ -73,16 +73,24 @@ def live_preview(db: str) -> dict:
         entry_val = avg_entry * b["qty"]
         unrealized = (value - entry_val) if cur else None
         upnl_pct = (cur / avg_entry - 1) if cur else None
+        entry = round(avg_entry, 2)
+        stop = round(min((l.stop_loss for l in b["lots"]), default=0), 2)
+        upnl = round(unrealized, 2) if unrealized is not None else None
+        upct = round(upnl_pct, 4) if upnl_pct is not None else None
         positions.append(
             {
                 "symbol": sym,
                 "quantity": round(b["qty"], 5),
-                "entry": round(avg_entry, 2),
-                "stop": round(min((l.stop_loss for l in b["lots"]), default=0), 2),
+                "entry": entry,
+                "entry_price": entry,  # alias for the React client
+                "stop": stop,
+                "stop_loss": stop,
                 "current": round(cur, 2) if cur else None,
                 "value": round(value, 2) if value else None,
-                "unrealized_pnl": round(unrealized, 2) if unrealized is not None else None,
-                "unrealized_pct": round(upnl_pct, 4) if upnl_pct is not None else None,
+                "unrealized_pnl": upnl,
+                "unrealized_pct": upct,
+                "pnl": upnl,
+                "pnl_pct": upct,
                 "condition": b["lots"][0].entry_condition if b["lots"] else "",
                 "lot_count": len(b["lots"]),
             }

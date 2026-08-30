@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
-import { Card, fmt, Badge } from "../components/ui";
+import { fmt, Badge, Empty } from "../components/ui";
 
 function levelTone(level?: string) {
   switch ((level ?? "").toLowerCase()) {
@@ -30,12 +30,12 @@ export default function Learning() {
   return (
     <div className="space-y-4">
       <div className="text-sm text-white/60">
-        Per-condition calibration — the "skills" the bot is learning. Each condition
-        accumulates outcomes and its calibrated probability shows measured proficiency.
+        Last-known calibration from closed paper trades — not a running trainer.
+        Each condition accumulates outcomes; calibrated p is measured proficiency.
       </div>
 
       {!rows.length ? (
-        <div className="text-white/40 text-sm">No learning conditions yet.</div>
+        <Empty>No calibration rows yet. Skills appear after paper trades close.</Empty>
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
