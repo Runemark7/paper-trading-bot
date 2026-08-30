@@ -226,6 +226,13 @@ class GraduatedPaperTokenTests(unittest.TestCase):
         self.assertIn("sleep 14400", compose)
         self.assertNotIn("21600", compose)
 
+    def test_frontend_vite_entry_exists(self):
+        html = REPO / "frontend" / "index.html"
+        self.assertTrue(html.exists(), "frontend/index.html is the Vite entry; *.html gitignore must not hide it")
+        text = html.read_text()
+        self.assertIn('id="root"', text)
+        self.assertIn("/src/main.tsx", text)
+
 
 if __name__ == "__main__":
     unittest.main()
