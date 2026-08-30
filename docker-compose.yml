@@ -29,7 +29,20 @@ services:
       PAPER_STATE: /app/state
       PAPER_STRATEGY: ${PAPER_STRATEGY:-sma_stack}
       PAPER_ONLY: "1"
-    command: ["sh", "-c", "while true; do python -m hedge_fund.trading.run --cycles 1; sleep 14400; done"]
+      TZ: Europe/Stockholm
+    command:
+      - sh
+      - -c
+      - |
+        while true; do
+          H=$(TZ=Europe/Stockholm date +%H)
+          if [ "$H" -ge 7 ] && [ "$H" -le 21 ]; then
+            python /app/scripts/live_cycle.py || true
+          else
+            echo "live_cycle: outside 07-21 Stockholm (H=$H), skip"
+          fi
+          sleep 3600
+        done
     restart: unless-stopped
 
   heartbeat:

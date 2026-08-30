@@ -221,10 +221,14 @@ class GraduatedPaperTokenTests(unittest.TestCase):
         self.assertFalse((REPO / "k8s" / "cronjob.yaml").exists())
         backend = (REPO / "k8s" / "backend.yaml").read_text()
         self.assertIn("name: cycle", backend)
-        self.assertIn("sleep 14400", backend)
+        self.assertIn("live_cycle.py", backend)
+        self.assertIn("sleep 3600", backend)
+        self.assertNotIn("sleep 14400", backend)
         compose = (REPO / "docker-compose.yml").read_text()
-        self.assertIn("sleep 14400", compose)
-        self.assertNotIn("21600", compose)
+        self.assertIn("live_cycle.py", compose)
+        self.assertIn("sleep 3600", compose)
+        self.assertNotIn("sleep 14400", compose)
+        self.assertTrue((REPO / "scripts" / "live_cycle.py").exists())
 
     def test_frontend_vite_entry_exists(self):
         html = REPO / "frontend" / "index.html"

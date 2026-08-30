@@ -80,13 +80,26 @@ spec:
             - name: state-storage
               mountPath: /app/state
 
-        # 4h decision cycle (CYCLE_INTERVAL_SECONDS = 14400). Same pod as
+        # Hourly Hermes live-cycle (07–21 Europe/Stockholm): tournament discovery
+        # → run_isolated → collect_live_results → hourly_report. Same pod as
         # heartbeat/web so they share the RWO PVC; SQLite WAL + file lock
-        # serializes writers. Replaces the former CronJob (two-pod split-brain).
+        # serializes writers. Replaces Hermes cron paperbot-live-cycle.
         - name: cycle
           image: ghcr.io/runemark7/paper-trading-bot/backend:latest
           imagePullPolicy: IfNotPresent
-          command: ["sh", "-c", "while true; do python -m hedge_fund.trading.run --cycles 1; sleep 14400; done"]
+          command:
+            - sh
+            - -c
+            - |
+              while true; do
+                H=$(TZ=Europe/Stockholm date +%H)
+                if [ "$H" -ge 7 ] && [ "$H" -le 21 ]; then
+                  python /app/scripts/live_cycle.py || true
+                else
+                  echo "live_cycle: outside 07-21 Stockholm (H=$H), skip"
+                fi
+                sleep 3600
+              done
           env:
             - name: PAPER_STATE
               value: /app/state
@@ -94,16 +107,19 @@ spec:
               value: sma_stack
             - name: PAPER_ONLY
               value: "1"
+            - name: TZ
+              value: Europe/Stockholm
           resources:
             requests:
               cpu: 100m
-              memory: 128Mi
+              memory: 256Mi
             limits:
-              cpu: 500m
-              memory: 512Mi
+              cpu: 1000m
+              memory: 1536Mi
           volumeMounts:
             - name: state-storage
               mountPath: /app/state
+
 
       volumes:
         - name: state-storage

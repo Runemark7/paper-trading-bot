@@ -26,4 +26,4 @@ GRADUATED_PAPER = "GRADUATED_PAPER"
 REJECTED_NEGATIVE_PNL = "REJECTED_NEGATIVE_PNL"
 
 # Decision-cycle cadence. k8s cycle sidecar and compose scheduler must match.
-CYCLE_INTERVAL_SECONDS = 14400  # 4 hours
+CYCLE_INTERVAL_SECONDS = 3600  # 1 hour (07–21 Stockholm window in the sidecar)
