@@ -30,6 +30,7 @@ from hedge_fund.data.binance import CcxtSource
 from hedge_fund.risk.managed import RiskManager
 from hedge_fund.trading.store import TradeStore
 from hedge_fund.trading.loop import TradingLoop
+from hedge_fund.trading.stamps import write_heartbeat_stamp
 
 SYMBOLS = ["BTC/USDT", "ETH/USDT"]
 START_CASH = 10_000.0
@@ -94,6 +95,14 @@ def heartbeat_once() -> int:
             collect_live_results()
         except Exception:
             pass
+    try:
+        write_heartbeat_stamp(
+            closed=closed_total,
+            accounts_checked=len(accounts),
+            interval_seconds=HEARTBEAT_SECONDS,
+        )
+    except Exception:
+        pass
     return closed_total
 
 

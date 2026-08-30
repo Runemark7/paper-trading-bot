@@ -243,5 +243,6 @@ def pool_status() -> dict:
         "target_active": MAX_ACTIVE_CHAMPIONS,
         "evaluation_limit": TRADE_EVALUATION_LIMIT,
         "graduated_count": len(grad),
-        "graduated": grad
+        "graduated": grad,
+        "synced_until": st.get("synced_until") or None,
     }
