@@ -46,8 +46,8 @@ export default function Overview() {
           <Badge tone={run?.positions_open ? "pos" : "neutral"}>
             {run ? `${run.positions_open} open` : "open …"}
           </Badge>
-          <Badge tone={hb?.recent ? "pos" : "warn"}>
-            heartbeat: {hb?.last_pass_at ? (hb.recent ? "recent stamp" : "stale/unknown") : "no stamp"}
+          <Badge tone={hb?.last_pass_at ? (hb.recent ? "pos" : "neutral") : "warn"}>
+            heartbeat: {hb?.last_pass_at ? (hb.recent ? "recent stamp" : "last-known stamp") : "no stamp"}
           </Badge>
           <Badge tone="neutral">
             cycle {cycle ? cadenceLabel(cycle.interval_seconds) : "…"} · {cycle?.bar_timeframe ?? "4h"} bars
