@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
-import { Card, fmt, fmtPct, Badge, Empty, MonoName, Field, PhoneCards, DesktopTable } from "../components/ui";
+import { Card, fmt, fmtPct, Badge, Empty, MonoName, Field, FieldGrid, PhoneCards, DesktopTable } from "../components/ui";
 import {
   accountLabel,
   fmtWhen,
@@ -45,16 +45,18 @@ export default function Positions() {
                 const pnl = positionPnl(p);
                 const pnlPct = positionPnlPct(p);
                 return (
-                  <li key={i} className="rounded-lg border border-white/10 p-3 space-y-2">
-                    <div className="flex items-baseline justify-between gap-2">
-                      <span className="font-medium">{p.symbol}</span>
+                  <li key={i} className="rounded-lg border border-white/10 p-3 space-y-2 min-w-0 overflow-hidden">
+                    <div className="flex items-baseline justify-between gap-2 min-w-0">
+                      <span className="font-medium min-w-0 truncate">{p.symbol}</span>
                       <span className={`shrink-0 ${(pnlPct ?? 0) >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
                         {fmtPct(pnlPct)}
                       </span>
                     </div>
-                    <MonoName className="text-xs text-white/50">{accountLabel(p.account)}</MonoName>
-                    <div className="grid grid-cols-2 gap-2">
-                      <Field label="Condition">{p.condition ?? "—"}</Field>
+                    <MonoName className="block text-xs text-white/50">{accountLabel(p.account)}</MonoName>
+                    <FieldGrid>
+                      <Field label="Condition" span mono>
+                        {p.condition ?? "—"}
+                      </Field>
                       <Field label="Lots">{p.lot_count ?? 1}</Field>
                       <Field label="Entry">{fmt(positionEntry(p))}</Field>
                       <Field label="Stop">{fmt(positionStop(p))}</Field>
@@ -64,7 +66,7 @@ export default function Positions() {
                           {pnl != null ? fmt(pnl) : "—"}
                         </span>
                       </Field>
-                    </div>
+                    </FieldGrid>
                   </li>
                 );
               })}
@@ -92,7 +94,7 @@ export default function Positions() {
                       <tr key={i} className="border-t border-white/5">
                         <td className="py-2 font-mono text-xs">{accountLabel(p.account)}</td>
                         <td className="font-medium">{p.symbol}</td>
-                        <td className="text-white/60">{p.condition ?? "—"}</td>
+                        <td className="text-white/60 font-mono text-xs break-all">{p.condition ?? "—"}</td>
                         <td className="text-right">{p.lot_count ?? 1}</td>
                         <td className="text-right">{fmt(positionEntry(p))}</td>
                         <td className="text-right">{fmt(positionStop(p))}</td>
@@ -120,20 +122,24 @@ export default function Positions() {
           <>
             <PhoneCards>
               {trades.data.map((t) => (
-                <li key={`${t.account ?? ""}-${t.id}`} className="rounded-lg border border-white/10 p-3 space-y-2">
-                  <div className="flex items-baseline justify-between gap-2">
-                    <span className="font-medium">{t.symbol}</span>
+                <li key={`${t.account ?? ""}-${t.id}`} className="rounded-lg border border-white/10 p-3 space-y-2 min-w-0 overflow-hidden">
+                  <div className="flex items-baseline justify-between gap-2 min-w-0">
+                    <span className="font-medium min-w-0 truncate">{t.symbol}</span>
                     <span className={`shrink-0 ${(t.pnl_pct ?? 0) >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
                       {fmtPct(t.pnl_pct)}
                     </span>
                   </div>
-                  <MonoName className="text-xs text-white/50">{accountLabel(t.account)}</MonoName>
-                  <div className="grid grid-cols-2 gap-2">
-                    <Field label="Condition">{t.condition}</Field>
+                  <MonoName className="block text-xs text-white/50">{accountLabel(t.account)}</MonoName>
+                  <FieldGrid>
+                    <Field label="Condition" span mono>
+                      {t.condition}
+                    </Field>
                     <Field label="Entry">{fmt(t.entry_price)}</Field>
                     <Field label="Exit">{t.exit_price != null ? fmt(t.exit_price) : "—"}</Field>
-                    <Field label="Reason">{t.exit_reason ?? "—"}</Field>
-                  </div>
+                    <Field label="Reason" span>
+                      {t.exit_reason ?? "—"}
+                    </Field>
+                  </FieldGrid>
                 </li>
               ))}
             </PhoneCards>
@@ -155,7 +161,7 @@ export default function Positions() {
                     <tr key={`${t.account ?? ""}-${t.id}`} className="border-t border-white/5">
                       <td className="py-2 font-mono text-xs">{accountLabel(t.account)}</td>
                       <td className="font-medium">{t.symbol}</td>
-                      <td className="text-white/60">{t.condition}</td>
+                      <td className="text-white/60 font-mono text-xs break-all">{t.condition}</td>
                       <td className="text-right">{fmt(t.entry_price)}</td>
                       <td className="text-right">{t.exit_price != null ? fmt(t.exit_price) : "—"}</td>
                       <td className="text-white/60">{t.exit_reason ?? "—"}</td>
