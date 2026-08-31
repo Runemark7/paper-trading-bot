@@ -93,7 +93,10 @@ export function MonoName({
 }) {
   const title = typeof children === "string" ? children : undefined;
   return (
-    <span title={title} className={`font-mono break-words [overflow-wrap:anywhere] ${className}`}>
+    <span
+      title={title}
+      className={`font-mono min-w-0 overflow-hidden break-all [overflow-wrap:anywhere] ${className}`}
+    >
       {children}
     </span>
   );
@@ -103,22 +106,40 @@ export function Field({
   label,
   children,
   className = "",
+  span = false,
+  mono = false,
 }: {
   label: string;
   children: ReactNode;
   className?: string;
+  /** Full-width row in a 2-col FieldGrid — use for long condition ids. */
+  span?: boolean;
+  mono?: boolean;
 }) {
+  const title = typeof children === "string" ? children : undefined;
   return (
-    <div className={`min-w-0 ${className}`}>
+    <div className={`min-w-0 overflow-hidden ${span ? "col-span-2" : ""} ${className}`}>
       <div className="text-[11px] uppercase tracking-wider text-white/40">{label}</div>
-      <div className="mt-0.5 text-sm">{children}</div>
+      <div
+        title={title}
+        className={`mt-0.5 text-sm min-w-0 overflow-hidden break-all [overflow-wrap:anywhere] ${
+          mono ? "font-mono" : ""
+        }`}
+      >
+        {children}
+      </div>
     </div>
   );
 }
 
+/** Two-column phone metric grid. Children need min-w-0 (Field provides it). */
+export function FieldGrid({ children }: { children: ReactNode }) {
+  return <div className="grid grid-cols-2 gap-2 min-w-0 overflow-hidden">{children}</div>;
+}
+
 /** Phone: stacked cards. md+: keep the existing table (caller supplies both). */
 export function PhoneCards({ children }: { children: ReactNode }) {
-  return <ul className="md:hidden space-y-3">{children}</ul>;
+  return <ul className="md:hidden space-y-3 min-w-0">{children}</ul>;
 }
 
 export function DesktopTable({ children }: { children: ReactNode }) {

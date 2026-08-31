@@ -235,6 +235,15 @@ class RouteAndCopyTests(unittest.TestCase):
         positions = (REPO / "frontend" / "src" / "pages" / "Positions.tsx").read_text()
         self.assertIn("Open lots", positions)
         self.assertNotIn("Open positions (", positions)
+        self.assertIn('label="Condition" span', positions)
+        overview_condition = overview.count('label="Condition" span')
+        self.assertGreaterEqual(overview_condition, 1, "Overview phone cards must give Condition a full row")
+        learning = (REPO / "frontend" / "src" / "pages" / "Learning.tsx").read_text()
+        self.assertIn('label="Condition" span', learning)
+        ui = (REPO / "frontend" / "src" / "components" / "ui.tsx").read_text()
+        self.assertIn("col-span-2", ui)
+        self.assertIn("break-all", ui)
+        self.assertIn("min-w-0 overflow-hidden", ui)
         for pattern in ("frontend/src/**/*.ts", "frontend/src/**/*.tsx"):
             for path in REPO.glob(pattern):
                 text = path.read_text()

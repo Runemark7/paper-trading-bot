@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
-import { fmt, Badge, Empty, MonoName, Field, PhoneCards, DesktopTable } from "../components/ui";
+import { fmt, Badge, Empty, Field, FieldGrid, PhoneCards, DesktopTable } from "../components/ui";
 
 function levelTone(level?: string) {
   switch ((level ?? "").toLowerCase()) {
@@ -40,18 +40,20 @@ export default function Learning() {
         <>
           <PhoneCards>
             {rows.map((r) => (
-              <li key={r.key} className="rounded-lg border border-white/10 p-3 space-y-2">
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <div className="font-medium">{r.symbol}</div>
-                    <MonoName className="text-xs text-white/60">{r.condition}</MonoName>
-                  </div>
-                  <Badge tone={levelTone(r.level)}>{r.level ?? "learning"}</Badge>
+              <li key={r.key} className="rounded-lg border border-white/10 p-3 space-y-2 min-w-0 overflow-hidden">
+                <div className="flex items-start justify-between gap-2 min-w-0">
+                  <div className="font-medium min-w-0 truncate">{r.symbol}</div>
+                  <span className="shrink-0">
+                    <Badge tone={levelTone(r.level)}>{r.level ?? "learning"}</Badge>
+                  </span>
                 </div>
-                <div className="grid grid-cols-2 gap-2">
+                <FieldGrid>
+                  <Field label="Condition" span mono>
+                    {r.condition}
+                  </Field>
                   <Field label="Trials">{r.trials}</Field>
                   <Field label="Calibrated p">{fmt(r.calibrated_prob)}</Field>
-                </div>
+                </FieldGrid>
               </li>
             ))}
           </PhoneCards>
@@ -70,7 +72,7 @@ export default function Learning() {
                 {rows.map((r) => (
                   <tr key={r.key} className="border-t border-white/5">
                     <td className="py-2 font-medium">{r.symbol}</td>
-                    <td className="text-white/60 font-mono text-sm">{r.condition}</td>
+                    <td className="text-white/60 font-mono text-xs break-all">{r.condition}</td>
                     <td className="text-right">{r.trials}</td>
                     <td className="text-right">{fmt(r.calibrated_prob)}</td>
                     <td>

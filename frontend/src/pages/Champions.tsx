@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchChampions, fetchGraduated, fetchDiscovery, api } from "../api/client";
-import { Card, fmt, Badge, Empty, MonoName, Field, PhoneCards, DesktopTable } from "../components/ui";
+import { Card, fmt, Badge, Empty, MonoName, Field, FieldGrid, PhoneCards, DesktopTable } from "../components/ui";
 import { certaintyLabel, fmtWhen } from "../status/format";
 
 export default function Champions() {
@@ -56,19 +56,21 @@ export default function Champions() {
           <>
             <PhoneCards>
               {champs.map((c) => (
-                <li key={c.name} className="rounded-lg border border-white/10 p-3 space-y-2">
-                  <div className="flex items-start justify-between gap-2">
-                    <MonoName className="text-sm font-medium text-white min-w-0">{c.name}</MonoName>
-                    <Badge tone="run">running now</Badge>
+                <li key={c.name} className="rounded-lg border border-white/10 p-3 space-y-2 min-w-0 overflow-hidden">
+                  <div className="flex items-start justify-between gap-2 min-w-0">
+                    <MonoName className="block text-sm font-medium text-white min-w-0">{c.name}</MonoName>
+                    <span className="shrink-0">
+                      <Badge tone="run">running now</Badge>
+                    </span>
                   </div>
-                  <div className="grid grid-cols-2 gap-2">
+                  <FieldGrid>
                     <Field label="Open lots">{c.open_lots ?? 0}</Field>
                     <Field label={`Closed (of ${evalLimit})`}>{c.closed} / {evalLimit}</Field>
                     <Field label="Wins">{c.wins}</Field>
                     <Field label="Paper P&L" className={c.pnl >= 0 ? "text-emerald-400" : "text-rose-400"}>
                       <span className="font-medium">{fmt(c.pnl)}</span>
                     </Field>
-                  </div>
+                  </FieldGrid>
                 </li>
               ))}
             </PhoneCards>
@@ -87,7 +89,7 @@ export default function Champions() {
                 <tbody>
                   {champs.map((c) => (
                     <tr key={c.name} className="border-t border-white/5">
-                      <td className="py-2 font-mono text-sm">{c.name}</td>
+                      <td className="py-2 font-mono text-sm break-all">{c.name}</td>
                       <td className="text-right">{c.open_lots ?? 0}</td>
                       <td className="text-right">{c.closed} / {evalLimit}</td>
                       <td className="text-right">{c.wins}</td>
@@ -109,7 +111,7 @@ export default function Champions() {
           {rowLots !== openLots ? ` · ${rowLots} on listed champions` : " (rows sum to this total)"}.
         </div>
         {leftoverLots.length > 0 && (
-          <div className="text-xs text-white/45 mt-1">
+          <div className="text-xs text-white/45 mt-1 break-all [overflow-wrap:anywhere]">
             Also {leftoverLots.reduce((n, [, lots]) => n + lots, 0)} open lots on accounts not in the pool:{" "}
             {leftoverLots.map(([name, lots]) => `${name} (${lots})`).join(", ")}.
           </div>
@@ -172,14 +174,14 @@ export default function Champions() {
                       <div className="text-xs font-semibold uppercase text-white/40 mb-2">Detailed Trade History</div>
                       <PhoneCards>
                         {g.trade_history?.map((t, idx) => (
-                          <li key={idx} className="rounded-lg border border-white/10 p-3 space-y-2">
-                            <div className="flex items-baseline justify-between gap-2">
-                              <span className="font-medium">{t.symbol}</span>
+                          <li key={idx} className="rounded-lg border border-white/10 p-3 space-y-2 min-w-0 overflow-hidden">
+                            <div className="flex items-baseline justify-between gap-2 min-w-0">
+                              <span className="font-medium min-w-0 truncate">{t.symbol}</span>
                               <span className={`shrink-0 font-bold ${t.pnl >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
                                 {fmt(t.pnl)}
                               </span>
                             </div>
-                            <div className="grid grid-cols-2 gap-2">
+                            <FieldGrid>
                               <Field label="Entry">{t.entry_ts?.replace("T", " ").slice(0, 16)}</Field>
                               <Field label="Entry $">${t.entry_price.toLocaleString()}</Field>
                               <Field label="Exit $">${t.exit_price.toLocaleString()}</Field>
@@ -190,7 +192,7 @@ export default function Champions() {
                                 </span>
                               </Field>
                               <Field label="Exit reason">{t.exit_reason}</Field>
-                            </div>
+                            </FieldGrid>
                           </li>
                         ))}
                       </PhoneCards>
@@ -261,14 +263,16 @@ export default function Champions() {
           <>
             <PhoneCards>
               {discoveryLog.slice(0, 40).map((d, i) => (
-                <li key={i} className="rounded-lg border border-white/10 p-3 space-y-2">
-                  <div className="flex items-start justify-between gap-2">
-                    <MonoName className="text-xs font-medium text-white min-w-0">{d.strategy}</MonoName>
-                    <Badge tone={d.qualified ? "pos" : "neg"}>
-                      {d.qualified ? "QUALIFIED" : "REJECTED"}
-                    </Badge>
+                <li key={i} className="rounded-lg border border-white/10 p-3 space-y-2 min-w-0 overflow-hidden">
+                  <div className="flex items-start justify-between gap-2 min-w-0">
+                    <MonoName className="block text-xs font-medium text-white min-w-0">{d.strategy}</MonoName>
+                    <span className="shrink-0">
+                      <Badge tone={d.qualified ? "pos" : "neg"}>
+                        {d.qualified ? "QUALIFIED" : "REJECTED"}
+                      </Badge>
+                    </span>
                   </div>
-                  <div className="grid grid-cols-2 gap-2">
+                  <FieldGrid>
                     <Field label="Tested">{d.tested_at?.replace("T", " ").slice(0, 16)}</Field>
                     <Field label="Win rate">{d.win_rate_pct}%</Field>
                     <Field label="Sharpe">{d.sharpe.toFixed(2)}</Field>
@@ -278,7 +282,7 @@ export default function Champions() {
                     <Field label="Test P&L">
                       <span className={`font-bold ${d.test_pnl >= 0 ? "text-emerald-400" : "text-rose-400"}`}>{fmt(d.test_pnl)}</span>
                     </Field>
-                  </div>
+                  </FieldGrid>
                 </li>
               ))}
             </PhoneCards>
@@ -298,7 +302,7 @@ export default function Champions() {
                 <tbody>
                   {discoveryLog.slice(0, 40).map((d, i) => (
                     <tr key={i} className="border-t border-white/5">
-                      <td className="py-1 font-mono font-medium text-white">{d.strategy}</td>
+                      <td className="py-1 font-mono font-medium text-white break-all">{d.strategy}</td>
                       <td className="text-white/50">{d.tested_at?.replace("T", " ").slice(0, 16)}</td>
                       <td className="text-right">{d.win_rate_pct}%</td>
                       <td className="text-right font-mono">{d.sharpe.toFixed(2)}</td>
