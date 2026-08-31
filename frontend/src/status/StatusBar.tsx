@@ -40,7 +40,7 @@ export default function StatusBar() {
                 last cycle {fmtWhen(cycle?.last_cycle_at)} · next {cycle?.next.at ? fmtWhen(cycle.next.at) : "unknown"} ({certaintyLabel(cycle?.next.inferred ? "inferred" : "last_known")})
               </span>
               <span className="text-white/70 min-w-0 break-words">
-                {run.positions_open} open · heartbeat {hb?.last_pass_at ? fmtWhen(hb.last_pass_at) : "no stamp"}
+                {run.open_lots ?? run.positions_open} open lots · heartbeat {hb?.last_pass_at ? fmtWhen(hb.last_pass_at) : "no stamp"}
               </span>
             </>
           ) : (

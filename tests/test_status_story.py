@@ -166,6 +166,7 @@ class LiveAliasTests(unittest.TestCase):
         self.assertEqual(pos["pnl"], pos["unrealized_pnl"])
         self.assertEqual(pos["pnl_pct"], pos["unrealized_pct"])
         self.assertAlmostEqual(pos["entry_price"], 100_000.0)
+        self.assertEqual(prev["open_lots"], 1)
 
     def test_live_preview_survives_null_exchange_prices(self):
         from hedge_fund.trading.store import TradeStore
@@ -227,6 +228,13 @@ class RouteAndCopyTests(unittest.TestCase):
         self.assertNotIn("Real-time stream", champs)
         self.assertIn("GRADUATED_PAPER", champs)
         self.assertIn("last-known", champs)
+        self.assertIn("open lots", overview)
+        self.assertIn("open lots", champs)
+        bar = (REPO / "frontend" / "src" / "status" / "StatusBar.tsx").read_text()
+        self.assertIn("open lots", bar)
+        positions = (REPO / "frontend" / "src" / "pages" / "Positions.tsx").read_text()
+        self.assertIn("Open lots", positions)
+        self.assertNotIn("Open positions (", positions)
         for pattern in ("frontend/src/**/*.ts", "frontend/src/**/*.tsx"):
             for path in REPO.glob(pattern):
                 text = path.read_text()

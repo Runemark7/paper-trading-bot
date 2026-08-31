@@ -34,6 +34,7 @@ from pathlib import Path
 from hedge_fund.paths import state_root
 from hedge_fund.regime.gate import RegimeGate
 from hedge_fund.trading.constants import MAX_ACTIVE_CHAMPIONS
+from hedge_fund.trading.open_lots import attach_open_lots, open_lots_snapshot, paper_book_dbs
 from hedge_fund.trading.store import TradeStore
 from hedge_fund.web.live import live_preview, live_prices
 
@@ -66,15 +67,12 @@ def _read_json(path):
 
 def per_strategy_dbs() -> list[Path]:
     """All isolated per-strategy account DBs in STATE_ROOT."""
-    return sorted(_state_dir().glob("trades_*.sqlite"))
+    return [Path(p) for p in paper_book_dbs() if Path(p).name.startswith("trades_")]
 
 
 def store_dbs() -> list[str]:
-    """The DBs to read for aggregate stats/trades: per-strategy, else legacy."""
-    dbs = per_strategy_dbs()
-    if dbs:
-        return [str(d) for d in dbs]
-    return [str(_trades_db())]
+    """The DBs to read for aggregate stats/trades: same set as /api/live."""
+    return paper_book_dbs() or [str(_trades_db())]
 
 
 def build_summary() -> dict:
@@ -230,7 +228,17 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 from hedge_fund.web.live import live_preview
                 dbs = store_dbs()
-                merged = {"live_equity": 0.0, "cash": 0.0, "positions": [], "accounts": len(dbs), "as_of": None}
+                lots = open_lots_snapshot()
+                merged = {
+                    "live_equity": 0.0,
+                    "cash": 0.0,
+                    "positions": [],
+                    "accounts": len(dbs),
+                    "as_of": None,
+                    "open_lots": lots["open_lots"],
+                    "open_lots_by_account": lots["by_account"],
+                    "open_lots_unit": "open_lots",
+                }
                 for db in dbs:
                     try:
                         lp = live_preview(db)
@@ -263,7 +271,7 @@ class Handler(BaseHTTPRequestHandler):
                     collect_live_results, pool_status,
                 )
                 collect_live_results()
-                self._send_json(pool_status())
+                self._send_json(attach_open_lots(pool_status()))
             except Exception as exc:
                 self._send_json({"error": str(exc), "champions": [], "count": 0, "max": MAX_ACTIVE_CHAMPIONS}, 500)
         elif route == "/api/graduated":

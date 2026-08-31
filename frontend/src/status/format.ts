@@ -53,6 +53,18 @@ export function accountLabel(raw?: string): string {
   return raw.startsWith("trades_") ? raw.slice("trades_".length) : raw;
 }
 
+/** Shared UI count: open lots, never champion/account rows. */
+export function openLotsTotal(
+  live?: { open_lots?: number; positions?: LivePosition[] } | null,
+  statusOpen?: number | null,
+): number {
+  if (live?.open_lots != null) return live.open_lots;
+  if (live?.positions?.length) {
+    return live.positions.reduce((n, p) => n + (p.lot_count ?? 1), 0);
+  }
+  return statusOpen ?? 0;
+}
+
 export function cadenceLabel(seconds: number): string {
   if (seconds % 3600 === 0) {
     const h = seconds / 3600;

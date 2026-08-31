@@ -22,6 +22,7 @@ from hedge_fund.trading.constants import (
     REJECTED_NEGATIVE_PNL,
     TRADE_EVALUATION_LIMIT,
 )
+from hedge_fund.trading.open_lots import attach_open_lots
 from hedge_fund.trading.store import connect_sqlite
 
 # Re-export so existing `from hedge_fund.trading.champions import TRADE_EVALUATION_LIMIT` still works.
@@ -30,6 +31,7 @@ __all__ = [
     "MAX_ACTIVE_CHAMPIONS",
     "REJECTED_NEGATIVE_PNL",
     "TRADE_EVALUATION_LIMIT",
+    "attach_open_lots",
     "collect_live_results",
     "load_graduated",
     "load_pool",
@@ -237,7 +239,7 @@ def promote_candidates(candidates: list[dict]) -> dict:
 def pool_status() -> dict:
     st = load_pool()
     grad = load_graduated()
-    return {
+    return attach_open_lots({
         "active_champions": st["champions"],
         "active_count": len(st["champions"]),
         "target_active": MAX_ACTIVE_CHAMPIONS,
@@ -245,4 +247,4 @@ def pool_status() -> dict:
         "graduated_count": len(grad),
         "graduated": grad,
         "synced_until": st.get("synced_until") or None,
-    }
+    })

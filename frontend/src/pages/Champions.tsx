@@ -19,6 +19,10 @@ export default function Champions() {
   const discoveryLog = qDisc.data ?? [];
   const run = status.data?.running_now;
   const prog = status.data?.in_progress;
+  const rowLots = champs.reduce((n, c) => n + (c.open_lots ?? 0), 0);
+  const openLots = qChamps.data?.open_lots ?? run?.open_lots ?? run?.positions_open ?? rowLots;
+  const leftoverLots = Object.entries(qChamps.data?.open_lots_by_account ?? {})
+    .filter(([name, n]) => n > 0 && !champs.some((c) => c.name === name));
 
   return (
     <div className="space-y-6 min-w-0">
@@ -29,11 +33,12 @@ export default function Champions() {
       </p>
 
       <Card
-        title={`On the paper book (${champs.length} / ${targetMax})`}
-        aside={run ? `last cycle ${fmtWhen(run.cycle.last_cycle_at)}` : undefined}
+        title={`On the paper book · ${openLots} open lots`}
+        aside={run ? `${champs.length} / ${targetMax} champions · last cycle ${fmtWhen(run.cycle.last_cycle_at)}` : `${champs.length} / ${targetMax} champions`}
       >
         <div className="text-sm text-white/60 mb-3">
-          Each name is an isolated paper account. After <b>{evalLimit} closed entries</b> the
+          Each name is an isolated paper account. Open lots are the same count as Overview
+          and Positions (BTC + ETH on one champion = 2). After <b>{evalLimit} closed entries</b> the
           account leaves this list. <code>GRADUATED_PAPER</code> is graduated paper, not live money.
           {run?.strategy.mode === "sma_stack_fallback" && (
             <> Pool empty — book is running <code>sma_stack</code> fallback.</>
@@ -56,7 +61,8 @@ export default function Champions() {
                     <MonoName className="text-sm font-medium text-white min-w-0">{c.name}</MonoName>
                     <Badge tone="run">running now</Badge>
                   </div>
-                  <div className="grid grid-cols-3 gap-2">
+                  <div className="grid grid-cols-2 gap-2">
+                    <Field label="Open lots">{c.open_lots ?? 0}</Field>
                     <Field label={`Closed (of ${evalLimit})`}>{c.closed} / {evalLimit}</Field>
                     <Field label="Wins">{c.wins}</Field>
                     <Field label="Paper P&L" className={c.pnl >= 0 ? "text-emerald-400" : "text-rose-400"}>
@@ -71,6 +77,7 @@ export default function Champions() {
                 <thead className="text-white/40 text-xs uppercase">
                   <tr>
                     <th className="text-left py-2">Strategy</th>
+                    <th className="text-right">Open lots</th>
                     <th className="text-right">Closed (of {evalLimit})</th>
                     <th className="text-right">Wins</th>
                     <th className="text-right">Paper P&L</th>
@@ -81,6 +88,7 @@ export default function Champions() {
                   {champs.map((c) => (
                     <tr key={c.name} className="border-t border-white/5">
                       <td className="py-2 font-mono text-sm">{c.name}</td>
+                      <td className="text-right">{c.open_lots ?? 0}</td>
                       <td className="text-right">{c.closed} / {evalLimit}</td>
                       <td className="text-right">{c.wins}</td>
                       <td className={`text-right font-medium ${c.pnl >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
@@ -95,6 +103,16 @@ export default function Champions() {
               </table>
             </DesktopTable>
           </>
+        )}
+        <div className="text-xs text-white/45 mt-3">
+          {openLots} open lots on the paper book
+          {rowLots !== openLots ? ` · ${rowLots} on listed champions` : " (rows sum to this total)"}.
+        </div>
+        {leftoverLots.length > 0 && (
+          <div className="text-xs text-white/45 mt-1">
+            Also {leftoverLots.reduce((n, [, lots]) => n + lots, 0)} open lots on accounts not in the pool:{" "}
+            {leftoverLots.map(([name, lots]) => `${name} (${lots})`).join(", ")}.
+          </div>
         )}
         {qChamps.data?.synced_until && (
           <div className="text-xs text-white/40 mt-3">

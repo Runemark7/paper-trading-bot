@@ -47,7 +47,7 @@ def live_preview(db: str) -> dict:
     st = TradeStore(db)
     saved = st.load_account_state()
     if not saved:
-        return {"live_equity": None, "positions": [], "prices": {}}
+        return {"live_equity": None, "positions": [], "prices": {}, "open_lots": 0, "open_lots_unit": "open_lots"}
 
     broker = PaperBroker(cash=10000)
     broker.restore_state(saved.get("broker", {}))
@@ -112,4 +112,6 @@ def live_preview(db: str) -> dict:
         "positions": positions,
         "prices": {s: round(p, 2) if p else None for s, p in prices.items()},
         "as_of": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+        "open_lots": len(broker.lots),
+        "open_lots_unit": "open_lots",
     }
