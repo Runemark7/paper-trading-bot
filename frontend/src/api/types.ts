@@ -24,6 +24,9 @@ export interface LivePreview {
   positions: LivePosition[];
   as_of?: string;
   accounts?: number;
+  open_lots?: number;
+  open_lots_by_account?: Record<string, number>;
+  open_lots_unit?: "open_lots" | string;
 }
 
 export interface RegimeState {
@@ -80,6 +83,7 @@ export interface Champion {
   pnl: number;
   wins: number;
   passed?: boolean;
+  open_lots?: number;
 }
 
 export interface GraduatedTrade {
@@ -156,6 +160,9 @@ export interface StatusSnapshot {
       };
     };
     positions_open: number;
+    open_lots?: number;
+    open_lots_by_account?: Record<string, number>;
+    open_lots_unit?: "open_lots" | string;
     heartbeat: {
       configured_interval_seconds: number;
       role: string;
@@ -233,4 +240,7 @@ export interface ChampionsPayload {
   graduated_count: number;
   graduated: GraduatedStrategy[];
   synced_until?: string | null;
+  open_lots?: number;
+  open_lots_by_account?: Record<string, number>;
+  open_lots_unit?: "open_lots" | string;
 }

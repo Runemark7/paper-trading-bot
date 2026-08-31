@@ -6,6 +6,7 @@ import {
   cadenceLabel,
   certaintyLabel,
   fmtWhen,
+  openLotsTotal,
   positionEntry,
   positionPnlPct,
 } from "../status/format";
@@ -23,6 +24,7 @@ export default function Overview() {
   const prog = status.data?.in_progress;
   const cycle = run?.cycle;
   const hb = run?.heartbeat;
+  const openLots = openLotsTotal(l, run?.open_lots ?? run?.positions_open);
 
   return (
     <div className="space-y-6 min-w-0">
@@ -43,8 +45,8 @@ export default function Overview() {
         <div className="flex flex-wrap gap-2 mb-4">
           <Badge tone="run">on the book</Badge>
           <Badge tone="neutral">{run?.strategy.mode === "sma_stack_fallback" ? "strategy: sma_stack fallback" : "strategy: champion accounts"}</Badge>
-          <Badge tone={run?.positions_open ? "pos" : "neutral"}>
-            {run ? `${run.positions_open} open` : "open …"}
+          <Badge tone={openLots ? "pos" : "neutral"}>
+            {run ? `${openLots} open lots` : "open lots …"}
           </Badge>
           <Badge tone={hb?.last_pass_at ? (hb.recent ? "pos" : "neutral") : "warn"}>
             heartbeat: {hb?.last_pass_at ? (hb.recent ? "recent stamp" : "last-known stamp") : "no stamp"}
@@ -111,7 +113,7 @@ export default function Overview() {
           />
         </div>
 
-        <Card title="Open positions on the paper book" aside={l?.as_of ? `prices ${l.as_of}` : undefined}>
+        <Card title={`Open lots on the paper book (${openLots})`} aside={l?.as_of ? `prices ${l.as_of}` : undefined}>
           {!l?.positions?.length ? (
             <Empty>
               No open lots. The book is still the live experiment — last cycle {fmtWhen(cycle?.last_cycle_at)}.

@@ -4,6 +4,7 @@ import { Card, fmt, fmtPct, Badge, Empty, MonoName, Field, PhoneCards, DesktopTa
 import {
   accountLabel,
   fmtWhen,
+  openLotsTotal,
   positionEntry,
   positionPnl,
   positionPnlPct,
@@ -17,6 +18,7 @@ export default function Positions() {
 
   const run = status.data?.running_now;
   const open = live.data?.positions ?? [];
+  const openLots = openLotsTotal(live.data, run?.open_lots ?? run?.positions_open);
 
   return (
     <div className="space-y-6 min-w-0">
@@ -29,7 +31,7 @@ export default function Positions() {
         </span>
       </div>
 
-      <Card title={`Open positions (${open.length})`}>
+      <Card title={`Open lots (${openLots})`}>
         {!open.length ? (
           <Empty>
             No open lots on the paper book. Heartbeat only manages stops/TP when lots
@@ -53,6 +55,7 @@ export default function Positions() {
                     <MonoName className="text-xs text-white/50">{accountLabel(p.account)}</MonoName>
                     <div className="grid grid-cols-2 gap-2">
                       <Field label="Condition">{p.condition ?? "—"}</Field>
+                      <Field label="Lots">{p.lot_count ?? 1}</Field>
                       <Field label="Entry">{fmt(positionEntry(p))}</Field>
                       <Field label="Stop">{fmt(positionStop(p))}</Field>
                       <Field label="Now">{p.current != null ? fmt(p.current) : "—"}</Field>
@@ -73,6 +76,7 @@ export default function Positions() {
                     <th className="text-left py-2">Account</th>
                     <th className="text-left">Symbol</th>
                     <th className="text-left">Condition</th>
+                    <th className="text-right">Lots</th>
                     <th className="text-right">Entry</th>
                     <th className="text-right">Stop</th>
                     <th className="text-right">Now</th>
@@ -89,6 +93,7 @@ export default function Positions() {
                         <td className="py-2 font-mono text-xs">{accountLabel(p.account)}</td>
                         <td className="font-medium">{p.symbol}</td>
                         <td className="text-white/60">{p.condition ?? "—"}</td>
+                        <td className="text-right">{p.lot_count ?? 1}</td>
                         <td className="text-right">{fmt(positionEntry(p))}</td>
                         <td className="text-right">{fmt(positionStop(p))}</td>
                         <td className="text-right">{p.current != null ? fmt(p.current) : "—"}</td>

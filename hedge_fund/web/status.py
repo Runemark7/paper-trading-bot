@@ -19,6 +19,7 @@ from hedge_fund.trading.constants import (
     TRADE_EVALUATION_LIMIT,
 )
 from hedge_fund.trading.heartbeat import HEARTBEAT_SECONDS
+from hedge_fund.trading.open_lots import open_lots_snapshot, paper_book_dbs
 from hedge_fund.trading.stamps import HEARTBEAT_STAMP, PIPELINE_STAMP, read_json_stamp
 from hedge_fund.trading.store import TradeStore
 
@@ -69,14 +70,6 @@ def _file_mtime_note(path: Path) -> dict:
     }
 
 
-def _open_lot_count(saved: dict | None) -> int:
-    if not saved:
-        return 0
-    broker = saved.get("broker") or {}
-    lots = broker.get("lots") or broker.get("positions") or []
-    return len(lots)
-
-
 def _last_cycle_at(dbs: list[str]) -> str | None:
     """Last TradingLoop.run_cycle equity snapshot — not heartbeat saved_at."""
     best = None
@@ -105,17 +98,6 @@ def _account_saved_at(dbs: list[str]) -> str | None:
         except Exception:
             continue
     return best
-
-
-def _open_positions_count(dbs: list[str]) -> int:
-    total = 0
-    for db in dbs:
-        try:
-            st = TradeStore(db)
-            total += _open_lot_count(st.load_account_state())
-        except Exception:
-            continue
-    return total
 
 
 def _in_cycle_window(now: datetime) -> bool:
@@ -292,14 +274,8 @@ def _graduation_block() -> dict:
 def build_status() -> dict:
     now = datetime.now(timezone.utc)
     root = state_root()
-    per_strategy = sorted(root.glob("trades_*.sqlite"))
-    legacy = root / "trades.sqlite"
-    if per_strategy:
-        dbs = [str(p) for p in per_strategy]
-    elif legacy.exists():
-        dbs = [str(legacy)]
-    else:
-        dbs = []
+    dbs = paper_book_dbs()
+    lots = open_lots_snapshot()
     pool = load_pool()
     champs = list(pool.get("champions") or [])
     names = [c.get("name") for c in champs if c.get("name")]
@@ -343,7 +319,10 @@ def build_status() -> dict:
                 "account_saved_at": _account_saved_at(dbs),
                 "next": _infer_next_cycle(last_cycle, now),
             },
-            "positions_open": _open_positions_count(dbs),
+            "positions_open": lots["open_lots"],
+            "open_lots": lots["open_lots"],
+            "open_lots_by_account": lots["by_account"],
+            "open_lots_unit": "open_lots",
             "heartbeat": heartbeat,
             "regime": {
                 "gates_live_book": False,
