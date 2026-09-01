@@ -1,6 +1,7 @@
-"""Fetch deep 5m crypto close history across symbols and persist to state/crypto_history_5m.json.
+"""5m history fetch — research tape only.
 
-Paginates backward to capture maximum available 5m history from Binance.
+Must not admit champions. Qualification and the live book use 4h
+(`scripts/tournament_engine.py`, TradingLoop, CcxtSource.DEFAULT_TIMEFRAME).
 """
 from __future__ import annotations
 

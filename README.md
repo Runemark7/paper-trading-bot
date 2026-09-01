@@ -7,8 +7,8 @@ probabilities that become both *calibrated* (stated = measured reliability) and
 **Paper only. No real money.** Rules live in [PROTOCOL.md](PROTOCOL.md).
 Amendment 2026-08-30 names the live experiment: an isolated-account paper
 tournament of combinatorial TA strategies (not the original LLM-probability
-study). "Profitable" still means vs buy-and-hold; that overlay is not computed
-on the live path today.
+study). Amendment 2026-09-01: qualification uses the same 4h tape as live;
+"profitable" vs buy-and-hold is computed on the overlay and at graduation.
 
 Built on **[ai-hedge-fund](https://github.com/virattt/ai-hedge-fund)** (MIT, © Virat Singh)
 for Signal models, sim broker, risk limits, portfolio, backtesting, and the LLM layer.
@@ -27,8 +27,8 @@ Day-one scaffold is in the tree and in use:
 - [PROTOCOL.md](PROTOCOL.md) honesty contract
 - Live-forward paper loop (`hedge_fund/web/live.py`) — not real-money
 
-Later work on `main` (multi-timeframe resampling, volume-flow indicators, ~6000-rule
-strategy universe, k8s/ArgoCD) does not change the paper-only rule.
+Later work on `main` (multi-timeframe resampling, volume-flow indicators, a
+small explicit 4h strategy universe, k8s/ArgoCD) does not change the paper-only rule.
 
 ## Run
 

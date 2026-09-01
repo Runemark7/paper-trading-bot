@@ -265,8 +265,8 @@ def _graduation_block() -> dict:
         "last_graduated_at": (last or {}).get("graduated_at"),
         "token": GRADUATED_PAPER,
         "note": (
-            f"{GRADUATED_PAPER} means graduated paper (positive paper P&L after "
-            f"{TRADE_EVALUATION_LIMIT} closed trades), not live money."
+            f"{GRADUATED_PAPER} means graduated paper (paper P&L greater than "
+            f"buy-and-hold after {TRADE_EVALUATION_LIMIT} closed trades), not live money."
         ),
     }
 

@@ -1,12 +1,13 @@
 """Champion pool manager — continuous pipeline.
 
 Rules (hedge_fund.trading.constants — do not document different numbers):
-1. Target active capacity: MAX_ACTIVE_CHAMPIONS (1000).
-2. Evaluation threshold: TRADE_EVALUATION_LIMIT (25) closed paper trades.
-   Positive paper P&L → GRADUATED_PAPER (graduated paper, not live trading).
+1. Target active capacity: MAX_ACTIVE_CHAMPIONS (20). Replenish only into free slots.
+2. Evaluation threshold: TRADE_EVALUATION_LIMIT (80) closed paper trades.
+   Paper PnL greater than buy-and-hold of the same assets over the same
+   period (after fees) → GRADUATED_PAPER (graduated paper, not live trading).
    Else REJECTED_NEGATIVE_PNL. Results go to graduated.json.
-3. If active champions < MAX_ACTIVE_CHAMPIONS, backtest candidates and promote
-   the top performers to fill slots.
+3. If active champions < MAX_ACTIVE_CHAMPIONS, 4h-qualified candidates fill
+   free slots only — never a 5m admit bar.
 """
 from __future__ import annotations
 
@@ -16,14 +17,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from hedge_fund.paths import state_root
+from hedge_fund.trading.buy_and_hold import buy_and_hold_from_trades
 from hedge_fund.trading.constants import (
     GRADUATED_PAPER,
     MAX_ACTIVE_CHAMPIONS,
+    PAPER_START_CASH,
     REJECTED_NEGATIVE_PNL,
     TRADE_EVALUATION_LIMIT,
 )
 from hedge_fund.trading.open_lots import attach_open_lots
-from hedge_fund.trading.store import connect_sqlite
+from hedge_fund.trading.store import TradeStore, connect_sqlite
 
 # Re-export so existing `from hedge_fund.trading.champions import TRADE_EVALUATION_LIMIT` still works.
 __all__ = [
@@ -35,6 +38,7 @@ __all__ = [
     "collect_live_results",
     "load_graduated",
     "load_pool",
+    "paper_beats_buy_and_hold",
     "pool_status",
     "promote_candidates",
     "save_graduated",
@@ -82,11 +86,42 @@ def save_graduated(grad_list: list[dict]):
     path.write_text(json.dumps(grad_list, indent=2))
 
 
+def paper_beats_buy_and_hold(
+    paper_pnl: float,
+    trades: list[dict],
+    db_path: Path | None = None,
+    start_cash: float = PAPER_START_CASH,
+) -> tuple[bool, float | None]:
+    """True iff paper PnL strictly exceeds B&H of the same assets / period after fees.
+
+    Prefers the live overlay on equity_snapshots; falls back to first-entry /
+    last-exit reconstruction from the closed-trade history.
+    """
+    bh_pnl: float | None = None
+    if db_path and db_path.exists():
+        try:
+            store = TradeStore(db_path)
+            snaps = store.equity_history()
+            if snaps:
+                last = snaps[-1]
+                baseline = last["baseline"] if "baseline" in last.keys() else None
+                if baseline is not None:
+                    bh_pnl = float(baseline) - start_cash
+        except Exception:
+            bh_pnl = None
+    if bh_pnl is None:
+        bh_pnl = buy_and_hold_from_trades(trades, start_cash)
+    if bh_pnl is None:
+        return False, None
+    return paper_pnl > bh_pnl, bh_pnl
+
+
 def collect_live_results() -> dict:
     """Sync closed paper trades from ALL per-strategy accounts.
 
     Graduates strategies with >= TRADE_EVALUATION_LIMIT closed trades and
-    removes them from the active testing pool.
+    removes them from the active testing pool. Graduation requires beating
+    buy-and-hold, not merely paper PnL > 0.
     """
     st = load_pool()
     synced_until = st.get("synced_until", "")
@@ -123,15 +158,12 @@ def collect_live_results() -> dict:
             if ts and ts > max_ts:
                 max_ts = ts
 
-    # Update active champions
+    # Update active champions only — stray DBs must not stuff the 20-slot pool.
     idx = {c["name"]: i for i, c in enumerate(st["champions"])}
     for strat, trade_list in updates.items():
-        if strat in idx:
-            c = st["champions"][idx[strat]]
-        else:
-            c = {"name": strat, "closed": 0, "pnl": 0.0, "wins": 0}
-            st["champions"].append(c)
-            idx[strat] = len(st["champions"]) - 1
+        if strat not in idx:
+            continue
+        c = st["champions"][idx[strat]]
         for t in trade_list:
             c["closed"] += 1
             c["pnl"] += t["pnl"]
@@ -171,14 +203,18 @@ def collect_live_results() -> dict:
                 except Exception:
                     pass
 
+            beats, bh_pnl = paper_beats_buy_and_hold(
+                float(c["pnl"]), strat_history, db_path=db_path if db_path.exists() else None,
+            )
             grad_entry = {
                 "name": c["name"],
                 "closed_trades": c["closed"],
                 "total_pnl": round(c["pnl"], 2),
+                "buy_and_hold_pnl": None if bh_pnl is None else round(bh_pnl, 2),
                 "wins": c["wins"],
                 "win_rate_pct": win_rate,
                 "graduated_at": datetime.now(timezone.utc).isoformat(),
-                "status": GRADUATED_PAPER if c["pnl"] > 0 else REJECTED_NEGATIVE_PNL,
+                "status": GRADUATED_PAPER if beats else REJECTED_NEGATIVE_PNL,
                 "trade_history": strat_history
             }
             if c["name"] not in existing_grad_names:
@@ -209,7 +245,7 @@ def collect_live_results() -> dict:
 
 
 def promote_candidates(candidates: list[dict]) -> dict:
-    """Add top backtested candidate strategies until pool reaches MAX_ACTIVE_CHAMPIONS (1000)."""
+    """Add 4h-qualified names until pool reaches MAX_ACTIVE_CHAMPIONS (20)."""
     st = load_pool()
     grad_list = load_graduated()
     existing = {c["name"] for c in st["champions"]}.union({g["name"] for g in grad_list})
@@ -227,7 +263,7 @@ def promote_candidates(candidates: list[dict]) -> dict:
                     "closed": 0,
                     "pnl": 0.0,
                     "wins": 0,
-                    "source": "sweep_promotion"
+                    "source": cand.get("source") or "sweep_promotion",
                 })
                 existing.add(name)
                 added.append(name)

@@ -7,6 +7,7 @@ report text to stdout for the scheduler to deliver.
 import sqlite3, os, glob, json, sys
 from hedge_fund.paths import state_root
 from hedge_fund.data.binance import CcxtSource
+from hedge_fund.trading.constants import TRADE_EVALUATION_LIMIT
 
 STATE = str(state_root())
 START_CASH = 10_000.0
@@ -94,17 +95,17 @@ def main():
 
     for item in active_accounts_summary:
         pnl_str = f"+${item['total_pnl']:,.2f}" if item['total_pnl'] >= 0 else f"-${abs(item['total_pnl']):,.2f}"
-        lines.append(f"{item['name']:<26} {item['closed']}/25     {item['held_desc']:<18} {pnl_str}")
+        lines.append(f"{item['name']:<26} {item['closed']}/{TRADE_EVALUATION_LIMIT}     {item['held_desc']:<18} {pnl_str}")
 
     lines.append("-" * 68)
     lines.append(f"**Total Arena Net P&L:** {'+$' if grand_pnl >= 0 else '-$'}{abs(grand_pnl):,.2f}")
     
     if grad_list:
-        lines.append("\n🎓 **Graduated Strategies (25/25 Trades Completed):**")
+        lines.append(f"\n🎓 **Graduated Strategies ({TRADE_EVALUATION_LIMIT}/{TRADE_EVALUATION_LIMIT} Trades Completed):**")
         for g in grad_list:
             lines.append(f"- **{g['name']}**: P&L {g['total_pnl']:+,.2f} | WinRate: {g['win_rate_pct']}% | Status: `{g['status']}`")
     else:
-        lines.append("\n🎓 **Graduated Strategies:** None yet (requires 25 closed entries to graduate).")
+        lines.append(f"\n🎓 **Graduated Strategies:** None yet (requires {TRADE_EVALUATION_LIMIT} closed entries to graduate).")
 
     print("\n".join(lines))
 

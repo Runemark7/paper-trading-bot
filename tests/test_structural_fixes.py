@@ -122,14 +122,20 @@ class ParseStrategyHonestyTests(unittest.TestCase):
         self.assertFalse(pred_down(down))
 
     def test_universe_does_not_emit_mtf_or_mfi(self):
-        from hedge_fund.trading.universe import generate_5000_universe
+        from hedge_fund.trading.universe import (
+            UNIVERSE_TARGET_MAX,
+            UNIVERSE_TARGET_MIN,
+            generate_universe,
+        )
 
-        uni = generate_5000_universe()
+        uni = generate_universe()
+        self.assertGreaterEqual(len(uni), UNIVERSE_TARGET_MIN)
+        self.assertLessEqual(len(uni), UNIVERSE_TARGET_MAX)
         for name in uni:
             self.assertNotIn("daily(", name)
             self.assertNotIn("h1(", name)
             self.assertNotIn("m5(", name)
-        self.assertNotIn("mfi_", name)
+            self.assertNotIn("mfi_", name)
 
 
 class StateRootTests(unittest.TestCase):
@@ -177,7 +183,8 @@ class GraduatedPaperTokenTests(unittest.TestCase):
                     tid = store.open_trade(
                         "BTC/USDT", "4h", "sma_stack_long", 0.6, 100.0, 0.01, 0.01, lot_id=i,
                     )
-                    store.close_trade(tid, 110.0, "take_profit", 0.01, 1.0, 0.1, 1)
+                    # Flat tape: B&H after fees is slightly negative; paper PnL beats it.
+                    store.close_trade(tid, 100.0, "take_profit", 0.01, 1.0, 0.0, 1)
                 (root / "champions.json").write_text(
                     '{"champions": [{"name": "winner", "closed": 0, "pnl": 0.0, "wins": 0}], "synced_until": ""}'
                 )
@@ -187,19 +194,25 @@ class GraduatedPaperTokenTests(unittest.TestCase):
                 self.assertEqual(load_graduated()[0]["status"], GRADUATED_PAPER)
 
     def test_constants_match_protocol_cited_values(self):
+        import hedge_fund.trading.constants as constants
         from hedge_fund.trading.constants import (
+            DISCOVER_BATCH_SIZE,
             MAX_ACTIVE_CHAMPIONS,
             MIN_BACKTEST_SHARPE,
             MIN_BACKTEST_TRADES,
-            MIN_BACKTEST_WIN_RATE,
+            QUAL_TIMEFRAME,
+            RISK_POLICY,
             TRADE_EVALUATION_LIMIT,
         )
 
-        self.assertEqual(MIN_BACKTEST_SHARPE, 0.10)
-        self.assertEqual(MIN_BACKTEST_WIN_RATE, 0.38)
-        self.assertEqual(MIN_BACKTEST_TRADES, 4)
-        self.assertEqual(TRADE_EVALUATION_LIMIT, 25)
-        self.assertEqual(MAX_ACTIVE_CHAMPIONS, 1000)
+        self.assertEqual(QUAL_TIMEFRAME, "4h")
+        self.assertEqual(RISK_POLICY, "rm_v1")
+        self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
+        self.assertEqual(MIN_BACKTEST_TRADES, 30)
+        self.assertEqual(TRADE_EVALUATION_LIMIT, 80)
+        self.assertEqual(MAX_ACTIVE_CHAMPIONS, 20)
+        self.assertEqual(DISCOVER_BATCH_SIZE, 30)
+        self.assertFalse(hasattr(constants, "MIN_BACKTEST_WIN_RATE"))
 
     def test_tournament_imports_champions_not_sys_path_opt(self):
         src = (REPO / "scripts" / "tournament_engine.py").read_text()
