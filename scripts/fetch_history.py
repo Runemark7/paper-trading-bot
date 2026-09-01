@@ -5,7 +5,11 @@ to go deeper you must set `since` to just before the OLDEST bar of the current
 page). Persists to <PAPER_STATE>/crypto_history_<tf>.json and mirrors to /tmp
 for legacy tools.
 
+Discovery qualification reads crypto_history_4h.json (HIST_TIMEFRAME=4h).
+5m fetches must not admit champions.
+
 Usage:
+  HIST_TIMEFRAME=4h HIST_BARS=20000 python scripts/fetch_history.py
   HIST_TIMEFRAME=1h HIST_BARS=8000 python scripts/fetch_history.py
 """
 import sys, json, os, time

@@ -195,10 +195,34 @@ def _sharpe(pnl_pcts):
 
 
 def backtest(closes, highs, lows, strategy, start_cash=10_000.0,
-             risk_frac=0.01, taker_fee=0.001, slippage=0.0002,
-             rr=2.0, atr_mult=2.5, momentum_lookback=12, momentum_thr=0.03,
+             risk_frac=None, taker_fee=None, slippage=None,
+             rr=None, atr_mult=None, momentum_lookback=12, momentum_thr=0.03,
              long_stack=(7, 25, 50)):
-    """Backtest one strategy. `closes/highs/lows` are parallel arrays (bars)."""
+    """Backtest one strategy on OHLC bars using frozen ``rm_v1`` stop/size.
+
+    Same fee model as PaperBroker (0.1% taker + 2 bps) and the same ATR stop
+    (2.0× ATR, 1.5–4% band), 1% risk, pyramid max 3 lots / in-profit-only,
+    and 5% open-risk cap. ``atr_mult`` is ignored: qualification must not
+    run a second engine. Confidence is 1.0 (no live posterior on history).
+    """
+    from hedge_fund.risk.managed import RiskManager
+    from hedge_fund.risk.rm_v1 import (
+        ATR_PERIOD,
+        FEE_SLIPPAGE,
+        FEE_TAKER,
+        MAX_LOTS_PER_SYMBOL,
+        RISK_FRAC,
+        TAKE_PROFIT_RR,
+        atr_stop_price,
+    )
+    from hedge_fund.signals.dynamic import parse_strategy
+
+    taker_fee = FEE_TAKER if taker_fee is None else taker_fee
+    slippage = FEE_SLIPPAGE if slippage is None else slippage
+    risk_frac = RISK_FRAC if risk_frac is None else risk_frac
+    rr = TAKE_PROFIT_RR if rr is None else rr
+    _ = atr_mult  # frozen rm_v1; callers must not select a different stop engine
+
     n = len(closes)
     cash = float(start_cash)
     peak = float(start_cash)
@@ -206,108 +230,105 @@ def backtest(closes, highs, lows, strategy, start_cash=10_000.0,
     wins = trades = 0
     fees = 0.0
     pnl_pcts = []
-    open_qty = 0.0
-    entry = stop = 0.0
+    lots: list[dict] = []  # {qty, entry, stop}
+    pred = parse_strategy(strategy)
+    risk = RiskManager(risk_frac=risk_frac, initial_equity=start_cash)
 
     warmup = max(long_stack[2], momentum_lookback, 14, 20) + 2
 
-    def equity():
-        return cash  # we're flat except when open; track prices as we go
+    def mark_equity(px: float) -> float:
+        return cash + sum(lot["qty"] * px for lot in lots)
+
+    def close_lot(lot, exit_px, hit):
+        nonlocal cash, wins, trades, fees, peak, max_dd
+        proceeds = exit_px * lot["qty"]
+        fee = proceeds * taker_fee
+        cash += proceeds - fee
+        fees += fee
+        pnl = (exit_px - lot["entry"]) * lot["qty"]
+        pnl_pct = (exit_px - lot["entry"]) / lot["entry"] if lot["entry"] else 0.0
+        pnl_pcts.append(pnl_pct)
+        wins += 1 if pnl > 0 else 0
+        trades += 1
+        eq = cash  # remaining lots marked at caller
+        if eq > peak:
+            peak = eq
+        dd = (peak - eq) / peak if peak > 0 else 0.0
+        max_dd = max(max_dd, dd)
 
     for i in range(warmup, n):
         cur = closes[i]
-
-        # --- decide signal ---
-        take = False
-        from hedge_fund.signals.dynamic import parse_strategy
-        pred = parse_strategy(strategy)
         take = bool(pred(closes, i))
+        high_i = highs[i] if i < len(highs) else cur
+        low_i = lows[i] if i < len(lows) else cur
 
-        # --- manage open position: exit at stop, TP, or signal invalidation ---
-        if open_qty > 0:
-            risk_px = entry - stop
-            tp = entry + rr * risk_px
+        still_open = []
+        exited_this_bar = False
+        for lot in lots:
+            risk_px = lot["entry"] - lot["stop"]
+            tp = lot["entry"] + rr * risk_px
             exit_px = None
-
-            # Intrabar realistic order evaluation:
-            # Check if high breached TP or low breached Stop during candle i
-            high_i = highs[i] if i < len(highs) else cur
-            low_i = lows[i] if i < len(lows) else cur
-
-            if low_i <= stop and high_i >= tp:
-                # Ambiguous intrabar breach: be conservative and assume Stop hit first
-                exit_px = stop * (1 - slippage)
+            hit = ""
+            if low_i <= lot["stop"] and high_i >= tp:
+                exit_px = lot["stop"] * (1 - slippage)
                 hit = "stop"
-            elif low_i <= stop:
-                exit_px = stop * (1 - slippage)
+            elif low_i <= lot["stop"]:
+                exit_px = lot["stop"] * (1 - slippage)
                 hit = "stop"
             elif high_i >= tp:
                 exit_px = tp * (1 - slippage)
                 hit = "tp"
             elif not take:
-                # Strategy signal turned OFF / invalid -> close position at bar close
                 exit_px = cur * (1 - slippage)
                 hit = "signal_exit"
-
             if exit_px is not None:
-                proceeds = exit_px * open_qty
-                fee = proceeds * taker_fee
-                cash += proceeds - fee
-                fees += fee
-                pnl = (exit_px - entry) * open_qty
-                pnl_pct = (exit_px - entry) / entry
-                pnl_pcts.append(pnl_pct)
-                wins += 1 if pnl > 0 else 0
-                trades += 1
-                open_qty = 0.0
-                # update peak/drawdown at this close
-                if cash > peak:
-                    peak = cash
-                dd = (peak - cash) / peak if peak > 0 else 0.0
-                max_dd = max(max_dd, dd)
-                continue  # just closed, no re-entry this bar
+                close_lot(lot, exit_px, hit)
+                exited_this_bar = True
             else:
-                continue  # still open and signal still bullish, hold
+                still_open.append(lot)
+        lots = still_open
 
-        if not take:
-            continue
+        eq = mark_equity(cur)
+        risk.update_equity(eq)
+        if eq > peak:
+            peak = eq
+        dd = (peak - eq) / peak if peak > 0 else 0.0
+        max_dd = max(max_dd, dd)
 
-        # size: 1% risk / (entry - ATR stop)
-        a = atr(highs, lows, closes, 14, i)
-        if math.isnan(a) or a <= 0:
-            a = cur * 0.02
-        stop = cur - atr_mult * a
-        entry_px = cur * (1 + slippage)  # buy slippage against us
-        risk_per_coin = entry_px - stop
-        if risk_per_coin <= 0:
+        if exited_this_bar and not lots:
+            continue  # just flattened; no re-entry this bar (same as prior engine)
+        if not take or risk.is_halted():
             continue
-        qty = (cash * risk_frac) / risk_per_coin
+        if len(lots) >= MAX_LOTS_PER_SYMBOL:
+            continue
+        if lots:
+            if any((cur - lot["entry"]) * lot["qty"] <= 0 for lot in lots):
+                continue  # pyramid only if existing lots are in profit
+
+        a = atr(highs, lows, closes, ATR_PERIOD, i)
+        stop = atr_stop_price(cur, a)
+        if cur <= stop:
+            continue
+        open_pos = [(lot["entry"], lot["stop"], lot["qty"]) for lot in lots]
+        rd = risk.size_position(eq, cur, stop, open_pos, confidence=1.0)
+        if not rd.approved or rd.size <= 0:
+            continue
+        qty = rd.size
+        entry_px = cur * (1 + slippage)
         fee = entry_px * qty * taker_fee
         cash -= entry_px * qty + fee
         fees += fee
-        open_qty = qty
-        entry = entry_px
-        # don't track drawdown mid-position precisely; approximated at close
+        lots.append({"qty": qty, "entry": entry_px, "stop": stop})
 
-    # close any open at last price
-    if open_qty > 0:
+    if lots:
         exit_px = closes[-1] * (1 - slippage)
-        proceeds = exit_px * open_qty
-        fee = proceeds * taker_fee
-        cash += proceeds - fee
-        fees += fee
-        pnl = (exit_px - entry) * open_qty
-        pnl_pct = (exit_px - entry) / entry
-        pnl_pcts.append(pnl_pct)
-        wins += 1 if pnl > 0 else 0
-        trades += 1
-        if cash > peak:
-            peak = cash
-        dd = (peak - cash) / peak if peak > 0 else 0.0
-        max_dd = max(max_dd, dd)
+        for lot in list(lots):
+            close_lot(lot, exit_px, "eod")
+        lots = []
 
     return BacktestResult(
-        strategy=strategy, trades=trades, wins=wins,
+        strategy=strategy if isinstance(strategy, str) else getattr(strategy, "__name__", ""),
+        trades=trades, wins=wins,
         win_rate=(wins / trades) if trades else 0.0,
         total_pnl=cash - start_cash, final_equity=cash,
         sharpe=_sharpe(pnl_pcts), max_drawdown=max_dd, fees_paid=fees,

@@ -26,22 +26,27 @@ from datetime import datetime, timezone
 from hedge_fund.brokers.paper import PaperBroker, Order
 from hedge_fund.calibration import CalibrationStore, condition_key
 from hedge_fund.data.binance import Candle, CcxtSource
-from hedge_fund.risk.managed import RiskManager, CONFIDENCE_MAX, CONFIDENCE_MIN
+from hedge_fund.risk.managed import RiskManager
+from hedge_fund.risk.rm_v1 import (
+    ATR_PERIOD,
+    ATR_STOP_MULT,
+    CONFIDENCE_REF_PROB,
+    MAX_LOTS_PER_SYMBOL,
+    STOP_CAP_FRAC,
+    STOP_FALLBACK_FRAC,
+    STOP_FLOOR_FRAC,
+    TAKE_PROFIT_RR,
+    atr_stop_price,
+    confidence_multiplier,
+)
 from hedge_fund.signals.momentum import Signal, compute_signal
+from hedge_fund.trading.buy_and_hold import overlay_equity
+from hedge_fund.trading.constants import PAPER_START_CASH, QUAL_TIMEFRAME
 from hedge_fund.trading.store import TradeStore
 from hedge_fund.backtest.strategies import atr
-import math
 
-# Live-cycle constants. Dashboard `strategy_rules_section` imports these so the
-# rules blurb cannot drift from the paper cycle (PROTOCOL amendment 2026-08-30).
-TAKE_PROFIT_RR = 2.0  # 2:1 reward:risk vs stop distance
-MAX_LOTS_PER_SYMBOL = 3
-ATR_PERIOD = 14
-ATR_STOP_MULT = 2.0
-STOP_FLOOR_FRAC = 0.015  # 1.5% of entry
-STOP_CAP_FRAC = 0.040    # 4.0% of entry
-STOP_FALLBACK_FRAC = 0.025  # when ATR is unavailable
-CONFIDENCE_REF_PROB = 0.50
+# Live-cycle constants — re-exported from rm_v1 so dashboard copy cannot
+# drift from the frozen policy (PROTOCOL amendment 2026-09-01).
 
 
 @dataclass
@@ -68,7 +73,7 @@ class TradingLoop:
         calib: CalibrationStore,
         store: TradeStore | None = None,
         regime: "RegimeGate | None" = None,
-        timeframe: str = "4h",
+        timeframe: str = QUAL_TIMEFRAME,
         horizon_bars: int = 6,  # ~1 day at 4h; success = close above entry at horizon
         kline_limit: int = 300,
         strategy: str = "sma_stack",
@@ -199,17 +204,12 @@ class TradingLoop:
                                            "REJECTED", reason="no price", equity=equity))
                 continue
 
-            # ATR dynamic volatility stop: ATR_STOP_MULT × ATR(ATR_PERIOD) below
-            # entry, floored/capped as fractions of entry.
+            # ATR dynamic volatility stop — rm_v1 (same helper as discovery).
             highs_k = [c.high for c in klines]
             lows_k = [c.low for c in klines]
             closes_k = [c.close for c in klines]
             a = atr(highs_k, lows_k, closes_k, ATR_PERIOD)
-            if math.isnan(a) or a <= 0:
-                stop_dist = entry * STOP_FALLBACK_FRAC
-            else:
-                stop_dist = max(entry * STOP_FLOOR_FRAC, min(entry * STOP_CAP_FRAC, ATR_STOP_MULT * a))
-            stop = entry - stop_dist
+            stop = atr_stop_price(entry, a)
 
             # Pyramiding guardrails:
             # 1. Max MAX_LOTS_PER_SYMBOL lots per symbol
@@ -230,8 +230,8 @@ class TradingLoop:
                         reason=f"pyramid hold: prior {sym} lots not in profit yet", equity=equity))
                     continue
 
-            # Confidence multiplier from stated probability vs CONFIDENCE_REF_PROB.
-            conf_mult = max(CONFIDENCE_MIN, min(CONFIDENCE_MAX, (prob / CONFIDENCE_REF_PROB)))
+            # Confidence multiplier from stated probability vs CONFIDENCE_REF_PROB (rm_v1).
+            conf_mult = confidence_multiplier(prob)
 
             # Existing open risk (for the cap): account for ALL open lots.
             open_pos = [
@@ -281,7 +281,9 @@ class TradingLoop:
                     px_now[sym] = self.data.fetch_price(sym)
                 except Exception:
                     px_now[sym] = None
-            self.store.snapshot_equity(self.broker.equity(px_now), baseline=None)
+            equity_now = self.broker.equity(px_now)
+            baseline = overlay_equity(self.store, px_now, PAPER_START_CASH)
+            self.store.snapshot_equity(equity_now, baseline=baseline)
 
         self.history.extend(results)
         self.calib.save()

@@ -13,8 +13,8 @@ export default function Champions() {
   const [expandedStrat, setExpandedStrat] = useState<string | null>(null);
 
   const champs = qChamps.data?.active_champions ?? [];
-  const targetMax = qChamps.data?.target_active ?? 1000;
-  const evalLimit = qChamps.data?.evaluation_limit ?? 25;
+  const targetMax = qChamps.data?.target_active ?? 20;
+  const evalLimit = qChamps.data?.evaluation_limit ?? 80;
   const graduated = qGrad.data ?? [];
   const discoveryLog = qDisc.data ?? [];
   const run = status.data?.running_now;
@@ -128,8 +128,9 @@ export default function Champions() {
         aside={`${evalLimit} closed trades, then ${"GRADUATED_PAPER"} or REJECTED_NEGATIVE_PNL`}
       >
         <div className="text-sm text-white/60 mb-3">
-          Off the live book. <code>GRADUATED_PAPER</code> is positive paper P&L after the
-          evaluation window — not authorization to trade real funds.
+          Off the live book. <code>GRADUATED_PAPER</code> is paper P&L greater than
+          buy-and-hold of the same assets over the same period after the evaluation
+          window — not authorization to trade real funds.
         </div>
 
         {!graduated.length ? (
@@ -250,7 +251,7 @@ export default function Champions() {
         }
       >
         <div className="text-sm text-white/60 mb-3">
-          Last-known backtest evaluations (5m history, combinatorial TA). This is not a
+          Last-known backtest evaluations (4h history, same tape as live). This is not a
           live stream. If the API cannot see a running job, there is no spinner.
         </div>
 

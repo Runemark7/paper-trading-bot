@@ -24,12 +24,35 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertIn("Amendment 2026-08-30", text)
         self.assertIn("graduated paper", text.lower())
         self.assertIn("TradingLoop.run_cycle", text)
-        self.assertIn("baseline=None", text)
+        self.assertIn("baseline=None", text)  # historical 2026-08-30 text kept
         self.assertIn("not an LLM", text)
         self.assertIn("Paper only", text)
         # Original sizing/fees language kept for history
         self.assertIn("1 % fixed-fractional risk per trade", text)
         self.assertIn("Taker fee (0.1 %)", text)
+
+    def test_amendment_2026_09_01(self):
+        from hedge_fund.trading.constants import (
+            MAX_ACTIVE_CHAMPIONS,
+            MIN_BACKTEST_SHARPE,
+            MIN_BACKTEST_TRADES,
+            QUAL_TIMEFRAME,
+            RISK_POLICY,
+            TRADE_EVALUATION_LIMIT,
+        )
+
+        text = (REPO / "PROTOCOL.md").read_text()
+        self.assertIn("Amendment 2026-09-01", text)
+        self.assertIn("2026-09-01", text)
+        self.assertIn(QUAL_TIMEFRAME, text)
+        self.assertIn(RISK_POLICY, text)
+        self.assertIn(str(MAX_ACTIVE_CHAMPIONS), text)
+        self.assertIn(str(TRADE_EVALUATION_LIMIT), text)
+        self.assertIn(str(MIN_BACKTEST_TRADES), text)
+        self.assertIn("0.30", text)
+        self.assertIn("same game", text.lower())
+        self.assertIn("5m tape was **discovery-only**", text)
+        self.assertIn("MIN_BACKTEST_SHARPE = 0.30", text)
 
 
 class IsolatedRunnerTests(unittest.TestCase):
@@ -94,7 +117,8 @@ class DashboardRulesTests(unittest.TestCase):
         self.assertNotIn("LIVE (A/B winner)", html)
         self.assertIn("regime=None", html)
         self.assertIn("graduated paper", html.lower())
-        self.assertIn("baseline=None", html)
+        self.assertNotIn("baseline=None", html)
+        self.assertIn("buy-and-hold", html.lower())
         self.assertIn(f"{ATR_STOP_MULT:.1f}× ATR({ATR_PERIOD})", html)
         self.assertIn(f"{STOP_FLOOR_FRAC:.1%}", html)
         self.assertIn(f"{RISK_FRAC:.0%}", html)
@@ -173,7 +197,8 @@ class SharedCycleTests(unittest.TestCase):
 
         snaps = store.equity_history()
         self.assertTrue(snaps)
-        self.assertIsNone(snaps[-1]["baseline"])
+        self.assertIsNotNone(snaps[-1]["baseline"])
+        self.assertGreater(snaps[-1]["baseline"], 0)
 
 
 if __name__ == "__main__":

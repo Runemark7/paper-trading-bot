@@ -3,93 +3,132 @@
 The live cycle fetches a single 4h close series (no 1h/5m bars, and
 parse_strategy is close-only). This generator therefore does not emit
 daily()/h1()/m5() wrappers or MFI rules — those would be silent lies.
+
+Amendment 2026-09-01: explicit ~50-name universe instead of ~3500
+combinatorial clones. Near-duplicate keys collapse tiny param tweaks.
 """
 from __future__ import annotations
 
-import itertools
+import re
+
+# Documented size (tests lock this band). Was 3546 combinatorial names.
+UNIVERSE_TARGET_MIN = 40
+UNIVERSE_TARGET_MAX = 120
 
 
-def generate_5000_universe() -> list[str]:
-    universe = set()
+def near_duplicate_key(name: str) -> str:
+    """Cheap canonical key so ``sma_stack_5_20_50`` and ``sma_stack_5_21_51`` collide.
 
-    # 1. Moving Average Stacks (SMA & EMA)
-    ma_combos = [
-        (3, 8, 21), (4, 9, 18), (5, 10, 20), (5, 13, 34), (5, 20, 50),
-        (6, 12, 24), (7, 14, 28), (7, 21, 35), (7, 25, 50), (8, 16, 32),
-        (8, 21, 55), (9, 18, 36), (9, 28, 51), (10, 20, 50), (10, 30, 60),
-        (10, 50, 100), (12, 24, 48), (12, 26, 60), (13, 34, 89), (14, 28, 56),
-        (15, 30, 60), (16, 32, 64), (20, 40, 80), (20, 50, 100), (21, 55, 144),
-        (25, 50, 100), (30, 60, 120), (50, 100, 200)
+    Used to skip re-testing graduated/active names' near-twins without a
+    giant rewrite. AND-combinations are sorted so ``a&b`` matches ``b&a``.
+    """
+    parts = [p.strip() for p in name.split("&") if p.strip()]
+    return "&".join(sorted(_canon_atom(p) for p in parts))
+
+
+def _round_period(n: int) -> int:
+    if n < 10:
+        return 5 if n < 8 else 10
+    if n < 40:
+        return int(round(n / 5.0) * 5) or 5
+    return int(round(n / 10.0) * 10) or 10
+
+
+def _canon_atom(atom: str) -> str:
+    m = re.match(r"^(sma_stack|ema_stack)_([\d_]+)$", atom)
+    if m:
+        periods = [_round_period(int(x)) for x in m.group(2).split("_") if x]
+        return f"{m.group(1)}_{'_'.join(map(str, periods))}"
+    m = re.match(r"^(sma_abv|ema_abv)_(\d+)$", atom)
+    if m:
+        return f"{m.group(1)}_{_round_period(int(m.group(2)))}"
+    m = re.match(r"^rsi_(\d+)_>(\d+)(?:_<(\d+))?$", atom)
+    if m:
+        p = _round_period(int(m.group(1)))
+        th = int(round(int(m.group(2)) / 5.0) * 5)
+        if m.group(3):
+            ov = int(round(int(m.group(3)) / 5.0) * 5)
+            return f"rsi_{p}_>{th}_<{ov}"
+        return f"rsi_{p}_>{th}"
+    m = re.match(r"^(mom|dip)_(\d+)b_(gt|lt)(\d+)pc$", atom)
+    if m:
+        lb = int(round(int(m.group(2)) / 6.0) * 6) or 6
+        thr = int(round(int(m.group(4)) / 2.0) * 2) or 2
+        return f"{m.group(1)}_{lb}b_{m.group(3)}{thr}pc"
+    m = re.match(r"^bb_(lower|upper)_(\d+)_(\d+)$", atom)
+    if m:
+        return f"bb_{m.group(1)}_{_round_period(int(m.group(2)))}_{m.group(3)}"
+    m = re.match(r"^vol_lowsm_(\d+)_(\d+)$", atom)
+    if m:
+        return f"vol_lowsm_{_round_period(int(m.group(1)))}_{_round_period(int(m.group(2)))}"
+    if atom == "sma_stack":
+        return "sma_stack_5_25_50"  # default 7,25,50 rounds near 5/25/50
+    return atom
+
+
+def generate_universe() -> list[str]:
+    """Explicit 4h universe — well-spaced names, not a cartesian product."""
+    universe: set[str] = set()
+
+    stacks = [
+        (5, 20, 50),
+        (7, 25, 50),
+        (8, 21, 55),
+        (10, 20, 50),
+        (13, 34, 89),
+        (20, 50, 100),
     ]
-    for c in ma_combos:
+    for c in stacks:
         s_name = "_".join(map(str, c))
         universe.add(f"sma_stack_{s_name}")
         universe.add(f"ema_stack_{s_name}")
 
-    # 2. Single MA Breakouts & Regime Lines
-    for ma in [5, 8, 10, 12, 14, 16, 20, 25, 30, 35, 40, 45, 50, 60, 70, 75, 80, 90, 100, 120, 144, 150, 180, 200, 250, 300]:
+    for ma in (20, 50, 100, 200):
         universe.add(f"sma_abv_{ma}")
+    for ma in (20, 50, 100):
         universe.add(f"ema_abv_{ma}")
 
-    # 3. RSI Bands & Breakouts
-    rsi_periods = [5, 7, 9, 10, 12, 14, 18, 21, 25, 28, 30]
-    rsi_thresholds = [30, 35, 38, 40, 42, 45, 48, 50, 52, 55, 57, 60, 65]
-    rsi_overbought = [70, 75, 80, 85, 90, 95]
-    for p in rsi_periods:
-        for th in rsi_thresholds:
-            universe.add(f"rsi_{p}_>{th}")
-            for ov in rsi_overbought:
-                if ov > th:
-                    universe.add(f"rsi_{p}_>{th}_<{ov}")
+    universe.update({
+        "rsi_7_>45",
+        "rsi_14_>50",
+        "rsi_14_>40",
+        "rsi_21_>50",
+        "rsi_14_>50_<70",
+        "rsi_14_>40_<70",
+        "mom_6b_gt2pc",
+        "mom_12b_gt3pc",
+        "mom_24b_gt5pc",
+        "dip_6b_lt2pc",
+        "dip_12b_lt3pc",
+        "dip_24b_lt5pc",
+        "bb_lower_20_2",
+        "bb_upper_20_2",
+        "vol_lowsm_20_90",
+        "sma_stack",  # live-empty-pool fallback
+    })
 
-    # 4. Momentum Velocity Thrusts
-    for lb in [2, 3, 4, 6, 8, 10, 12, 15, 18, 20, 24, 30, 36, 48, 60, 72, 96, 120]:
-        for thr in [1, 2, 3, 4, 5, 6, 8, 10]:
-            universe.add(f"mom_{lb}b_gt{thr}pc")
+    # A handful of AND gates that are meaningfully different — not every combo.
+    universe.update({
+        "dip_6b_lt2pc&sma_abv_50",
+        "dip_12b_lt3pc&sma_abv_100",
+        "mom_12b_gt3pc&sma_abv_50",
+        "mom_12b_gt3pc&sma_stack_7_25_50",
+        "rsi_14_>50&sma_abv_50",
+        "rsi_14_>50&sma_stack_7_25_50",
+        "bb_lower_20_2&sma_abv_50",
+        "dip_6b_lt2pc&ema_abv_50",
+        "rsi_14_>40_<70&sma_abv_50",
+        "mom_24b_gt5pc&sma_abv_200",
+        "rsi_21_>50&sma_abv_100",
+        "dip_12b_lt3pc&ema_abv_50",
+        "bb_lower_20_2&sma_stack_20_50_100",
+        "mom_6b_gt2pc&sma_abv_20",
+        "rsi_7_>45&sma_abv_50",
+    })
 
-    # 5. Mean-Reversion Dip Pullbacks
-    for lb in [2, 3, 4, 6, 8, 10, 12, 15, 18, 20, 24, 30, 36, 48, 60, 72, 96, 120]:
-        for thr in [1, 2, 3, 4, 5, 6, 8, 10]:
-            universe.add(f"dip_{lb}b_lt{thr}pc")
+    return sorted(universe)
 
-    # 6. Volatility Squeeze
-    for s_lb in [10, 15, 20, 25, 30, 40, 50]:
-        for l_lb in [45, 60, 75, 90, 120, 150]:
-            if l_lb > s_lb * 2:
-                universe.add(f"vol_lowsm_{s_lb}_{l_lb}")
 
-    # 6c. Bollinger Band Breakouts (close-only; no volume required)
-    for p in [14, 20, 30]:
-        universe.add(f"bb_lower_{p}_2")
-        universe.add(f"bb_upper_{p}_2")
-
-    # 7. Combinatorial AND pairs: Trend Gate + (Dip / Momentum / RSI / BB)
-    trend_gates = [f"sma_abv_{ma}" for ma in [20, 30, 40, 50, 75, 100, 150, 200]] + \
-                  [f"ema_abv_{ma}" for ma in [20, 30, 50, 100]] + \
-                  [f"sma_stack_{'_'.join(map(str, c))}" for c in [(5, 20, 50), (7, 25, 50), (9, 28, 51), (10, 20, 50), (20, 50, 100)]]
-
-    dip_signals = [f"dip_{lb}b_lt{thr}pc" for lb in [3, 6, 9, 12, 18, 24, 36, 48] for thr in [1, 2, 3, 4, 5, 6]]
-    mom_signals = [f"mom_{lb}b_gt{thr}pc" for lb in [3, 6, 12, 18, 24, 36, 48] for thr in [1, 2, 3, 5]]
-    rsi_signals = [f"rsi_{p}_>{th}" for p in [7, 10, 14, 21, 28] for th in [40, 45, 50, 55, 60]]
-    bb_signals = [f"bb_lower_{p}_2" for p in [14, 20]]
-
-    for t, d in itertools.product(trend_gates, dip_signals):
-        universe.add(f"{d}&{t}")
-
-    for t, m in itertools.product(trend_gates, mom_signals):
-        universe.add(f"{m}&{t}")
-
-    for t, r in itertools.product(trend_gates, rsi_signals):
-        universe.add(f"{r}&{t}")
-
-    for t, b in itertools.product(trend_gates, bb_signals):
-        universe.add(f"{b}&{t}")
-
-    rsi_oversold = [f"rsi_{p}_>{th}_<{ov}" for p in [7, 14] for th in [30, 35, 40] for ov in [60, 70]]
-    for r, d in itertools.product(rsi_oversold, dip_signals[:30]):
-        universe.add(f"{d}&{r}")
-
-    for m1, m2 in itertools.product(mom_signals[:30], mom_signals[30:70]):
-        universe.add(f"{m1}&{m2}")
-
-    return sorted(list(universe))
+def generate_5000_universe() -> list[str]:
+    """Deprecated name kept so older scripts import the (now small) universe."""
+    return generate_universe()

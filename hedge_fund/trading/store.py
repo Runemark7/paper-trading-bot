@@ -238,22 +238,32 @@ class TradeStore:
     # -- broker/account state persistence ------------------------------------
     def save_account_state(self, state: dict) -> None:
         """Persist broker + risk state so the account survives across runs."""
+        self.save_kv("broker", state)
+
+    def load_account_state(self) -> dict | None:
+        return self.load_kv("broker")
+
+    def _ensure_kv_table(self) -> None:
+        self.conn.execute(
+            """CREATE TABLE IF NOT EXISTS account_state (
+                   k TEXT PRIMARY KEY, v TEXT
+               )"""
+        )
+
+    def save_kv(self, key: str, value: dict) -> None:
+        """Persist a JSON blob under account_state (bh_start, broker, …)."""
         with sqlite_write_lock(self.path):
+            self._ensure_kv_table()
             self.conn.execute(
-                """CREATE TABLE IF NOT EXISTS account_state (
-                       k TEXT PRIMARY KEY, v TEXT
-                   )"""
-            )
-            self.conn.execute(
-                "INSERT OR REPLACE INTO account_state (k, v) VALUES ('broker', ?)",
-                (json.dumps(state),),
+                "INSERT OR REPLACE INTO account_state (k, v) VALUES (?, ?)",
+                (key, json.dumps(value)),
             )
             self.conn.commit()
 
-    def load_account_state(self) -> dict | None:
+    def load_kv(self, key: str) -> dict | None:
         try:
             row = self.conn.execute(
-                "SELECT v FROM account_state WHERE k='broker'"
+                "SELECT v FROM account_state WHERE k=?", (key,)
             ).fetchone()
         except sqlite3.OperationalError:
             return None  # table not created yet

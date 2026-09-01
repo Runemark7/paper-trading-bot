@@ -1,6 +1,10 @@
+"""Research sweep over 5m history. Does not write champions.json.
+
+Admission is 4h-only via scripts/tournament_engine.py.
+"""
 import json
 from hedge_fund.paths import state_root
-from hedge_fund.trading.universe import generate_5000_universe as generate_candidate_pool
+from hedge_fund.trading.universe import generate_universe as generate_candidate_pool
 HIST_5M = state_root() / "crypto_history_5m.json"
 import hedge_fund.backtest.strategies as bs
 from hedge_fund.backtest.stride import downsample
