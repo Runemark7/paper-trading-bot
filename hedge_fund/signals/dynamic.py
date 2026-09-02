@@ -205,7 +205,7 @@ def parse_strategy(expr: str | Callable | dict) -> Callable[[list[float], int | 
             return lambda c, i=None: (c[len(c)-1 if i is None else i] >= bollinger_bands(c, p, sd, i)[2])
 
     # 8d. Multi-timeframe wrappers are not implemented: the live cycle fetches
-    # a single 4h series. Refusing a silent same-series wrap.
+    # a single 5m series. Refusing a silent same-series wrap.
     m_mtf = re.match(r"^(daily|h1|m5|1d|4h|15m)\((.*)\)$", expr_clean)
     if m_mtf:
         tf = m_mtf.group(1)

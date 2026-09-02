@@ -5,7 +5,7 @@ This is the TradingLoop + RiskManager rule set used on the paper book
 qualification must call these helpers rather than a second engine with
 different ATR multiples, floors, or fee assumptions.
 
-Live loop stays 4h. Confidence in backtests defaults to 1.0 (no calibrated
+Live loop uses 5m bars. Confidence in backtests defaults to 1.0 (no calibrated
 posterior on the historical tape).
 """
 from __future__ import annotations

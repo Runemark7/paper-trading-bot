@@ -75,7 +75,7 @@ class CalibrationWarmupTests(unittest.TestCase):
         self.assertEqual(WARMUP_TRIALS, 20)
         with tempfile.TemporaryDirectory() as tmp:
             store = CalibrationStore(Path(tmp) / "c.json")
-            key = "BTC/USDT|4h|sma_stack_long"
+            key = "BTC/USDT|5m|sma_stack_long"
             cold, _ = store.calibrated_probability(key, proposed=0.9)
             self.assertAlmostEqual(cold, 0.9)
             for _ in range(WARMUP_TRIALS - 1):
@@ -181,7 +181,7 @@ class GraduatedPaperTokenTests(unittest.TestCase):
                 store = TradeStore(root / "trades_winner.sqlite")
                 for i in range(TRADE_EVALUATION_LIMIT):
                     tid = store.open_trade(
-                        "BTC/USDT", "4h", "sma_stack_long", 0.6, 100.0, 0.01, 0.01, lot_id=i,
+                        "BTC/USDT", "5m", "sma_stack_long", 0.6, 100.0, 0.01, 0.01, lot_id=i,
                     )
                     # Flat tape: B&H after fees is slightly negative; paper PnL beats it.
                     store.close_trade(tid, 100.0, "take_profit", 0.01, 1.0, 0.0, 1)
@@ -195,17 +195,26 @@ class GraduatedPaperTokenTests(unittest.TestCase):
 
     def test_constants_match_protocol_cited_values(self):
         import hedge_fund.trading.constants as constants
+        from hedge_fund.data.binance import DEFAULT_TIMEFRAME
         from hedge_fund.trading.constants import (
+            CYCLE_INTERVAL_SECONDS,
             DISCOVER_BATCH_SIZE,
             MAX_ACTIVE_CHAMPIONS,
             MIN_BACKTEST_SHARPE,
             MIN_BACKTEST_TRADES,
             QUAL_TIMEFRAME,
+            QUAL_WINDOW_BARS,
+            QUAL_WINDOW_DAYS,
             RISK_POLICY,
             TRADE_EVALUATION_LIMIT,
         )
 
-        self.assertEqual(QUAL_TIMEFRAME, "4h")
+        self.assertEqual(DEFAULT_TIMEFRAME, "5m")
+        self.assertEqual(QUAL_TIMEFRAME, DEFAULT_TIMEFRAME)
+        self.assertEqual(QUAL_TIMEFRAME, "5m")
+        self.assertEqual(QUAL_WINDOW_DAYS, 90)
+        self.assertEqual(QUAL_WINDOW_BARS, 90 * 24 * 12)  # 25920; not 2500 (~9 days of 5m)
+        self.assertEqual(CYCLE_INTERVAL_SECONDS, 300)
         self.assertEqual(RISK_POLICY, "rm_v1")
         self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
         self.assertEqual(MIN_BACKTEST_TRADES, 30)
@@ -235,13 +244,19 @@ class GraduatedPaperTokenTests(unittest.TestCase):
         backend = (REPO / "k8s" / "backend.yaml").read_text()
         self.assertIn("name: cycle", backend)
         self.assertIn("live_cycle.py", backend)
-        self.assertIn("sleep 3600", backend)
+        self.assertIn("sleep 300", backend)
+        self.assertNotIn("sleep 3600", backend)
         self.assertNotIn("sleep 14400", backend)
         compose = (REPO / "docker-compose.yml").read_text()
         self.assertIn("live_cycle.py", compose)
-        self.assertIn("sleep 3600", compose)
+        self.assertIn("sleep 300", compose)
+        self.assertNotIn("sleep 3600", compose)
         self.assertNotIn("sleep 14400", compose)
         self.assertTrue((REPO / "scripts" / "live_cycle.py").exists())
+        fetch = (REPO / "scripts" / "fetch_history.py").read_text()
+        self.assertIn('os.environ.get("HIST_TIMEFRAME", QUAL_TIMEFRAME)', fetch)
+        fetch5 = (REPO / "scripts" / "fetch_history_5m.py").read_text()
+        self.assertIn("qualification tape", fetch5.lower())
 
     def test_frontend_vite_entry_exists(self):
         html = REPO / "frontend" / "index.html"

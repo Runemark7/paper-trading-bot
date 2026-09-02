@@ -24,6 +24,7 @@ from hedge_fund.risk.managed import RiskManager
 from hedge_fund.trading.loop import TradingLoop
 from hedge_fund.trading.store import TradeStore
 from hedge_fund.trading.champions import load_pool
+from hedge_fund.trading.constants import QUAL_TIMEFRAME
 
 SYMBOLS = ["BTC/USDT", "ETH/USDT"]
 START_CASH = 10_000.0
@@ -47,7 +48,7 @@ class _CachedMarket:
             raise RuntimeError(f"no cached price for {symbol}")
         return px
 
-    def fetch_klines(self, symbol: str, timeframe: str = "4h", limit: int = 300,
+    def fetch_klines(self, symbol: str, timeframe: str = QUAL_TIMEFRAME, limit: int = 300,
                      since: int | None = None):
         bars = self._klines.get(symbol)
         if not bars:
@@ -71,7 +72,7 @@ def _fetch_snapshot(data: CcxtSource) -> _CachedMarket:
     for sym in SYMBOLS:
         try:
             prices[sym] = data.fetch_price(sym)
-            klines[sym] = data.fetch_klines(sym, "4h", limit=300)
+            klines[sym] = data.fetch_klines(sym, QUAL_TIMEFRAME, limit=300)
         except Exception as e:
             print(f"[data error for {sym}]: {e}")
     return _CachedMarket(prices, klines)

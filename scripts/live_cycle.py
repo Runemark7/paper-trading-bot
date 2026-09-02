@@ -4,7 +4,7 @@ SEQUENCE (matches the former Hermes ``paperbot-live-cycle`` cron):
 1. Continuous discovery / tournament qualification
 2. Isolated €10k paper cycle across champion accounts
 3. Sync live results / graduation
-4. Print hourly status report (pod logs; optional Telegram later)
+4. Print status report (pod logs; optional Telegram later)
 
 Exit non-zero if the trading step fails; discovery/report failures are logged
 but do not block the rest of the cycle.

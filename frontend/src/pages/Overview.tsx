@@ -52,7 +52,7 @@ export default function Overview() {
             heartbeat: {hb?.last_pass_at ? (hb.recent ? "recent stamp" : "last-known stamp") : "no stamp"}
           </Badge>
           <Badge tone="neutral">
-            cycle {cycle ? cadenceLabel(cycle.interval_seconds) : "…"} · {cycle?.bar_timeframe ?? "4h"} bars
+            cycle {cycle ? cadenceLabel(cycle.interval_seconds) : "…"} · {cycle?.bar_timeframe ?? "5m"} bars
           </Badge>
         </div>
 

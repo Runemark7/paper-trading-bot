@@ -80,10 +80,11 @@ spec:
             - name: state-storage
               mountPath: /app/state
 
-        # Hourly Hermes live-cycle (07–21 Europe/Stockholm): tournament discovery
-        # → run_isolated → collect_live_results → hourly_report. Same pod as
-        # heartbeat/web so they share the RWO PVC; SQLite WAL + file lock
-        # serializes writers. Replaces Hermes cron paperbot-live-cycle.
+        # 5-minute decision cycle (07–21 Europe/Stockholm): tournament discovery
+        # → run_isolated → collect_live_results → hourly_report. Sleep 300s so
+        # 5m bars can trade on close (hourly sleep would still trade ~once/hour).
+        # Same pod as heartbeat/web so they share the RWO PVC; SQLite WAL +
+        # file lock serializes writers. Replaces Hermes cron paperbot-live-cycle.
         - name: cycle
           image: ghcr.io/runemark7/paper-trading-bot/backend:latest
           imagePullPolicy: IfNotPresent
@@ -98,7 +99,7 @@ spec:
                 else
                   echo "live_cycle: outside 07-21 Stockholm (H=$H), skip"
                 fi
-                sleep 3600
+                sleep 300
               done
           env:
             - name: PAPER_STATE

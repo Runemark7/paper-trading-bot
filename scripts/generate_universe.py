@@ -1,6 +1,6 @@
 """CLI wrapper around hedge_fund.trading.universe.
 
-Does not emit daily()/h1()/m5() or MFI: the live cycle is a single 4h
+Does not emit daily()/h1()/m5() or MFI: the live cycle is a single 5m
 close series without a volume-aware MFI path. Universe is an explicit
 ~50-name list (not thousands of combinatorial clones).
 """

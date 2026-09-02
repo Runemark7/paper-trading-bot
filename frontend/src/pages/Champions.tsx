@@ -353,7 +353,7 @@ export default function Champions() {
         }
       >
         <div className="text-sm text-white/60 mb-3">
-          Last-known backtest evaluations (4h history, same tape as live). This is not a
+          Last-known backtest evaluations (5m history, same tape as live). This is not a
           live stream. If the API cannot see a running job, there is no spinner.
         </div>
 

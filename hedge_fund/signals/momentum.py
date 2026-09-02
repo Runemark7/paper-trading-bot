@@ -105,8 +105,8 @@ def compute_signal(
         raise ValueError(f"need >=2 bars for {symbol} {timeframe}, got {len(closes)}")
     price = closes[-1]
     f = Features(
-        mom_4h=momentum(closes, lookback=4),   # ~ one day
-        mom_1d=momentum(closes, lookback=24),  # five 4h days
+        mom_4h=momentum(closes, lookback=4),   # 4 bars (~20 min on 5m)
+        mom_1d=momentum(closes, lookback=24),  # 24 bars (~2 hours on 5m)
         rsi=rsi(closes, 14),
         ema_20=ema(closes, 20),
         price=price,

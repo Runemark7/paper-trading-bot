@@ -1,8 +1,8 @@
 """Fast candidate backtesting & replenishment engine.
 
-Does not admit from 5m history. Delegates to the 4h tournament gate
+Admits from 5m history via the tournament gate
 (scripts/tournament_engine.replenish_and_evaluate). Replenish only runs
-when the pool is below MAX_ACTIVE_CHAMPIONS (20).
+when the pool is below MAX_ACTIVE_CHAMPIONS (20). 4h history does not admit.
 """
 from __future__ import annotations
 
@@ -20,13 +20,13 @@ from scripts.tournament_engine import replenish_and_evaluate
 
 
 def replenish_pool(stride: int = 1, recent_bars: int = 0) -> dict:
-    _ = stride, recent_bars  # 5m stride sweeps no longer admit
+    _ = stride, recent_bars  # stride sweeps no longer admit; native 5m only
     res = replenish_and_evaluate()
     res = dict(res)
     res["replenished"] = res.get("admitted_new_count", 0) > 0
     res["target"] = MAX_ACTIVE_CHAMPIONS
     if not res["replenished"]:
-        res.setdefault("reason", res.get("reason") or "no 4h-qualified free-slot admits")
+        res.setdefault("reason", res.get("reason") or "no 5m-qualified free-slot admits")
     return res
 
 

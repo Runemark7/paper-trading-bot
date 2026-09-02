@@ -1,7 +1,7 @@
 """Rapid position heartbeat — enforce stop-loss / take-profit fast.
 
 Runs frequently (a few minutes cadence) to re-price open paper positions and
-close any lot that breaches its stop or hits take-profit IMMEDIATELY (not 4h
+close any lot that breaches its stop or hits take-profit IMMEDIATELY (not 5m
 later). This is the essential risk-management heartbeat: a 2.5% stop can be
 breached in minutes in crypto, and a slow check lets it blow straight through.
 

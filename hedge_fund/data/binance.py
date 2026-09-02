@@ -58,7 +58,7 @@ class CcxtSource:
     def fetch_klines(
         self,
         symbol: str,
-        timeframe: str = "4h",
+        timeframe: str = "5m",
         limit: int = 500,
         since: int | None = None,
     ) -> list[Candle]:
@@ -88,4 +88,4 @@ class CcxtSource:
 
 # Convenience: the two symbols we trade and a set of supported timeframes.
 SUPPORTED_SYMBOLS = ("BTC/USDT", "ETH/USDT")
-DEFAULT_TIMEFRAME = "4h"
+DEFAULT_TIMEFRAME = "5m"

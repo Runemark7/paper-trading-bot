@@ -1,25 +1,29 @@
 """Fetch deep crypto close history and persist it (not /tmp).
 
-Default 1h timeframe, paginating BACKWARD (Binance gives the most recent N first;
-to go deeper you must set `since` to just before the OLDEST bar of the current
-page). Persists to <PAPER_STATE>/crypto_history_<tf>.json and mirrors to /tmp
-for legacy tools.
+Default **5m** (QUAL_TIMEFRAME) — the admit tape. Paginating BACKWARD
+(Binance gives the most recent N first; to go deeper you must set `since`
+to just before the OLDEST bar of the current page). Persists to
+<PAPER_STATE>/crypto_history_<tf>.json and mirrors to /tmp for legacy tools.
 
-Discovery qualification reads crypto_history_4h.json (HIST_TIMEFRAME=4h).
-5m fetches must not admit champions.
+Discovery qualification reads crypto_history_5m.json (HIST_TIMEFRAME=5m).
+4h fetches may remain for research; they must not admit champions.
 
 Usage:
+  python scripts/fetch_history.py
+  HIST_TIMEFRAME=5m HIST_BARS=80000 python scripts/fetch_history.py
   HIST_TIMEFRAME=4h HIST_BARS=20000 python scripts/fetch_history.py
-  HIST_TIMEFRAME=1h HIST_BARS=8000 python scripts/fetch_history.py
 """
-import sys, json, os, time
+import json, os, time
 from pathlib import Path
 from hedge_fund.paths import state_root
 from hedge_fund.data.binance import CcxtSource
+from hedge_fund.trading.constants import QUAL_TIMEFRAME, QUAL_N_WINDOWS, QUAL_WINDOW_BARS
 from datetime import datetime, timezone
 
-DEFAULT_TF = os.environ.get("HIST_TIMEFRAME", "1h")
-DEFAULT_BARS = int(os.environ.get("HIST_BARS", "70000"))  # ~7 years of 1h bars
+DEFAULT_TF = os.environ.get("HIST_TIMEFRAME", QUAL_TIMEFRAME)
+# Cover 3 walk-forward windows on 5m (~90d each → ~77760 bars) plus slack.
+_DEFAULT_BARS = QUAL_WINDOW_BARS * QUAL_N_WINDOWS + 3000 if DEFAULT_TF == QUAL_TIMEFRAME else 70000
+DEFAULT_BARS = int(os.environ.get("HIST_BARS", str(_DEFAULT_BARS)))
 STATE_DIR = state_root()
 OUT = STATE_DIR / f"crypto_history_{DEFAULT_TF}.json"
 SYMBOLS = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT"]

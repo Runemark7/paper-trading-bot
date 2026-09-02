@@ -98,8 +98,8 @@ def _close(store, calib, symbol, pos, fill, reason) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--symbol", default="BTC/USDT")
-    ap.add_argument("--timeframe", default="4h")
-    ap.add_argument("--bars", type=int, default=1500)  # ~8 months of 4h
+    ap.add_argument("--timeframe", default="5m")
+    ap.add_argument("--bars", type=int, default=8000)  # ~28 days of 5m
     ap.add_argument("--state", default="state")
     args = ap.parse_args()
 

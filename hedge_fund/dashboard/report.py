@@ -27,6 +27,7 @@ from hedge_fund.risk.managed import (
     RISK_FRAC,
 )
 from hedge_fund.trading.constants import (
+    CYCLE_INTERVAL_SECONDS,
     DISCOVER_BATCH_SIZE,
     GRADUATED_PAPER,
     MAX_ACTIVE_CHAMPIONS,
@@ -163,16 +164,17 @@ def strategy_rules_section() -> str:
     slip_bps = f"{SLIPPAGE * 10_000:.0f}bps"
     return f"""
 <h2>Strategies &amp; tests</h2>
-<div class="sm">Live experiment (PROTOCOL amendments 2026-08-30 and 2026-09-01): an isolated-account
+<div class="sm">Live experiment (PROTOCOL amendments 2026-08-30, 2026-09-01, and 2026-09-02): an isolated-account
 <b>paper</b> tournament of TA rules on BTC/USDT and ETH/USDT, <b>{QUAL_TIMEFRAME}</b> bars.
 Discovery qualifies on the same {QUAL_TIMEFRAME} tape and <code>{RISK_POLICY}</code> stop/size as
-<code>TradingLoop.run_cycle</code>. 5m history is not the admit bar. Not real money.</div>
+<code>TradingLoop.run_cycle</code>. 4h history is not the admit bar. Not real money.</div>
 
 <h3 style="margin:14px 0 4px">What is live</h3>
 <div class="wrap"><table><thead><tr>
 <th>Piece</th><th>What actually runs</th>
 </tr></thead><tbody>
-<tr><td>Universe</td><td>Explicit ~50-name 4h list (was 3546 combinatorial clones). <code>daily()</code>/<code>h1()</code>/<code>m5()</code> and MFI are not generated. Empty-pool fallback: <code>PAPER_STRATEGY=sma_stack</code>. Discover batch {DISCOVER_BATCH_SIZE} untested names.</td></tr>
+<tr><td>Universe</td><td>Explicit ~50-name 5m list (was 3546 combinatorial clones). Lookbacks in names are bar counts (e.g. <code>dip_24b</code> = 24×5m = 2 hours). <code>daily()</code>/<code>h1()</code>/<code>m5()</code> and MFI are not generated. Empty-pool fallback: <code>PAPER_STRATEGY=sma_stack</code>. Discover batch {DISCOVER_BATCH_SIZE} untested names.</td></tr>
+<tr><td>Decision cycle</td><td>Every {CYCLE_INTERVAL_SECONDS}s on {QUAL_TIMEFRAME} closes. Sidecar skips outside 07–21 Europe/Stockholm. Heartbeat stays frequent and does not open trades.</td></tr>
 <tr><td>Accounts</td><td>One €10k paper book per champion (<code>run_isolated</code>), cap <code>MAX_ACTIVE_CHAMPIONS={MAX_ACTIVE_CHAMPIONS}</code>. Replenish only into free slots. <code>run.py</code> uses the same cycle on a single account (champion override, else sma_stack).</td></tr>
 <tr><td>Stated probability</td><td>Beta-Binomial calibration of a deterministic RSI/score heuristic — not an LLM, not a constant 0.60. Cold-start blends the proposal; after 20 trials the posterior mean dominates.</td></tr>
 <tr><td>Admit bar</td><td>OOS/test only. Every window test PnL ≥ 0; ≥ {MIN_BACKTEST_TRADES} OOS trades; OOS Sharpe ≥ {MIN_BACKTEST_SHARPE:.2f}; must beat buy-and-hold and <code>sma_stack</code> after fees. Train PnL does not enter the score.</td></tr>

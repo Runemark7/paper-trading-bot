@@ -1,11 +1,12 @@
 """Combinatorial paper-strategy universe.
 
-The live cycle fetches a single 4h close series (no 1h/5m bars, and
+The live cycle fetches a single 5m close series (no 1h/4h bars, and
 parse_strategy is close-only). This generator therefore does not emit
 daily()/h1()/m5() wrappers or MFI rules — those would be silent lies.
 
 Amendment 2026-09-01: explicit ~50-name universe instead of ~3500
 combinatorial clones. Near-duplicate keys collapse tiny param tweaks.
+Lookbacks in names (e.g. dip_24b) are bar counts: on 5m, 24 bars = 2 hours.
 """
 from __future__ import annotations
 
@@ -67,7 +68,7 @@ def _canon_atom(atom: str) -> str:
 
 
 def generate_universe() -> list[str]:
-    """Explicit 4h universe — well-spaced names, not a cartesian product."""
+    """Explicit 5m universe — well-spaced names, not a cartesian product."""
     universe: set[str] = set()
 
     stacks = [

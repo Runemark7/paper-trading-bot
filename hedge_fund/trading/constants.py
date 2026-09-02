@@ -1,7 +1,8 @@
 """Live paper-tournament constants. Single source of truth.
 
 Imported by champions, tournament, and dashboard. PROTOCOL amendment
-2026-09-01 cites these values. Do not document a 5m admit bar, Sharpe 0.10,
+2026-09-02 cites these values (5m live/admit, 300s decision cycle).
+Do not document a 4h live book, hourly-only decisions, Sharpe 0.10,
 WR 38%, 4-trade minimum, 25-trade graduation, or arena capacity 1000.
 """
 
@@ -10,13 +11,16 @@ from __future__ import annotations
 from hedge_fund.data.binance import DEFAULT_TIMEFRAME, SUPPORTED_SYMBOLS
 
 # --- Tape (same game for qualification and live) ---
-# Live TradingLoop / CcxtSource / PROTOCOL: 4h bars. 5m is discovery-history
-# only and must not admit champions.
-QUAL_TIMEFRAME = DEFAULT_TIMEFRAME  # "4h"
+# Live TradingLoop / CcxtSource / PROTOCOL: 5m bars. 4h history may remain
+# on disk unused; it must not admit champions.
+QUAL_TIMEFRAME = DEFAULT_TIMEFRAME  # "5m"
 QUAL_SYMBOLS = SUPPORTED_SYMBOLS  # BTC/USDT, ETH/USDT
 QUAL_N_WINDOWS = 3
-QUAL_WINDOW_BARS = 2500  # ~1.4y of 4h per window; total span = this × n_windows
-QUAL_STRIDE = 1  # native 4h; do not downsample a 5m tape
+# ~90 calendar days of 5m per window (90 * 24 * 12). 2500 was ~1.4y of 4h
+# and would be only ~9 days of 5m — too short for OOS to mean anything.
+QUAL_WINDOW_DAYS = 90
+QUAL_WINDOW_BARS = QUAL_WINDOW_DAYS * 24 * 12  # 25920
+QUAL_STRIDE = 1  # native 5m; do not downsample
 RISK_POLICY = "rm_v1"
 
 # Discovery qualification (scripts/tournament_engine.py). Gates use OOS/test
@@ -40,5 +44,6 @@ GRADUATED_PAPER = "GRADUATED_PAPER"
 REJECTED_NEGATIVE_PNL = "REJECTED_NEGATIVE_PNL"
 
 # Decision-cycle cadence. k8s cycle sidecar and compose scheduler must match.
-# This is the job interval (hourly), not the bar timeframe (4h).
-CYCLE_INTERVAL_SECONDS = 3600  # 1 hour (07–21 Stockholm window in the sidecar)
+# This is the job interval (5 minutes), aligned with the 5m bar close.
+# Sidecar still skips outside 07–21 Europe/Stockholm.
+CYCLE_INTERVAL_SECONDS = 300  # 5 minutes (07–21 Stockholm window in the sidecar)

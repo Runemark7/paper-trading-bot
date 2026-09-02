@@ -53,6 +53,49 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertIn("same game", text.lower())
         self.assertIn("5m tape was **discovery-only**", text)
         self.assertIn("MIN_BACKTEST_SHARPE = 0.30", text)
+        self.assertIn("CYCLE_INTERVAL_SECONDS = 3600", text)
+
+    def test_amendment_2026_09_02(self):
+        from hedge_fund.trading.constants import (
+            CYCLE_INTERVAL_SECONDS,
+            MAX_ACTIVE_CHAMPIONS,
+            MIN_BACKTEST_SHARPE,
+            MIN_BACKTEST_TRADES,
+            QUAL_TIMEFRAME,
+            QUAL_WINDOW_BARS,
+            QUAL_WINDOW_DAYS,
+            RISK_POLICY,
+            TRADE_EVALUATION_LIMIT,
+        )
+
+        text = (REPO / "PROTOCOL.md").read_text()
+        self.assertIn("Amendment 2026-09-02", text)
+        self.assertIn("2026-09-02", text)
+        self.assertEqual(QUAL_TIMEFRAME, "5m")
+        self.assertIn(QUAL_TIMEFRAME, text)
+        self.assertIn("5m", text)
+        self.assertIn("CYCLE_INTERVAL_SECONDS = 300", text)
+        self.assertEqual(CYCLE_INTERVAL_SECONDS, 300)
+        self.assertIn("07–21 Europe/Stockholm", text)
+        self.assertIn("24 × 5m = **2 hours**", text)
+        self.assertIn("not 24 × 4h = 4 days", text)
+        self.assertIn("dip_24b_lt1pc", text)
+        self.assertIn("GRADUATED_PAPER", text)
+        self.assertIn("Paper only", text)
+        self.assertIn(RISK_POLICY, text)
+        self.assertIn(str(MAX_ACTIVE_CHAMPIONS), text)
+        self.assertIn(str(TRADE_EVALUATION_LIMIT), text)
+        self.assertIn(str(MIN_BACKTEST_TRADES), text)
+        self.assertIn("0.30", text)
+        self.assertEqual(QUAL_WINDOW_DAYS, 90)
+        self.assertEqual(QUAL_WINDOW_BARS, 25920)
+        self.assertIn("25920", text)
+        self.assertIn("90 calendar days", text)
+        self.assertNotEqual(QUAL_WINDOW_BARS, 2500)
+        self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
+        # 4h remains as historical 09-01 text, but 09-02 names the supersession.
+        self.assertIn("5m is the admit tape", text)
+        self.assertIn("live and admit are 5m", text)
 
 
 class IsolatedRunnerTests(unittest.TestCase):
@@ -109,7 +152,7 @@ class DashboardRulesTests(unittest.TestCase):
         from hedge_fund.dashboard.report import strategy_rules_section
         from hedge_fund.risk.managed import RISK_FRAC, MAX_OPEN_RISK_FRAC, MAX_DRAWDOWN
         from hedge_fund.trading.loop import ATR_STOP_MULT, ATR_PERIOD, STOP_FLOOR_FRAC
-        from hedge_fund.trading.constants import GRADUATED_PAPER, TRADE_EVALUATION_LIMIT
+        from hedge_fund.trading.constants import GRADUATED_PAPER, QUAL_TIMEFRAME, TRADE_EVALUATION_LIMIT
 
         html = strategy_rules_section()
         self.assertNotIn("2.5% below entry (hard)", html)
@@ -128,6 +171,9 @@ class DashboardRulesTests(unittest.TestCase):
         self.assertIn("TradingLoop.run_cycle", html)
         self.assertIn(GRADUATED_PAPER, html)
         self.assertNotIn("READY_FOR_LIVE", html)
+        self.assertIn(QUAL_TIMEFRAME, html)
+        self.assertNotIn("5m history is not the admit bar", html)
+        self.assertIn("Every 300s", html)
 
 
 class SharedCycleTests(unittest.TestCase):
@@ -159,11 +205,11 @@ class SharedCycleTests(unittest.TestCase):
             def fetch_price(self, symbol):
                 return entry
 
-            def fetch_klines(self, symbol, timeframe="4h", limit=300, since=None):
+            def fetch_klines(self, symbol, timeframe="5m", limit=300, since=None):
                 return candles
 
         long_sig = Signal(
-            symbol="BTC/USDT", timeframe="4h", condition="sma_stack_long",
+            symbol="BTC/USDT", timeframe="5m", condition="sma_stack_long",
             features=Features(rsi=55.0, price=entry), direction="long", raw_score=0.5,
         )
 

@@ -12,7 +12,7 @@ Design principles
    logged against every trade and shown on the dashboard — is the calibrated
    estimate derived from the signal condition's own history.
 
-2. **Beta-Binomial online update.** Each signal condition (e.g. "BTC 4h
+2. **Beta-Binomial online update.** Each signal condition (e.g. "BTC 5m
    momentum > 0 AND RSI in 35-45") keeps a Beta(alpha, beta) posterior over
    its unknown success rate. Each outcome adds a success (price went the
    predicted way) or a failure. The posterior mean is the quoted probability;

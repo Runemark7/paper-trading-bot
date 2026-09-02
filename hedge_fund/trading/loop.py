@@ -74,7 +74,7 @@ class TradingLoop:
         store: TradeStore | None = None,
         regime: "RegimeGate | None" = None,
         timeframe: str = QUAL_TIMEFRAME,
-        horizon_bars: int = 6,  # ~1 day at 4h; success = close above entry at horizon
+        horizon_bars: int = 6,  # ~30 min at 5m; success = close above entry at horizon
         kline_limit: int = 300,
         strategy: str = "sma_stack",
         strategies: list[str] | None = None,
