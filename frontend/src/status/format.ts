@@ -53,6 +53,36 @@ export function accountLabel(raw?: string): string {
   return raw.startsWith("trades_") ? raw.slice("trades_".length) : raw;
 }
 
+/** Same slug as hedge_fund.trading.open_lots.account_slug. */
+export function accountSlug(name: string): string {
+  return name.replace(/[/:]/g, "_");
+}
+
+/**
+ * Keys that identify one paper account: champion name, open_lots.py slug
+ * (/ and : → _), and the trades_* sqlite stem /api/live stamps on rows.
+ */
+export function paperAccountKeys(name: string): string[] {
+  const stripped = name.startsWith("trades_") ? name.slice("trades_".length) : name;
+  const slug = accountSlug(name);
+  const strippedSlug = accountSlug(stripped);
+  return [...new Set([name, slug, stripped, strippedSlug, `trades_${slug}`, `trades_${strippedSlug}`])];
+}
+
+export function accountsMatch(account: string | undefined, championName: string): boolean {
+  if (!account) return false;
+  const champ = new Set(paperAccountKeys(championName));
+  return paperAccountKeys(account).some((k) => champ.has(k));
+}
+
+export function lotsForChampion(
+  positions: LivePosition[] | undefined,
+  championName: string,
+): LivePosition[] {
+  if (!positions?.length) return [];
+  return positions.filter((p) => accountsMatch(p.account, championName));
+}
+
 /** Shared UI count: open lots, never champion/account rows. */
 export function openLotsTotal(
   live?: { open_lots?: number; positions?: LivePosition[] } | null,
