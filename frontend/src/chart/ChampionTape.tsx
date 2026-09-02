@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { api, CANDLE_LIMIT } from "../api/client";
 import type { ChartSymbol } from "../api/types";
 import { Empty, fmt, fmtPct } from "../components/ui";
+import { LotHealthChips } from "../status/LotHealth";
 import { openLotsByPair } from "../status/format";
 import PaperChart from "./PaperChart";
 import {
@@ -74,10 +75,15 @@ function TradeLegend({
       {openLots.map(({ n, lot }) => (
         <li
           key={`open-${lot.account ?? ""}-${lot.lot_id}`}
-          className="text-xs leading-relaxed text-white/75 min-w-0 break-all [overflow-wrap:anywhere]"
+          className="text-xs leading-relaxed text-white/75 min-w-0 space-y-1"
         >
-          <span className="text-sky-300 font-medium">Trade {n} open</span>
-          {" · "}entry {fmt(lot.entry)} · stop {fmt(lot.stop)} · TP {fmt(lot.take_profit)}
+          <div className="flex flex-wrap items-center gap-1 min-w-0">
+            <span className="text-sky-300 font-medium shrink-0">Trade {n} open</span>
+            <LotHealthChips lot={lot} extra />
+          </div>
+          <div className="break-all [overflow-wrap:anywhere]">
+            entry {fmt(lot.entry)} · stop {fmt(lot.stop)} · TP {fmt(lot.take_profit)}
+          </div>
         </li>
       ))}
       {closedShown.map(({ n, trade }) => (
@@ -165,8 +171,9 @@ export default function ChampionTape({
       {!compact && (
         <p className="text-xs text-white/45 leading-relaxed min-w-0 break-words">
           This tape is {championName} on {symbol} only. Open lots: entry + stop + take-profit (2:1 vs
-          stop, same as live). Closed lots: numbered open/close marks — no stop/TP lines. Labels sit
-          in the list, not on the candles.
+          stop, same as live) plus this-bar signal (on vs would exit) and path (near stop / mid /
+          near TP — mid is the middle of stop–TP, not a third strategy state). Closed lots: numbered
+          open/close marks — no stop/TP lines. Labels sit in the list, not on the candles.
         </p>
       )}
     </div>

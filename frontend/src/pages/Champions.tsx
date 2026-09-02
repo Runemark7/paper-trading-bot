@@ -1,19 +1,18 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchChampions, fetchGraduated, fetchDiscovery, api } from "../api/client";
-import type { LivePosition } from "../api/types";
+import type { OpenLot } from "../api/types";
 import ChampionTape from "../chart/ChampionTape";
 import { Card, fmt, Badge, Empty, MonoName, Field, FieldGrid, PhoneCards, DesktopTable } from "../components/ui";
+import { LotHealthChips, LotHealthSummaryChips } from "../status/LotHealth";
 import {
   accountSlug,
   accountsMatch,
   certaintyLabel,
   fmtWhen,
-  lotsForChampion,
+  lotUnrealized,
   openLotsByPair,
-  positionEntry,
-  positionPnl,
-  positionStop,
+  openLotsForChampion,
 } from "../status/format";
 
 /** Always-visible BTC vs ETH lot counts. Short chips so they wrap on a phone. */
@@ -33,31 +32,36 @@ function PairLotChips({ btc, eth }: { btc: number | string; eth: number | string
   );
 }
 
-function ChampionLotList({ lots }: { lots: LivePosition[] }) {
+function ChampionLotList({ lots }: { lots: OpenLot[] }) {
   return (
     <>
+      <p className="text-xs text-white/45 leading-relaxed min-w-0 break-words">
+        Each row is one lot. Signal is the latest 5m predicate (on vs would exit). Path is
+        where now sits between this lot&apos;s stop and 2:1 TP — mid is the middle of that
+        range, not a third strategy state.
+      </p>
       <PhoneCards>
-        {lots.map((p, i) => {
-          const pnl = positionPnl(p);
+        {lots.map((lot, i) => {
+          const pnl = lotUnrealized(lot);
           return (
             <li
-              key={`${p.account ?? ""}-${p.symbol}-${i}`}
+              key={`${lot.account ?? ""}-${lot.symbol}-${lot.lot_id}-${i}`}
               className="rounded-lg border border-white/10 p-3 space-y-2 min-w-0 overflow-hidden"
             >
               <div className="flex items-baseline justify-between gap-2 min-w-0">
-                <span className="font-medium min-w-0 truncate">{p.symbol}</span>
+                <span className="font-medium min-w-0 truncate">{lot.symbol}</span>
                 <span className={`shrink-0 ${(pnl ?? 0) >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
                   {pnl != null ? fmt(pnl) : "—"}
                 </span>
               </div>
+              <LotHealthChips lot={lot} extra />
               <FieldGrid>
                 <Field label="Condition" span mono>
-                  {p.condition ?? "—"}
+                  {lot.condition ?? "—"}
                 </Field>
-                <Field label="Lots">{p.lot_count ?? 1}</Field>
-                <Field label="Entry">{fmt(positionEntry(p))}</Field>
-                <Field label="Stop">{fmt(positionStop(p))}</Field>
-                <Field label="Now">{p.current != null ? fmt(p.current) : "—"}</Field>
+                <Field label="Entry">{fmt(lot.entry)}</Field>
+                <Field label="Stop">{fmt(lot.stop)}</Field>
+                <Field label="Now">{lot.current != null ? fmt(lot.current) : "—"}</Field>
                 <Field label="P&L">
                   <span className={(pnl ?? 0) >= 0 ? "text-emerald-400" : "text-rose-400"}>
                     {pnl != null ? fmt(pnl) : "—"}
@@ -73,8 +77,8 @@ function ChampionLotList({ lots }: { lots: LivePosition[] }) {
           <thead className="text-white/40 text-xs uppercase">
             <tr>
               <th className="text-left py-2">Symbol</th>
+              <th className="text-left">Health</th>
               <th className="text-left">Condition</th>
-              <th className="text-right">Lots</th>
               <th className="text-right">Entry</th>
               <th className="text-right">Stop</th>
               <th className="text-right">Now</th>
@@ -82,16 +86,21 @@ function ChampionLotList({ lots }: { lots: LivePosition[] }) {
             </tr>
           </thead>
           <tbody>
-            {lots.map((p, i) => {
-              const pnl = positionPnl(p);
+            {lots.map((lot, i) => {
+              const pnl = lotUnrealized(lot);
               return (
-                <tr key={`${p.account ?? ""}-${p.symbol}-${i}`} className="border-t border-white/5">
-                  <td className="py-2 font-medium">{p.symbol}</td>
-                  <td className="text-white/60 font-mono text-xs break-all">{p.condition ?? "—"}</td>
-                  <td className="text-right">{p.lot_count ?? 1}</td>
-                  <td className="text-right">{fmt(positionEntry(p))}</td>
-                  <td className="text-right">{fmt(positionStop(p))}</td>
-                  <td className="text-right">{p.current != null ? fmt(p.current) : "—"}</td>
+                <tr
+                  key={`${lot.account ?? ""}-${lot.symbol}-${lot.lot_id}-${i}`}
+                  className="border-t border-white/5"
+                >
+                  <td className="py-2 font-medium">{lot.symbol}</td>
+                  <td className="py-2">
+                    <LotHealthChips lot={lot} extra />
+                  </td>
+                  <td className="text-white/60 font-mono text-xs break-all">{lot.condition ?? "—"}</td>
+                  <td className="text-right">{fmt(lot.entry)}</td>
+                  <td className="text-right">{fmt(lot.stop)}</td>
+                  <td className="text-right">{lot.current != null ? fmt(lot.current) : "—"}</td>
                   <td className={`text-right ${(pnl ?? 0) >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
                     {pnl != null ? fmt(pnl) : "—"}
                   </td>
@@ -110,7 +119,7 @@ function ExpandedChampionLots({
   liveReady,
   knownCount,
 }: {
-  lots: LivePosition[];
+  lots: OpenLot[];
   liveReady: boolean;
   knownCount: number;
 }) {
@@ -182,7 +191,7 @@ export default function Champions() {
               const panelId = `champion-lots-${accountSlug(c.name)}`;
               const knownCount = c.open_lots ?? 0;
               const split = openLotsByPair(qLive.data, c.name);
-              const lots = isOpen ? lotsForChampion(qLive.data?.positions, c.name) : [];
+              const lots = openLotsForChampion(qLive.data, c.name);
               const liveLotsKnown = qLive.data != null;
               return (
                 <li key={c.name} className="rounded-lg border border-white/10 min-w-0 overflow-hidden">
@@ -205,10 +214,13 @@ export default function Champions() {
                         </span>
                       </span>
                     </div>
-                    <PairLotChips
-                      btc={liveLotsKnown ? split.btc : "—"}
-                      eth={liveLotsKnown ? split.eth : "—"}
-                    />
+                    <div className="flex flex-wrap items-center gap-1 min-w-0">
+                      <PairLotChips
+                        btc={liveLotsKnown ? split.btc : "—"}
+                        eth={liveLotsKnown ? split.eth : "—"}
+                      />
+                      <LotHealthSummaryChips lots={lots} />
+                    </div>
                     <FieldGrid>
                       <Field label="Open lots">{liveLotsKnown ? split.total : knownCount}</Field>
                       <Field label={`Closed (of ${evalLimit})`}>{c.closed} / {evalLimit}</Field>

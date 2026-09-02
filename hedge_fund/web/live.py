@@ -47,13 +47,21 @@ def _open_lot_entry_times(st: TradeStore) -> dict[tuple, str]:
     return out
 
 
-def serialize_open_lot(lot, times: dict | None = None, account: str | None = None) -> dict:
-    """One pyramid lot: entry / stop / take-profit, numbered later by the chart."""
+def serialize_open_lot(
+    lot,
+    times: dict | None = None,
+    account: str | None = None,
+    mark: float | None = None,
+    candles: list | None = None,
+) -> dict:
+    """One pyramid lot: entry / stop / TP plus this-bar signal and path-in-trade."""
+    from hedge_fund.web.lot_health import annotate_open_lot
+
     times = times or {}
     entry = float(lot.entry_price)
     stop = float(lot.stop_loss)
     tp = take_profit_price(entry, stop)
-    return {
+    row = {
         "lot_id": lot.lot_id,
         "symbol": lot.ticker,
         "entry": round(entry, 2),
@@ -64,6 +72,12 @@ def serialize_open_lot(lot, times: dict | None = None, account: str | None = Non
         "entry_ts": times.get((lot.ticker, lot.lot_id)),
         "account": account,
     }
+    return annotate_open_lot(
+        row,
+        mark=mark,
+        candles=candles,
+        strategy_account=account,
+    )
 
 
 def live_prices(fresh: bool = False) -> dict:
@@ -92,13 +106,20 @@ def live_prices(fresh: bool = False) -> dict:
     return _PRICE_CACHE["prices"]
 
 
-def live_preview(db: str) -> dict:
+def live_preview(db: str, closes_by_symbol: dict | None = None) -> dict:
     """Compute live equity + per-position live P&L from persisted account state.
+
+    ``closes_by_symbol`` is 5m OHLCV fetched once by ``/api/live`` (BTC + ETH).
+    When omitted or a symbol is missing, ``signal`` is ``unknown`` and ``path``
+    still comes from the last mark vs this lot's stop/TP.
 
     Returns a dict the dashboard can render directly.
     """
     from hedge_fund.brokers.paper import PaperBroker
+    from hedge_fund.trading.open_lots import account_name_from_db
 
+    closes_by_symbol = closes_by_symbol or {}
+    account = account_name_from_db(db)
     st = TradeStore(db)
     saved = st.load_account_state()
     if not saved:
@@ -150,7 +171,16 @@ def live_preview(db: str) -> dict:
         stop = round(min((l.stop_loss for l in b["lots"]), default=0), 2)
         upnl = round(unrealized, 2) if unrealized is not None else None
         upct = round(upnl_pct, 4) if upnl_pct is not None else None
-        lot_rows = [serialize_open_lot(l, times) for l in b["lots"]]
+        lot_rows = [
+            serialize_open_lot(
+                l,
+                times,
+                account=account,
+                mark=prices.get(l.ticker),
+                candles=closes_by_symbol.get(l.ticker),
+            )
+            for l in b["lots"]
+        ]
         positions.append(
             {
                 "symbol": sym,

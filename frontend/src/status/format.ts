@@ -1,4 +1,4 @@
-import type { LivePosition, OpenLot } from "../api/types";
+import type { LivePosition, LivePreview, LotGate, LotPath, LotSignal, OpenLot } from "../api/types";
 
 export function fmtWhen(iso?: string | null): string {
   if (!iso) return "never recorded";
@@ -129,6 +129,96 @@ export function openLotsByPair(
     addPairLots(split, p.symbol, lotCount(p));
   }
   return split;
+}
+
+/** Flatten /api/live lots[] (one row per pyramid lot). Fallback: nested position lots. */
+export function flatOpenLots(live?: LivePreview | null): OpenLot[] {
+  if (!live) return [];
+  if (live.lots?.length) return live.lots;
+  const out: OpenLot[] = [];
+  for (const p of live.positions ?? []) {
+    for (const lot of p.lots ?? []) {
+      out.push({
+        ...lot,
+        account: lot.account ?? p.account,
+        current: lot.current ?? p.current,
+      });
+    }
+  }
+  return out;
+}
+
+/** Open lots for one champion. Unit is lots, not aggregated symbol-rows. */
+export function openLotsForChampion(
+  live: LivePreview | undefined | null,
+  championName: string,
+): OpenLot[] {
+  if (!live || !championName) return [];
+  return flatOpenLots(live).filter((l) => accountsMatch(l.account, championName));
+}
+
+export function signalLabel(signal?: LotSignal | string | null): string {
+  switch (signal) {
+    case "on":
+      return "signal on";
+    case "would_exit":
+      return "would exit";
+    case "unknown":
+      return "signal ?";
+    default:
+      return "signal ?";
+  }
+}
+
+export function pathLabel(path?: LotPath | string | null): string {
+  switch (path) {
+    case "near_stop":
+      return "near stop";
+    case "near_tp":
+      return "near TP";
+    case "mid":
+      return "mid";
+    default:
+      return "—";
+  }
+}
+
+export function signalTone(signal?: LotSignal | string | null): "pos" | "neg" | "neutral" {
+  if (signal === "on") return "pos";
+  if (signal === "would_exit") return "neg";
+  return "neutral";
+}
+
+export function pathTone(path?: LotPath | string | null): "pos" | "warn" | "neutral" {
+  if (path === "near_tp") return "pos";
+  if (path === "near_stop") return "warn";
+  return "neutral";
+}
+
+export function lotUnrealized(lot: OpenLot): number | undefined {
+  if (lot.unrealized_pnl != null) return lot.unrealized_pnl;
+  if (lot.current == null) return undefined;
+  return (lot.current - lot.entry) * lot.quantity;
+}
+
+export function formatGate(gate?: LotGate | null): string | null {
+  if (!gate) return null;
+  const retPct = `${(gate.ret * 100).toFixed(1)}%`;
+  const thrPct = `${(gate.threshold * 100).toFixed(0)}%`;
+  return `${gate.lookback}-bar ${retPct} vs ${thrPct}`;
+}
+
+/** Collapsed-card counts: only the non-default flags, so mid/on do not clutter. */
+export function lotHealthSummary(lots: OpenLot[]): { wouldExit: number; nearStop: number; nearTp: number } {
+  let wouldExit = 0;
+  let nearStop = 0;
+  let nearTp = 0;
+  for (const lot of lots) {
+    if (lot.signal === "would_exit") wouldExit += 1;
+    if (lot.path === "near_stop") nearStop += 1;
+    if (lot.path === "near_tp") nearTp += 1;
+  }
+  return { wouldExit, nearStop, nearTp };
 }
 
 /** Shared UI count: open lots, never champion/account rows. */

@@ -268,8 +268,14 @@ class Handler(BaseHTTPRequestHandler):
             # aggregate live preview across all per-strategy accounts
             try:
                 from hedge_fund.web.live import live_preview
+                from hedge_fund.web.lot_health import fetch_signal_closes
+
                 dbs = store_dbs()
                 lots = open_lots_snapshot()
+                try:
+                    closes = fetch_signal_closes()
+                except Exception:
+                    closes = {}
                 merged = {
                     "live_equity": 0.0,
                     "cash": 0.0,
@@ -283,7 +289,7 @@ class Handler(BaseHTTPRequestHandler):
                 }
                 for db in dbs:
                     try:
-                        lp = live_preview(db)
+                        lp = live_preview(db, closes_by_symbol=closes)
                         merged["live_equity"] += lp.get("live_equity", 0.0) or 0.0
                         merged["cash"] += lp.get("cash", 0.0) or 0.0
                         merged["as_of"] = lp.get("as_of") or merged["as_of"]

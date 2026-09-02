@@ -74,6 +74,7 @@ class AccountJoinTests(unittest.TestCase):
         self.assertIn("function lotsForChampion", FORMAT_TS)
         self.assertIn("function openLotsByPair", FORMAT_TS)
         self.assertIn("function pairOf", FORMAT_TS)
+        self.assertIn("function openLotsForChampion", FORMAT_TS)
         self.assertIn("`trades_${slug}`", FORMAT_TS)
         self.assertIn("`trades_${strippedSlug}`", FORMAT_TS)
 
@@ -244,7 +245,7 @@ class ChampionsAccordionUiTests(unittest.TestCase):
     def test_joins_live_rows_behind_an_accordion_not_always_open(self):
         self.assertIn('queryKey: ["live"]', CHAMPS_TSX)
         self.assertIn("api.live", CHAMPS_TSX)
-        self.assertIn("lotsForChampion", CHAMPS_TSX)
+        self.assertIn("openLotsForChampion", CHAMPS_TSX)
         self.assertIn("expandedChampion", CHAMPS_TSX)
         self.assertIn("setExpandedChampion(isOpen ? null : c.name)", CHAMPS_TSX)
         self.assertIn("{isOpen &&", CHAMPS_TSX)
@@ -267,6 +268,7 @@ class ChampionsAccordionUiTests(unittest.TestCase):
         self.assertIn("split.btc", collapsed)
         self.assertIn("split.eth", collapsed)
         self.assertIn("split.total", collapsed)
+        self.assertIn("LotHealthSummaryChips", collapsed)
         self.assertNotIn("open_lots_btc", collapsed)
         self.assertNotIn("open_lots_eth", collapsed)
 
@@ -279,6 +281,8 @@ class ChampionsAccordionUiTests(unittest.TestCase):
         self.assertNotIn("ChampionTape", grad)
         self.assertNotIn("PairLotChips", grad)
         self.assertNotIn("openLotsByPair", grad)
+        self.assertNotIn("LotHealthSummaryChips", grad)
+        self.assertNotIn("openLotsForChampion", grad)
 
 
 if __name__ == "__main__":

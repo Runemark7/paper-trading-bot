@@ -1,5 +1,15 @@
 // API contract — mirrors hedge_fund/web/server.py endpoints.
 
+export interface LotGate {
+  kind: "dip" | "mom" | string;
+  lookback: number;
+  ret: number;
+  threshold: number;
+}
+
+export type LotSignal = "on" | "would_exit" | "unknown";
+export type LotPath = "near_stop" | "mid" | "near_tp";
+
 export interface OpenLot {
   lot_id: number;
   symbol: string;
@@ -10,6 +20,13 @@ export interface OpenLot {
   condition?: string;
   entry_ts?: string | null;
   account?: string;
+  signal?: LotSignal | string;
+  path?: LotPath | string;
+  path_pct?: number;
+  current?: number | null;
+  unrealized_pnl?: number | null;
+  unrealized_pct?: number | null;
+  gate?: LotGate | null;
 }
 
 export interface LivePosition {
