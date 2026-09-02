@@ -135,12 +135,30 @@ class CandlesEndpointTests(unittest.TestCase):
         self.assertEqual(out["candles"][0]["t"], 1_700_000_000_000)
         self.assertEqual(out["candles"][0]["c"], 1.5)
 
+    def test_falls_back_to_binanceus_when_dot_com_blocked(self):
+        from hedge_fund.data.binance import Candle
+        from hedge_fund.web.candles import _public_klines
+
+        good = MagicMock()
+        good.fetch_klines.return_value = [
+            Candle(ts=1, open=1, high=1, low=1, close=1, volume=1),
+        ]
+        blocked = MagicMock()
+        blocked.fetch_klines.side_effect = RuntimeError("451 restricted location")
+        with patch("hedge_fund.data.binance.CcxtSource", side_effect=[blocked, good]) as ctor:
+            bars = _public_klines("BTC/USDT", "5m", 5)
+        self.assertEqual(len(bars), 1)
+        self.assertEqual(ctor.call_count, 2)
+        self.assertEqual(ctor.call_args_list[0].kwargs["exchange_id"], "binance")
+        self.assertEqual(ctor.call_args_list[1].kwargs["exchange_id"], "binanceus")
+
     def test_server_registers_candles_route(self):
         src = (REPO / "hedge_fund" / "web" / "server.py").read_text()
         self.assertIn('route == "/api/candles"', src)
         self.assertIn("candles_payload", src)
         self.assertIn("CcxtSource", (REPO / "hedge_fund" / "web" / "candles.py").read_text())
         self.assertNotIn("live broker", (REPO / "hedge_fund" / "web" / "candles.py").read_text().lower())
+        self.assertIn("binanceus", (REPO / "hedge_fund" / "web" / "candles.py").read_text())
 
 
 class TradesFilterTests(unittest.TestCase):

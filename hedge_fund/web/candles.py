@@ -64,6 +64,23 @@ def candles_payload(
     return _fetch_cached(sym, tf, n, source=source)
 
 
+def _public_klines(symbol: str, timeframe: str, limit: int, source=None):
+    """Public Binance OHLCV. Fall back to binanceus when .com is geo-blocked (HTTP 451)."""
+    if source is not None:
+        return source.fetch_klines(symbol, timeframe=timeframe, limit=limit)
+    from hedge_fund.data.binance import CcxtSource
+
+    last_exc: Exception | None = None
+    for exchange_id in ("binance", "binanceus"):
+        try:
+            src = CcxtSource(exchange_id=exchange_id)
+            return src.fetch_klines(symbol, timeframe=timeframe, limit=limit)
+        except Exception as exc:  # noqa: BLE001 — try the next public venue
+            last_exc = exc
+            continue
+    raise last_exc or RuntimeError("no public klines")
+
+
 def _fetch_cached(symbol: str, timeframe: str, limit: int, source=None) -> dict:
     now = time.time()
     key = (symbol, timeframe, limit)
@@ -71,12 +88,7 @@ def _fetch_cached(symbol: str, timeframe: str, limit: int, source=None) -> dict:
     if hit and (now - hit["_ts"] <= CACHE_TTL):
         return {k: v for k, v in hit.items() if k != "_ts"}
 
-    src = source
-    if src is None:
-        from hedge_fund.data.binance import CcxtSource
-
-        src = CcxtSource()
-    bars = src.fetch_klines(symbol, timeframe=timeframe, limit=limit)
+    bars = _public_klines(symbol, timeframe, limit, source=source)
     candles = [
         {
             "t": int(c.ts),

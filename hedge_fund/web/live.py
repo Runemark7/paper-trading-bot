@@ -67,16 +67,26 @@ def serialize_open_lot(lot, times: dict | None = None, account: str | None = Non
 
 
 def live_prices(fresh: bool = False) -> dict:
-    """Return current prices for the traded symbols, with a short cache."""
+    """Return current prices for the traded symbols, with a short cache.
+
+    Public Binance first; binanceus if .com is geo-restricted (HTTP 451).
+    Display only — not a live broker.
+    """
     now = time.time()
     if fresh or (now - _PRICE_CACHE["ts"] > CACHE_TTL):
-        src = CcxtSource()
-        px = {}
-        for sym in SYMBOLS:
+        px: dict = {}
+        for exchange_id in ("binance", "binanceus"):
             try:
-                px[sym] = src.fetch_price(sym)
+                src = CcxtSource(exchange_id=exchange_id)
+                got = {}
+                for sym in SYMBOLS:
+                    got[sym] = src.fetch_price(sym)
+                px = got
+                break
             except Exception:
-                px[sym] = None
+                continue
+        if not px:
+            px = {s: None for s in SYMBOLS}
         _PRICE_CACHE["ts"] = now
         _PRICE_CACHE["prices"] = px
     return _PRICE_CACHE["prices"]
