@@ -12,7 +12,7 @@ import {
 } from "../status/format";
 
 export default function Positions() {
-  const trades = useQuery({ queryKey: ["trades"], queryFn: api.trades });
+  const trades = useQuery({ queryKey: ["trades"], queryFn: () => api.trades() });
   const live = useQuery({ queryKey: ["live"], queryFn: api.live });
   const status = useQuery({ queryKey: ["status"], queryFn: api.status });
 

@@ -8,6 +8,8 @@ import type {
   DiscoveryEvaluation,
   StatusSnapshot,
   ChampionsPayload,
+  CandlesPayload,
+  ChartSymbol,
 } from "./types";
 
 async function get<T>(path: string): Promise<T> {
@@ -20,7 +22,21 @@ export const api = {
   summary: () => get<Summary>("/api/summary"),
   live: () => get<LivePreview>("/api/live"),
   regime: () => get<RegimeState>("/api/regime"),
-  trades: () => get<TradeRow[]>("/api/trades"),
+  trades: (symbol?: string, limit?: number) => {
+    const q = new URLSearchParams();
+    if (symbol) q.set("symbol", symbol);
+    if (limit != null) q.set("limit", String(limit));
+    const s = q.toString();
+    return get<TradeRow[]>(`/api/trades${s ? `?${s}` : ""}`);
+  },
+  candles: (symbol: ChartSymbol | string, timeframe = "5m", limit = 500) => {
+    const q = new URLSearchParams({
+      symbol,
+      timeframe,
+      limit: String(limit),
+    });
+    return get<CandlesPayload>(`/api/candles?${q.toString()}`);
+  },
   learning: () => get<LearningMap>("/api/learning"),
   graduated: () => get<GraduatedStrategy[]>("/api/graduated"),
   discovery: () => get<DiscoveryEvaluation[]>("/api/discovery"),

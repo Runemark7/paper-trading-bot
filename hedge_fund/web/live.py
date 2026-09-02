@@ -14,6 +14,8 @@ from __future__ import annotations
 import time
 
 from hedge_fund.data.binance import CcxtSource
+from hedge_fund.risk.managed import RiskManager
+from hedge_fund.risk.rm_v1 import TAKE_PROFIT_RR
 from hedge_fund.trading.store import TradeStore
 
 SYMBOLS = ["BTC/USDT", "ETH/USDT"]
@@ -21,17 +23,70 @@ _PRICE_CACHE: dict = {"ts": 0.0, "prices": {}}
 CACHE_TTL = 15.0  # seconds
 
 
+def take_profit_price(entry: float, stop: float) -> float:
+    """Same 2:1 TP as TradingLoop: ``RiskManager.take_profit_price(..., TAKE_PROFIT_RR)``.
+
+    Do not hardcode a 5% target — live TP is stop-distance × rr.
+    """
+    return RiskManager.take_profit_price(None, float(entry), float(stop), TAKE_PROFIT_RR)
+
+
+def _open_lot_entry_times(st: TradeStore) -> dict[tuple, str]:
+    """Map (symbol, lot_id) → entry_ts for still-open store rows."""
+    out: dict[tuple, str] = {}
+    try:
+        rows = st.conn.execute(
+            "SELECT symbol, lot_id, entry_ts FROM trades WHERE exit_ts IS NULL"
+        ).fetchall()
+    except Exception:
+        return out
+    for r in rows:
+        if r["lot_id"] is None:
+            continue
+        out[(r["symbol"], r["lot_id"])] = r["entry_ts"]
+    return out
+
+
+def serialize_open_lot(lot, times: dict | None = None, account: str | None = None) -> dict:
+    """One pyramid lot: entry / stop / take-profit, numbered later by the chart."""
+    times = times or {}
+    entry = float(lot.entry_price)
+    stop = float(lot.stop_loss)
+    tp = take_profit_price(entry, stop)
+    return {
+        "lot_id": lot.lot_id,
+        "symbol": lot.ticker,
+        "entry": round(entry, 2),
+        "stop": round(stop, 2),
+        "take_profit": round(tp, 2),
+        "quantity": round(lot.quantity, 5),
+        "condition": lot.entry_condition,
+        "entry_ts": times.get((lot.ticker, lot.lot_id)),
+        "account": account,
+    }
+
+
 def live_prices(fresh: bool = False) -> dict:
-    """Return current prices for the traded symbols, with a short cache."""
+    """Return current prices for the traded symbols, with a short cache.
+
+    Public Binance first; binanceus if .com is geo-restricted (HTTP 451).
+    Display only — not a live broker.
+    """
     now = time.time()
     if fresh or (now - _PRICE_CACHE["ts"] > CACHE_TTL):
-        src = CcxtSource()
-        px = {}
-        for sym in SYMBOLS:
+        px: dict = {}
+        for exchange_id in ("binance", "binanceus"):
             try:
-                px[sym] = src.fetch_price(sym)
+                src = CcxtSource(exchange_id=exchange_id)
+                got = {}
+                for sym in SYMBOLS:
+                    got[sym] = src.fetch_price(sym)
+                px = got
+                break
             except Exception:
-                px[sym] = None
+                continue
+        if not px:
+            px = {s: None for s in SYMBOLS}
         _PRICE_CACHE["ts"] = now
         _PRICE_CACHE["prices"] = px
     return _PRICE_CACHE["prices"]
@@ -47,7 +102,14 @@ def live_preview(db: str) -> dict:
     st = TradeStore(db)
     saved = st.load_account_state()
     if not saved:
-        return {"live_equity": None, "positions": [], "prices": {}, "open_lots": 0, "open_lots_unit": "open_lots"}
+        return {
+            "live_equity": None,
+            "positions": [],
+            "lots": [],
+            "prices": {},
+            "open_lots": 0,
+            "open_lots_unit": "open_lots",
+        }
 
     broker = PaperBroker(cash=10000)
     broker.restore_state(saved.get("broker", {}))
@@ -65,6 +127,7 @@ def live_preview(db: str) -> dict:
 
     # live equity = cash + open positions at current (or entry) price
     live_equity = broker.equity(marks)
+    times = _open_lot_entry_times(st)
 
     positions = []
     # group lots by symbol -> aggregate, and list lots individually
@@ -87,6 +150,7 @@ def live_preview(db: str) -> dict:
         stop = round(min((l.stop_loss for l in b["lots"]), default=0), 2)
         upnl = round(unrealized, 2) if unrealized is not None else None
         upct = round(upnl_pct, 4) if upnl_pct is not None else None
+        lot_rows = [serialize_open_lot(l, times) for l in b["lots"]]
         positions.append(
             {
                 "symbol": sym,
@@ -103,13 +167,16 @@ def live_preview(db: str) -> dict:
                 "pnl_pct": upct,
                 "condition": b["lots"][0].entry_condition if b["lots"] else "",
                 "lot_count": len(b["lots"]),
+                "lots": lot_rows,
             }
         )
 
+    flat_lots = [lot for p in positions for lot in p.get("lots") or []]
     return {
         "live_equity": round(live_equity, 2) if live_equity else None,
         "cash": round(broker.cash(), 2),
         "positions": positions,
+        "lots": flat_lots,
         "prices": {s: round(p, 2) if p else None for s, p in prices.items()},
         "as_of": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
         "open_lots": len(broker.lots),
