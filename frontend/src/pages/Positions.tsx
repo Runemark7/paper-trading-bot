@@ -1,14 +1,13 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
 import { Card, fmt, fmtPct, Badge, Empty, MonoName, Field, FieldGrid, PhoneCards, DesktopTable } from "../components/ui";
+import { LotHealthChips } from "../status/LotHealth";
 import {
   accountLabel,
+  flatOpenLots,
   fmtWhen,
+  lotUnrealized,
   openLotsTotal,
-  positionEntry,
-  positionPnl,
-  positionPnlPct,
-  positionStop,
 } from "../status/format";
 
 export default function Positions() {
@@ -17,7 +16,7 @@ export default function Positions() {
   const status = useQuery({ queryKey: ["status"], queryFn: api.status });
 
   const run = status.data?.running_now;
-  const open = live.data?.positions ?? [];
+  const lots = flatOpenLots(live.data);
   const openLots = openLotsTotal(live.data, run?.open_lots ?? run?.positions_open);
 
   return (
@@ -32,7 +31,7 @@ export default function Positions() {
       </div>
 
       <Card title={`Open lots (${openLots})`}>
-        {!open.length ? (
+        {!lots.length ? (
           <Empty>
             No open lots on the paper book. Heartbeat only manages stops/TP when lots
             exist; it does not open trades. Last heartbeat stamp:{" "}
@@ -40,27 +39,35 @@ export default function Positions() {
           </Empty>
         ) : (
           <>
+            <p className="text-xs text-white/45 mb-3 leading-relaxed min-w-0 break-words">
+              One card per lot. Signal is still-long vs would-exit on the latest 5m close.
+              Path is now between that lot&apos;s stop and 2:1 TP (mid = middle of the range,
+              not a third strategy state).
+            </p>
             <PhoneCards>
-              {open.map((p, i) => {
-                const pnl = positionPnl(p);
-                const pnlPct = positionPnlPct(p);
+              {lots.map((lot, i) => {
+                const pnl = lotUnrealized(lot);
+                const pnlPct = lot.unrealized_pct;
                 return (
-                  <li key={i} className="rounded-lg border border-white/10 p-3 space-y-2 min-w-0 overflow-hidden">
+                  <li
+                    key={`${lot.account ?? ""}-${lot.symbol}-${lot.lot_id}-${i}`}
+                    className="rounded-lg border border-white/10 p-3 space-y-2 min-w-0 overflow-hidden"
+                  >
                     <div className="flex items-baseline justify-between gap-2 min-w-0">
-                      <span className="font-medium min-w-0 truncate">{p.symbol}</span>
+                      <span className="font-medium min-w-0 truncate">{lot.symbol}</span>
                       <span className={`shrink-0 ${(pnlPct ?? 0) >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
                         {fmtPct(pnlPct)}
                       </span>
                     </div>
-                    <MonoName className="block text-xs text-white/50">{accountLabel(p.account)}</MonoName>
+                    <MonoName className="block text-xs text-white/50">{accountLabel(lot.account)}</MonoName>
+                    <LotHealthChips lot={lot} extra />
                     <FieldGrid>
                       <Field label="Condition" span mono>
-                        {p.condition ?? "—"}
+                        {lot.condition ?? "—"}
                       </Field>
-                      <Field label="Lots">{p.lot_count ?? 1}</Field>
-                      <Field label="Entry">{fmt(positionEntry(p))}</Field>
-                      <Field label="Stop">{fmt(positionStop(p))}</Field>
-                      <Field label="Now">{p.current != null ? fmt(p.current) : "—"}</Field>
+                      <Field label="Entry">{fmt(lot.entry)}</Field>
+                      <Field label="Stop">{fmt(lot.stop)}</Field>
+                      <Field label="Now">{lot.current != null ? fmt(lot.current) : "—"}</Field>
                       <Field label="P&L">
                         <span className={(pnl ?? 0) >= 0 ? "text-emerald-400" : "text-rose-400"}>
                           {pnl != null ? fmt(pnl) : "—"}
@@ -77,8 +84,8 @@ export default function Positions() {
                   <tr>
                     <th className="text-left py-2">Account</th>
                     <th className="text-left">Symbol</th>
+                    <th className="text-left">Health</th>
                     <th className="text-left">Condition</th>
-                    <th className="text-right">Lots</th>
                     <th className="text-right">Entry</th>
                     <th className="text-right">Stop</th>
                     <th className="text-right">Now</th>
@@ -87,18 +94,23 @@ export default function Positions() {
                   </tr>
                 </thead>
                 <tbody>
-                  {open.map((p, i) => {
-                    const pnl = positionPnl(p);
-                    const pnlPct = positionPnlPct(p);
+                  {lots.map((lot, i) => {
+                    const pnl = lotUnrealized(lot);
+                    const pnlPct = lot.unrealized_pct;
                     return (
-                      <tr key={i} className="border-t border-white/5">
-                        <td className="py-2 font-mono text-xs">{accountLabel(p.account)}</td>
-                        <td className="font-medium">{p.symbol}</td>
-                        <td className="text-white/60 font-mono text-xs break-all">{p.condition ?? "—"}</td>
-                        <td className="text-right">{p.lot_count ?? 1}</td>
-                        <td className="text-right">{fmt(positionEntry(p))}</td>
-                        <td className="text-right">{fmt(positionStop(p))}</td>
-                        <td className="text-right">{p.current != null ? fmt(p.current) : "—"}</td>
+                      <tr
+                        key={`${lot.account ?? ""}-${lot.symbol}-${lot.lot_id}-${i}`}
+                        className="border-t border-white/5"
+                      >
+                        <td className="py-2 font-mono text-xs">{accountLabel(lot.account)}</td>
+                        <td className="font-medium">{lot.symbol}</td>
+                        <td className="py-2">
+                          <LotHealthChips lot={lot} extra />
+                        </td>
+                        <td className="text-white/60 font-mono text-xs break-all">{lot.condition ?? "—"}</td>
+                        <td className="text-right">{fmt(lot.entry)}</td>
+                        <td className="text-right">{fmt(lot.stop)}</td>
+                        <td className="text-right">{lot.current != null ? fmt(lot.current) : "—"}</td>
                         <td className={`text-right ${(pnl ?? 0) >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
                           {pnl != null ? fmt(pnl) : "—"}
                         </td>

@@ -331,6 +331,7 @@ class ChartUiTests(unittest.TestCase):
         self.assertIn("min-h-12", tape)
         self.assertIn("{n} lots", tape)
         self.assertIn("openLotsByPair", tape)
+        self.assertIn("LotHealthChips", tape)
         self.assertIn("Trade {n} open", tape)
         self.assertIn("Trade {n} closed", tape)
         self.assertIn("2:1", tape)
