@@ -164,6 +164,23 @@ def generate_universe() -> list[str]:
     return sorted(universe)
 
 
+def untested_candidates(blocked_names: set[str], universe: list[str] | None = None) -> list[str]:
+    """Universe names not in the pool/graduated, skipping near-duplicates of blocked."""
+    if universe is None:
+        universe = generate_universe()
+    taken_keys = {near_duplicate_key(n) for n in blocked_names}
+    out: list[str] = []
+    for cand in universe:
+        if cand in blocked_names:
+            continue
+        key = near_duplicate_key(cand)
+        if key in taken_keys:
+            continue
+        out.append(cand)
+        taken_keys.add(key)
+    return out
+
+
 def generate_5000_universe() -> list[str]:
     """Deprecated name kept so older scripts import the (now small) universe."""
     return generate_universe()

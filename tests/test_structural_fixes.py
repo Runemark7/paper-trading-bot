@@ -199,7 +199,6 @@ class GraduatedPaperTokenTests(unittest.TestCase):
         from hedge_fund.trading.constants import (
             CYCLE_INTERVAL_SECONDS,
             DISCOVER_BATCH_SIZE,
-            MAX_ACTIVE_CHAMPIONS,
             MIN_BACKTEST_SHARPE,
             MIN_BACKTEST_TRADES,
             QUAL_TIMEFRAME,
@@ -219,7 +218,7 @@ class GraduatedPaperTokenTests(unittest.TestCase):
         self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
         self.assertEqual(MIN_BACKTEST_TRADES, 30)
         self.assertEqual(TRADE_EVALUATION_LIMIT, 80)
-        self.assertEqual(MAX_ACTIVE_CHAMPIONS, 20)
+        self.assertFalse(hasattr(constants, "MAX_ACTIVE_CHAMPIONS"))
         self.assertEqual(DISCOVER_BATCH_SIZE, 30)
         self.assertFalse(hasattr(constants, "MIN_BACKTEST_WIN_RATE"))
 

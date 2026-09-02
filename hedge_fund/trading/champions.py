@@ -1,13 +1,13 @@
 """Champion pool manager — continuous pipeline.
 
 Rules (hedge_fund.trading.constants — do not document different numbers):
-1. Target active capacity: MAX_ACTIVE_CHAMPIONS (20). Replenish only into free slots.
+1. No live-slot cap. Every 5m-qualified name not already in the pool or
+   graduated.json is admitted. Universe size is the combinatorial bound.
 2. Evaluation threshold: TRADE_EVALUATION_LIMIT (80) closed paper trades.
    Paper PnL greater than buy-and-hold of the same assets over the same
    period (after fees) → GRADUATED_PAPER (graduated paper, not live trading).
    Else REJECTED_NEGATIVE_PNL. Results go to graduated.json.
-3. If active champions < MAX_ACTIVE_CHAMPIONS, 5m-qualified candidates fill
-   free slots only — never a 4h admit bar.
+3. 5m-qualified candidates fill the book — never a 4h admit bar.
 """
 from __future__ import annotations
 
@@ -20,7 +20,6 @@ from hedge_fund.paths import state_root
 from hedge_fund.trading.buy_and_hold import buy_and_hold_from_trades
 from hedge_fund.trading.constants import (
     GRADUATED_PAPER,
-    MAX_ACTIVE_CHAMPIONS,
     PAPER_START_CASH,
     REJECTED_NEGATIVE_PNL,
     TRADE_EVALUATION_LIMIT,
@@ -31,7 +30,6 @@ from hedge_fund.trading.store import TradeStore, connect_sqlite
 # Re-export so existing `from hedge_fund.trading.champions import TRADE_EVALUATION_LIMIT` still works.
 __all__ = [
     "GRADUATED_PAPER",
-    "MAX_ACTIVE_CHAMPIONS",
     "REJECTED_NEGATIVE_PNL",
     "TRADE_EVALUATION_LIMIT",
     "attach_open_lots",
@@ -265,33 +263,29 @@ def collect_live_results() -> dict:
 
 
 def promote_candidates(candidates: list[dict]) -> dict:
-    """Add 5m-qualified names until pool reaches MAX_ACTIVE_CHAMPIONS (20)."""
+    """Admit every 5m-qualified name not already in the pool or graduated.json."""
     st = load_pool()
     grad_list = load_graduated()
     existing = {c["name"] for c in st["champions"]}.union({g["name"] for g in grad_list})
 
-    needed = MAX_ACTIVE_CHAMPIONS - len(st["champions"])
     added = []
-    if needed > 0:
-        for cand in candidates:
-            if len(added) >= needed:
-                break
-            name = cand.get("strategy")
-            if name and name not in existing:
-                st["champions"].append({
-                    "name": name,
-                    "closed": 0,
-                    "pnl": 0.0,
-                    "wins": 0,
-                    "source": cand.get("source") or "sweep_promotion",
-                    "champion_since": datetime.now(timezone.utc).isoformat(),
-                })
-                existing.add(name)
-                added.append(name)
+    for cand in candidates:
+        name = cand.get("strategy")
+        if name and name not in existing:
+            st["champions"].append({
+                "name": name,
+                "closed": 0,
+                "pnl": 0.0,
+                "wins": 0,
+                "source": cand.get("source") or "sweep_promotion",
+                "champion_since": datetime.now(timezone.utc).isoformat(),
+            })
+            existing.add(name)
+            added.append(name)
 
     backfill_champion_since(st)
     save_pool(st)
-    return {"added": added, "active_count": len(st["champions"]), "target": MAX_ACTIVE_CHAMPIONS}
+    return {"added": added, "active_count": len(st["champions"])}
 
 
 def _load_discovery_log() -> list[dict]:
@@ -377,7 +371,6 @@ def pool_status() -> dict:
     return attach_open_lots({
         "active_champions": champs,
         "active_count": len(st["champions"]),
-        "target_active": MAX_ACTIVE_CHAMPIONS,
         "evaluation_limit": TRADE_EVALUATION_LIMIT,
         "graduated_count": len(grad),
         "graduated": grad,

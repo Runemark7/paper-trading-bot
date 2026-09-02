@@ -214,3 +214,17 @@ This amendment does not rewrite original §§ 1–8 or prior amendments, includi
 
 - 2026-09-03 structure-atom universe list insofar as it froze that handful — a few pattern names are added, still inside the 40–120 band.
 
+### Amendment 2026-09-03 — 20-slot arena revoked
+
+This amendment does not rewrite original §§ 1–8 or prior amendments. It removes the homemade live-slot cap. Qual/live remain 5m, risk policy remains `rm_v1`, OOS gates are unchanged (30 trades, all windows ≥ 0, beat B&H + `sma_stack`, paper 80 vs B&H). **Still paper.** `GRADUATED_PAPER` meaning is unchanged. Do not cull existing paper accounts.
+
+**No live-slot cap.** `MAX_ACTIVE_CHAMPIONS` is deleted. `promote_candidates` admits every 5m-qualified name that is not already in the active pool or `graduated.json`. Discovery/tournament replenish still runs while the universe has untested names — not only when `len(pool) < 20`. Prod's grandfathered names (31 at this writing) must not starve new admits such as `dbl_bot_*` / structure ANDs.
+
+**What still bounds the book.** Universe size (`UNIVERSE_TARGET_MIN` / `UNIVERSE_TARGET_MAX`, ~40–120 names) is the combinatorial bound, not a live-slot cap. `DISCOVER_BATCH_SIZE = 30` is a sweep batch size, not an arena cap. Graduation at `TRADE_EVALUATION_LIMIT = 80` vs buy-and-hold is unchanged.
+
+**Superseded on this date** (prior text kept above for history):
+
+- 2026-09-01 "Small arena" `MAX_ACTIVE_CHAMPIONS = 20` and replenish-only-into-free-slots.
+- 2026-09-02 / earlier 2026-09-03 text insofar as it freezes "arena 20" as the live rule.
+- 2026-08-30 capacity 1000 insofar as any later text still treated a homemade cap as current.
+

@@ -154,7 +154,6 @@ export default function Champions() {
   const [expandedStrat, setExpandedStrat] = useState<string | null>(null);
 
   const champs = qChamps.data?.active_champions ?? [];
-  const targetMax = qChamps.data?.target_active ?? 20;
   const evalLimit = qChamps.data?.evaluation_limit ?? 80;
   const graduated = qGrad.data ?? [];
   const discoveryLog = qDisc.data ?? [];
@@ -177,7 +176,7 @@ export default function Champions() {
 
       <Card
         title={`On the paper book · ${openLots} open lots`}
-        aside={run ? `${champs.length} / ${targetMax} champions · last cycle ${fmtWhen(run.cycle.last_cycle_at)}` : `${champs.length} / ${targetMax} champions`}
+        aside={run ? `${champs.length} champions · last cycle ${fmtWhen(run.cycle.last_cycle_at)}` : `${champs.length} champions`}
       >
         <div className="text-sm text-white/60 mb-3">
           Each name is an isolated paper account. The card shows that account's open

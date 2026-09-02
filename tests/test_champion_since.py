@@ -176,6 +176,7 @@ class ChampionSinceUiContractTests(unittest.TestCase):
         self.assertIn("flex flex-wrap", collapsed)
         self.assertIn("Started {fmtChampionSince(c.champion_since)}", expanded)
         self.assertIn("flex flex-wrap", expanded)
+        self.assertNotIn("target_active: number", TYPES_TS)
 
 
 if __name__ == "__main__":

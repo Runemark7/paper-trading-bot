@@ -33,7 +33,6 @@ class ProtocolAmendmentTests(unittest.TestCase):
 
     def test_amendment_2026_09_01(self):
         from hedge_fund.trading.constants import (
-            MAX_ACTIVE_CHAMPIONS,
             MIN_BACKTEST_SHARPE,
             MIN_BACKTEST_TRADES,
             QUAL_TIMEFRAME,
@@ -46,7 +45,7 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertIn("2026-09-01", text)
         self.assertIn(QUAL_TIMEFRAME, text)
         self.assertIn(RISK_POLICY, text)
-        self.assertIn(str(MAX_ACTIVE_CHAMPIONS), text)
+        self.assertIn("MAX_ACTIVE_CHAMPIONS = 20", text)
         self.assertIn(str(TRADE_EVALUATION_LIMIT), text)
         self.assertIn(str(MIN_BACKTEST_TRADES), text)
         self.assertIn("0.30", text)
@@ -58,7 +57,6 @@ class ProtocolAmendmentTests(unittest.TestCase):
     def test_amendment_2026_09_02(self):
         from hedge_fund.trading.constants import (
             CYCLE_INTERVAL_SECONDS,
-            MAX_ACTIVE_CHAMPIONS,
             MIN_BACKTEST_SHARPE,
             MIN_BACKTEST_TRADES,
             QUAL_TIMEFRAME,
@@ -83,7 +81,7 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertIn("GRADUATED_PAPER", text)
         self.assertIn("Paper only", text)
         self.assertIn(RISK_POLICY, text)
-        self.assertIn(str(MAX_ACTIVE_CHAMPIONS), text)
+        self.assertIn("MAX_ACTIVE_CHAMPIONS = 20", text)
         self.assertIn(str(TRADE_EVALUATION_LIMIT), text)
         self.assertIn(str(MIN_BACKTEST_TRADES), text)
         self.assertIn("0.30", text)
@@ -100,7 +98,6 @@ class ProtocolAmendmentTests(unittest.TestCase):
     def test_amendment_2026_09_03(self):
         from hedge_fund.trading.constants import (
             CYCLE_INTERVAL_SECONDS,
-            MAX_ACTIVE_CHAMPIONS,
             MIN_BACKTEST_SHARPE,
             MIN_BACKTEST_TRADES,
             QUAL_TIMEFRAME,
@@ -122,10 +119,27 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertEqual(RISK_POLICY, "rm_v1")
         self.assertEqual(MIN_BACKTEST_TRADES, 30)
         self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
-        self.assertEqual(MAX_ACTIVE_CHAMPIONS, 20)
+        import hedge_fund.trading.constants as constants
+        self.assertFalse(hasattr(constants, "MAX_ACTIVE_CHAMPIONS"))
         self.assertEqual(TRADE_EVALUATION_LIMIT, 80)
         self.assertIn("OOS gates are unchanged", text)
         self.assertIn("arena 20", text)
+
+    def test_amendment_2026_09_03_revokes_live_slot_cap(self):
+        import hedge_fund.trading.constants as constants
+        from hedge_fund.trading.constants import (
+            DISCOVER_BATCH_SIZE,
+            TRADE_EVALUATION_LIMIT,
+        )
+
+        text = (REPO / "PROTOCOL.md").read_text()
+        self.assertIn("20-slot arena revoked", text)
+        self.assertIn("MAX_ACTIVE_CHAMPIONS` is deleted", text)
+        self.assertIn("combinatorial bound", text)
+        self.assertIn("DISCOVER_BATCH_SIZE = 30", text)
+        self.assertFalse(hasattr(constants, "MAX_ACTIVE_CHAMPIONS"))
+        self.assertEqual(DISCOVER_BATCH_SIZE, 30)
+        self.assertEqual(TRADE_EVALUATION_LIMIT, 80)
 
 class IsolatedRunnerTests(unittest.TestCase):
     def test_no_second_hardcoded_book(self):
