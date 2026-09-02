@@ -323,6 +323,7 @@ class Handler(BaseHTTPRequestHandler):
                         qs.get("symbol"),
                         qs.get("timeframe") or "5m",
                         qs.get("limit"),
+                        since=qs.get("since"),
                     )
                 )
             except CandleRequestError as exc:

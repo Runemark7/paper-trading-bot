@@ -27,11 +27,12 @@ function isoToMs(iso: string | null | undefined): number | null {
   return Number.isNaN(d) ? null : d;
 }
 
-/** Snap a wall-clock time onto a 5m bar that exists in the series (markers need that). */
+/** Snap a wall-clock time onto a 5m bar that exists in the series (markers need that).
+ *  Times left of the loaded window stay off-chart — do not glue them to bar 0. */
 function snapToCandle(ms: number, candleSec: number[]): UTCTimestamp | null {
   if (!candleSec.length) return null;
   const t = Math.floor(ms / 1000);
-  if (t <= candleSec[0]) return candleSec[0] as UTCTimestamp;
+  if (t < candleSec[0]) return null;
   let best = candleSec[0];
   for (const ct of candleSec) {
     if (ct <= t) best = ct;
@@ -203,9 +204,10 @@ export default function PaperChart({
     markers.sort((a, b) => (a.time as number) - (b.time as number));
     series.setMarkers(markers);
 
-    if (fittedFor.current !== symbol) {
+    const fitKey = `${symbol}-${candles.length}`;
+    if (fittedFor.current !== fitKey) {
       chart.timeScale().fitContent();
-      fittedFor.current = symbol;
+      fittedFor.current = fitKey;
     }
   }, [candles, openLots, closed, symbol]);
 

@@ -1,5 +1,11 @@
 /** Number pyramid lots as separate trades: 1 open/1 close, 2 open/2 close, … */
 
+import {
+  DEFAULT_CANDLE_BARS,
+  ENTRY_PAD_BARS,
+  MAX_CANDLE_BARS,
+  TF_MS,
+} from "../api/client";
 import type { CandleBar, Champion, ChartSymbol, LivePreview, OpenLot, TradeRow } from "../api/types";
 import { accountsMatch } from "../status/format";
 
@@ -59,6 +65,43 @@ export function closedTradesForChampionSymbol(
   return (trades ?? []).filter(
     (t) => t.symbol === symbol && Boolean(t.exit_ts) && accountsMatch(t.account, championName),
   );
+}
+
+/** ISO times we already have for this champion+symbol. Skip nulls — do not invent. */
+export function entryTimesForTape(lots: OpenLot[], closed: TradeRow[]): Array<string | null | undefined> {
+  const out: Array<string | null | undefined> = lots.map((l) => l.entry_ts);
+  for (const t of closed) {
+    out.push(t.entry_ts, t.exit_ts);
+  }
+  return out;
+}
+
+/** 5m bars covering known entries: ≥3 days, back to earliest entry_ts + pad, ≤7 days. */
+export function candleLimitForEntries(
+  entryTimes: Array<string | null | undefined>,
+  nowMs: number = Date.now(),
+): number {
+  let earliest: number | null = null;
+  for (const iso of entryTimes) {
+    if (!iso) continue;
+    const ms = Date.parse(iso);
+    if (!Number.isFinite(ms)) continue;
+    if (earliest == null || ms < earliest) earliest = ms;
+  }
+  if (earliest == null) return DEFAULT_CANDLE_BARS;
+  const bars = Math.ceil((nowMs - earliest) / TF_MS) + ENTRY_PAD_BARS;
+  return Math.min(MAX_CANDLE_BARS, Math.max(DEFAULT_CANDLE_BARS, bars));
+}
+
+/** Open lots whose known entry_ts sits left of the loaded tape (7-day cap). */
+export function lotsOlderThanTape(lots: NumberedOpenLot[], candles: CandleBar[]): NumberedOpenLot[] {
+  if (!candles.length) return [];
+  const t0 = candles[0].t;
+  return lots.filter(({ lot }) => {
+    if (!lot.entry_ts) return false;
+    const ms = Date.parse(lot.entry_ts);
+    return Number.isFinite(ms) && ms < t0;
+  });
 }
 
 /** Keep closed overlays on the loaded 5m window so old history does not bury the tape. */

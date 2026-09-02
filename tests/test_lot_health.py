@@ -248,6 +248,8 @@ class AnnotateAndLivePreviewTests(unittest.TestCase):
         self.assertNotIn("ETH/USDT", out)
         self.assertEqual(len(out["BTC/USDT"]), 2)
         self.assertEqual(fetch.call_count, 2)
+        for c in fetch.call_args_list:
+            self.assertEqual(c.args[2], 200)
 
     def test_api_live_fetches_klines_once(self):
         src = (REPO / "hedge_fund" / "web" / "server.py").read_text()
