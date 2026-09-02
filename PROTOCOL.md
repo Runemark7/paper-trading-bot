@@ -83,6 +83,7 @@ over a meaningful sample, AND calibration is demonstrated independently of P&L.
 | 2026-08-30 | Live experiment is the isolated-account paper tournament of combinatorial TA strategies, not the original LLM-probability study. Original §§ 1–8 remain as the historical contract; superseded clauses are named in the amendment below. |
 | 2026-09-01 | Qualification uses the same 4h tape and `rm_v1` stop/size policy as live. Arena 20, OOS-only admit bar, 80-trade paper gate vs buy-and-hold. Original §§ 1–8 and the 2026-08-30 amendment remain; superseded clauses are named in the 2026-09-01 amendment. |
 | 2026-09-02 | Live book and admit bar move to 5m candles. Decision cycle every 5 minutes (`CYCLE_INTERVAL_SECONDS = 300`). Walk-forward windows rescaled to ~90 calendar days of 5m per window. Strategy lookbacks are bar counts (e.g. `dip_24b` = 2 hours, not 4 days). 4h is superseded for live and admit. Paper only; `GRADUATED_PAPER` meaning unchanged. Original §§ 1–8 and prior amendments remain; superseded clauses are named in the 2026-09-02 amendment. |
+| 2026-09-03 | Structure atoms exist (`don_hi_N`, `don_lo_N`, `near_swing_hi_N`, `near_swing_lo_N`). They are OHLC (high/low from the same 5m klines), not close-only. Close-only names still parse. Qual/live still 5m, `rm_v1`, OOS gates unchanged. Still paper. |
 
 ### Amendment 2026-08-30 — what actually runs
 
@@ -163,4 +164,29 @@ This amendment does not rewrite original §§ 1–8 or the 2026-08-30 / 2026-09-
 - 2026-09-01 `QUAL_WINDOW_BARS = 2500` as a 4h span — superseded; 25920 five-minute bars ≈ 90 days.
 - 2026-09-01 statement that the 5m tape must not admit champions — superseded; 5m is the admit tape.
 - 2026-09-01 "Fewer hypotheses" insofar as it calls the universe a 4h list — superseded; same names, 5m bars, bar-count lookbacks as above.
+
+### Amendment 2026-09-03 — structure atoms (OHLC, not close-only)
+
+This amendment does not rewrite original §§ 1–8 or the 2026-08-30 / 2026-09-01 / 2026-09-02 text above. It names a small set of **structure** signal atoms and how they are evaluated. Qual/live remain 5m, risk policy remains `rm_v1`, OOS gates are unchanged (30 trades, all windows ≥ 0, beat B&H + `sma_stack`, arena 20, paper 80 vs B&H). **Still paper.** `GRADUATED_PAPER` meaning is unchanged.
+
+**Structure atoms exist** in the DSL (`hedge_fund/signals/structure.py`, parsed by `parse_strategy`):
+
+- `don_hi_N` — close breaks the prior N-bar Donchian high.
+- `don_lo_N` — close is within the documented near-band of the prior N-bar Donchian low (dip-at-support tag).
+- `near_swing_hi_N` / `near_swing_lo_N` — close is within that same near-band of the last confirmed fractal swing high/low (half-window `N`).
+
+Near-band: `max(0.20% of close, 0.25 × ATR(14))`. Documented in `structure.py`.
+
+**OHLC, not close-only.** Live and `parse_strategy` were close-only for SMA/RSI/mom/dip. Real resistance is a high, not a close. `TradingLoop` already fetches klines (OHLCV). Highs and lows from those same bars are threaded into signal eval for these atoms only. Old close-only names (`dip_24b_lt1pc`, `sma_abv_50`, …) still parse and still ignore high/low. Calling a structure atom without highs/lows raises — close is not silently used as high/low.
+
+**No lookahead.** Donchian uses bars **before** the decision bar (`highs[i-N:i]`, current bar excluded). The current bar's high cannot be the level that is being broken; a wick through the prior high with close still below is not a break. Swing pivots need `N` bars to the right before they exist.
+
+**Handful of AND gates**, not a cartesian product, added to `generate_universe()` (still inside `UNIVERSE_TARGET_MAX` = 120): `dip_6b_lt2pc&near_swing_lo_12`, `dip_12b_lt3pc&don_lo_24`, `mom_12b_gt3pc&don_hi_24`, `sma_abv_50&don_hi_24`, plus a few similar names.
+
+**Refused.** Head-and-shoulders, flags, triangles, FVGs, order blocks, 40 candlestick names, screenshot vision, price-action-lib kitchen sink. Round-number psychological levels (`near_round_100`) skipped: a $100 step is not the same game on BTC vs ETH.
+
+**Superseded on this date** (prior text kept above for history):
+
+- 2026-09-02 / earlier statements that live and `parse_strategy` are close-only *for every atom* — superseded in part: close-only names remain close-only; structure atoms are OHLC on the same 5m series.
+- 2026-09-02 "Universe remains the explicit ~50-name list" insofar as it freezes that list — superseded; a handful of structure names are added, still inside the 40–120 band.
 

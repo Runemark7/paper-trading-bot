@@ -2,12 +2,21 @@
 
 Provides a unified AST / rule parser so any strategy name, JSON spec, or composite rule
 can be evaluated dynamically across backtests and live execution without hardcoded elif chains.
+
+Close-only atoms (SMA/RSI/mom/dip/…) still evaluate as ``pred(closes, i)``.
+Structure atoms (Donchian / swing S&R) also accept ``highs=`` and ``lows=``
+from the same bar series — live klines already have OHLC. Missing highs/lows
+raises rather than using close as a high/low proxy.
 """
 from __future__ import annotations
 
 import math
 import re
 from typing import Callable, Any
+
+# Predicates accept (closes, i=None, highs=None, lows=None). Close-only atoms
+# ignore highs/lows; structure atoms require them.
+Predicate = Callable[..., bool]
 
 # ---------------------------------------------------------------------------
 # Indicator calculations on a closes array up to index i
@@ -70,99 +79,141 @@ def vol_ratio(closes: list[float], i: int | None = None, short_lb: int = 30, lon
 # Dynamic DSL Expression Evaluator
 # ---------------------------------------------------------------------------
 
-def parse_strategy(expr: str | Callable | dict) -> Callable[[list[float], int | None], bool]:
-    """Dynamically parses any strategy expression into a predicate function: (closes, i) -> bool."""
+def _close_pred(fn: Callable) -> Predicate:
+    """Wrap a close-only (c, i) fn so OHLC kwargs are ignored, not TypeError."""
+
+    def pred(c, i=None, highs=None, lows=None, **_kw):
+        return fn(c, i)
+
+    return pred
+
+
+def _all_preds(preds: list[Predicate]) -> Predicate:
+    def pred(c, i=None, highs=None, lows=None, **kw):
+        return all(p(c, i, highs=highs, lows=lows, **kw) for p in preds)
+
+    return pred
+
+
+def _any_preds(preds: list[Predicate]) -> Predicate:
+    def pred(c, i=None, highs=None, lows=None, **kw):
+        return any(p(c, i, highs=highs, lows=lows, **kw) for p in preds)
+
+    return pred
+
+
+def _adapt_callable(fn: Callable) -> Predicate:
+    """Accept either close-only callables or ones that already take highs/lows."""
+
+    def pred(c, i=None, highs=None, lows=None, **kw):
+        try:
+            return fn(c, i, highs=highs, lows=lows)
+        except TypeError:
+            return fn(c, i)
+
+    return pred
+
+
+def eval_predicate(pred, closes, i=None, *, highs=None, lows=None) -> bool:
+    """Run a parse_strategy predicate, threading highs/lows when accepted."""
+    try:
+        return bool(pred(closes, i, highs=highs, lows=lows))
+    except TypeError:
+        return bool(pred(closes, i))
+
+
+def parse_strategy(expr: str | Callable | dict) -> Predicate:
+    """Parse a strategy expression into ``(closes, i, highs=, lows=) -> bool``.
+
+    Close-only names (``dip_24b_lt1pc``, ``sma_abv_50``, …) still work when
+    called as ``pred(closes)`` or ``pred(closes, i)``. Structure names need
+    ``highs``/``lows`` from the same bars.
+    """
     if callable(expr):
-        return expr
+        return _adapt_callable(expr)
 
     if isinstance(expr, dict):
         kind = expr.get("kind")
         if kind == "and":
-            p1 = parse_strategy(expr["a"])
-            p2 = parse_strategy(expr["b"])
-            return lambda c, i=None: p1(c, i) and p2(c, i)
+            return _all_preds([parse_strategy(expr["a"]), parse_strategy(expr["b"])])
         if kind == "or":
-            p1 = parse_strategy(expr["a"])
-            p2 = parse_strategy(expr["b"])
-            return lambda c, i=None: p1(c, i) or p2(c, i)
+            return _any_preds([parse_strategy(expr["a"]), parse_strategy(expr["b"])])
         if kind == "sma_stack":
             periods = expr.get("periods", (7, 25, 50))
-            return lambda c, i=None: _eval_sma_stack(c, periods, i)
+            return _close_pred(lambda c, i=None: _eval_sma_stack(c, periods, i))
         if kind == "ema_stack":
             periods = expr.get("periods", (7, 25, 50))
-            return lambda c, i=None: _eval_ema_stack(c, periods, i)
+            return _close_pred(lambda c, i=None: _eval_ema_stack(c, periods, i))
         if kind == "rsi_range":
-            return lambda c, i=None: _eval_rsi_range(c, expr.get("period", 14), expr.get("min", 50), expr.get("max", 100), i)
+            return _close_pred(lambda c, i=None: _eval_rsi_range(c, expr.get("period", 14), expr.get("min", 50), expr.get("max", 100), i))
         if kind == "sma_above":
-            return lambda c, i=None: _eval_sma_above(c, expr.get("period", 50), i)
+            return _close_pred(lambda c, i=None: _eval_sma_above(c, expr.get("period", 50), i))
         if kind == "ema_above":
-            return lambda c, i=None: _eval_ema_above(c, expr.get("period", 50), i)
+            return _close_pred(lambda c, i=None: _eval_ema_above(c, expr.get("period", 50), i))
         if kind == "mom_gt":
-            return lambda c, i=None: _eval_mom_gt(c, expr.get("lookback", 12), expr.get("thr", 0.02), i)
+            return _close_pred(lambda c, i=None: _eval_mom_gt(c, expr.get("lookback", 12), expr.get("thr", 0.02), i))
         if kind == "mom_lt":
-            return lambda c, i=None: _eval_mom_lt(c, expr.get("lookback", 6), expr.get("thr", -0.02), i)
+            return _close_pred(lambda c, i=None: _eval_mom_lt(c, expr.get("lookback", 6), expr.get("thr", -0.02), i))
         if kind == "vol_low":
-            return lambda c, i=None: _eval_vol_low(c, expr.get("short", 30), expr.get("long", 90), i)
+            return _close_pred(lambda c, i=None: _eval_vol_low(c, expr.get("short", 30), expr.get("long", 90), i))
 
     if not isinstance(expr, str):
-        return lambda c, i=None: False
+        return _close_pred(lambda c, i=None: False)
 
     expr_clean = expr.strip()
 
     # Combinator: AND (&) or OR (|)
     if "&" in expr_clean and not (expr_clean.startswith("(") and expr_clean.endswith(")") and "&" not in expr_clean[1:-1]):
         sub_exprs = [e.strip("() ") for e in expr_clean.split("&")]
-        preds = [parse_strategy(sub) for sub in sub_exprs]
-        return lambda c, i=None: all(p(c, i) for p in preds)
+        return _all_preds([parse_strategy(sub) for sub in sub_exprs])
 
     if "|" in expr_clean and not (expr_clean.startswith("(") and expr_clean.endswith(")") and "|" not in expr_clean[1:-1]):
         sub_exprs = [e.strip("() ") for e in expr_clean.split("|")]
-        preds = [parse_strategy(sub) for sub in sub_exprs]
-        return lambda c, i=None: any(p(c, i) for p in preds)
+        return _any_preds([parse_strategy(sub) for sub in sub_exprs])
 
     # 1. SMA Stack: sma_stack_7_25_50 or sma_stack (default 7, 25, 50)
     m_sma_stack = re.match(r"^sma_stack(?:_([\d_]+))?$", expr_clean)
     if m_sma_stack:
         periods_str = m_sma_stack.group(1)
         periods = tuple(int(p) for p in periods_str.split("_")) if periods_str else (7, 25, 50)
-        return lambda c, i=None: _eval_sma_stack(c, periods, i)
+        return _close_pred(lambda c, i=None: _eval_sma_stack(c, periods, i))
 
     # 2. EMA Stack: ema_stack_7_25_50
     m_ema_stack = re.match(r"^ema_stack(?:_([\d_]+))?$", expr_clean)
     if m_ema_stack:
         periods_str = m_ema_stack.group(1)
         periods = tuple(int(p) for p in periods_str.split("_")) if periods_str else (7, 25, 50)
-        return lambda c, i=None: _eval_ema_stack(c, periods, i)
+        return _close_pred(lambda c, i=None: _eval_ema_stack(c, periods, i))
 
     # 3. SMA Above: sma_abv_150 or sma100_above or sma_above_200
     m_sma_abv = re.match(r"^sma(?:_abv|_above)?_?(\d+)(?:_abv|_above)?$", expr_clean)
     if m_sma_abv:
         period = int(m_sma_abv.group(1))
-        return lambda c, i=None: _eval_sma_above(c, period, i)
+        return _close_pred(lambda c, i=None: _eval_sma_above(c, period, i))
 
     # 4. EMA Above: ema_abv_150 or ema50_above
     m_ema_abv = re.match(r"^ema(?:_abv|_above)?_?(\d+)(?:_abv|_above)?$", expr_clean)
     if m_ema_abv:
         period = int(m_ema_abv.group(1))
-        return lambda c, i=None: _eval_ema_above(c, period, i)
+        return _close_pred(lambda c, i=None: _eval_ema_above(c, period, i))
 
     # 5. RSI Range: rsi_30_>57_<90 or rsi_30_57 or rsi_14_>50
     m_rsi_full = re.match(r"^rsi_(\d+)_>_?(\d+)(?:_<_?(\d+))?$", expr_clean)
     if m_rsi_full:
         p, th = int(m_rsi_full.group(1)), int(m_rsi_full.group(2))
         ov = int(m_rsi_full.group(3)) if m_rsi_full.group(3) else 100
-        return lambda c, i=None: _eval_rsi_range(c, p, th, ov, i)
+        return _close_pred(lambda c, i=None: _eval_rsi_range(c, p, th, ov, i))
 
     m_rsi_short = re.match(r"^rsi_(\d+)_(\d+)$", expr_clean)
     if m_rsi_short:
         p, th = int(m_rsi_short.group(1)), int(m_rsi_short.group(2))
-        return lambda c, i=None: _eval_rsi_range(c, p, th, 100, i)
+        return _close_pred(lambda c, i=None: _eval_rsi_range(c, p, th, 100, i))
 
     if expr_clean == "rsi_momentum":
-        return lambda c, i=None: _eval_ema_above(c, 20, i) and _eval_rsi_range(c, 14, 50, 100, i)
+        return _close_pred(lambda c, i=None: _eval_ema_above(c, 20, i) and _eval_rsi_range(c, 14, 50, 100, i))
 
     if expr_clean == "robust_open":
-        return lambda c, i=None: _eval_sma_stack(c, (7, 25, 50), i) and _eval_rsi_range(c, 20, 55, 100, i)
+        return _close_pred(lambda c, i=None: _eval_sma_stack(c, (7, 25, 50), i) and _eval_rsi_range(c, 20, 55, 100, i))
 
     # 6. Momentum GT: mom_12b_gt2pc or mom_12_0.02
     m_mom = re.match(r"^mom_(\d+)b?_gt_?(\d+)(?:pc)?$", expr_clean)
@@ -170,7 +221,7 @@ def parse_strategy(expr: str | Callable | dict) -> Callable[[list[float], int | 
         lb = int(m_mom.group(1))
         val = int(m_mom.group(2))
         thr = val / 100.0 if val >= 1 else val
-        return lambda c, i=None: _eval_mom_gt(c, lb, thr, i)
+        return _close_pred(lambda c, i=None: _eval_mom_gt(c, lb, thr, i))
 
     # 7. Dip (Momentum LT): dip_6b_lt3pc or dip_6_0.03
     m_dip = re.match(r"^dip_(\d+)b?_lt_?(\d+)(?:pc)?$", expr_clean)
@@ -178,20 +229,19 @@ def parse_strategy(expr: str | Callable | dict) -> Callable[[list[float], int | 
         lb = int(m_dip.group(1))
         val = int(m_dip.group(2))
         thr = -(val / 100.0) if val >= 1 else -abs(val)
-        return lambda c, i=None: _eval_mom_lt(c, lb, thr, i)
+        return _close_pred(lambda c, i=None: _eval_mom_lt(c, lb, thr, i))
 
     # 8. Volatility Low Smoothing: vol_lowsm_30_90
     m_vol = re.match(r"^vol_lowsm_(\d+)_(\d+)$", expr_clean)
     if m_vol:
         s_lb, l_lb = int(m_vol.group(1)), int(m_vol.group(2))
-        return lambda c, i=None: _eval_vol_low(c, s_lb, l_lb, i)
+        return _close_pred(lambda c, i=None: _eval_vol_low(c, s_lb, l_lb, i))
 
-    # 8b. MFI requires OHLCV volume. The close-only parser refuses a unit-volume proxy.
+    # 8b. MFI requires OHLCV volume. Refuses a unit-volume proxy.
     m_mfi = re.match(r"^mfi_(\d+)_(>|<)_?(\d+)$", expr_clean)
     if m_mfi:
         raise ValueError(
-            "MFI requires OHLCV volume; parse_strategy is close-only and "
-            "refuses a [1.0]*len(closes) proxy"
+            "MFI requires OHLCV volume; refusing a [1.0]*len(closes) proxy"
         )
 
     # 8c. Bollinger Band Breakouts: bb_lower_20_2 or bb_upper_20_2
@@ -200,9 +250,9 @@ def parse_strategy(expr: str | Callable | dict) -> Callable[[list[float], int | 
         side, p, sd = m_bb.group(1), int(m_bb.group(2)), float(m_bb.group(3) or 2.0)
         from hedge_fund.signals.indicators import bollinger_bands
         if side == "lower":
-            return lambda c, i=None: (c[len(c)-1 if i is None else i] <= bollinger_bands(c, p, sd, i)[0])
+            return _close_pred(lambda c, i=None: (c[len(c)-1 if i is None else i] <= bollinger_bands(c, p, sd, i)[0]))
         else:
-            return lambda c, i=None: (c[len(c)-1 if i is None else i] >= bollinger_bands(c, p, sd, i)[2])
+            return _close_pred(lambda c, i=None: (c[len(c)-1 if i is None else i] >= bollinger_bands(c, p, sd, i)[2]))
 
     # 8d. Multi-timeframe wrappers are not implemented: the live cycle fetches
     # a single 5m series. Refusing a silent same-series wrap.
@@ -214,20 +264,39 @@ def parse_strategy(expr: str | Callable | dict) -> Callable[[list[float], int | 
             "parse_strategy evaluate a single series; refusing silent same-series wrap"
         )
 
+    # 8e. OHLC structure atoms (Donchian / fractal swing). Need highs+lows.
+    m_don = re.match(r"^don_(hi|lo)_(\d+)$", expr_clean)
+    if m_don:
+        from hedge_fund.signals.structure import don_hi, don_lo
+
+        n = int(m_don.group(2))
+        if m_don.group(1) == "hi":
+            return lambda c, i=None, highs=None, lows=None, **_k: don_hi(c, highs, lows, n, i)
+        return lambda c, i=None, highs=None, lows=None, **_k: don_lo(c, highs, lows, n, i)
+
+    m_swing = re.match(r"^near_swing_(hi|lo)_(\d+)$", expr_clean)
+    if m_swing:
+        from hedge_fund.signals.structure import near_swing_hi, near_swing_lo
+
+        k = int(m_swing.group(2))
+        if m_swing.group(1) == "hi":
+            return lambda c, i=None, highs=None, lows=None, **_k: near_swing_hi(c, highs, lows, k, i)
+        return lambda c, i=None, highs=None, lows=None, **_k: near_swing_lo(c, highs, lows, k, i)
+
     # 9. Composite patterns: sma200_rsi50, sma100_mom12_2
     m_sma_rsi = re.match(r"^sma(\d+)_rsi(\d+)$", expr_clean)
     if m_sma_rsi:
         sp, rp = int(m_sma_rsi.group(1)), int(m_sma_rsi.group(2))
-        return lambda c, i=None: _eval_sma_above(c, sp, i) and _eval_rsi_range(c, 14, rp, 100, i)
+        return _close_pred(lambda c, i=None: _eval_sma_above(c, sp, i) and _eval_rsi_range(c, 14, rp, 100, i))
 
     m_sma_mom = re.match(r"^sma(\d+)_mom(\d+)_(\d+)$", expr_clean)
     if m_sma_mom:
         sp, lb, thr_int = int(m_sma_mom.group(1)), int(m_sma_mom.group(2)), int(m_sma_mom.group(3))
         thr = thr_int / 100.0
-        return lambda c, i=None: _eval_sma_above(c, sp, i) and _eval_mom_gt(c, lb, thr, i)
+        return _close_pred(lambda c, i=None: _eval_sma_above(c, sp, i) and _eval_mom_gt(c, lb, thr, i))
 
     # Fallback
-    return lambda c, i=None: False
+    return _close_pred(lambda c, i=None: False)
 
 
 # ---------------------------------------------------------------------------

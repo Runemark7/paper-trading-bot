@@ -10,7 +10,9 @@ tournament of combinatorial TA strategies (not the original LLM-probability
 study). Amendment 2026-09-01: qualification uses the same tape as live
 (then 4h); "profitable" vs buy-and-hold is computed on the overlay and at
 graduation. Amendment 2026-09-02: live book, admit, and walk-forward are 5m
-bars; the decision cycle runs every 5 minutes.
+bars; the decision cycle runs every 5 minutes. Amendment 2026-09-03:
+Donchian / fractal-swing structure atoms exist; they use high/low from
+the same 5m klines; still paper.
 
 Built on **[ai-hedge-fund](https://github.com/virattt/ai-hedge-fund)** (MIT, © Virat Singh)
 for Signal models, sim broker, risk limits, portfolio, backtesting, and the LLM layer.
