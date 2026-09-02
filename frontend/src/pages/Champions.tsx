@@ -10,10 +10,28 @@ import {
   certaintyLabel,
   fmtWhen,
   lotsForChampion,
+  openLotsByPair,
   positionEntry,
   positionPnl,
   positionStop,
 } from "../status/format";
+
+/** Always-visible BTC vs ETH lot counts. Short chips so they wrap on a phone. */
+function PairLotChips({ btc, eth }: { btc: number | string; eth: number | string }) {
+  return (
+    <div
+      className="flex flex-wrap items-center gap-1 min-w-0"
+      aria-label={`Open lots BTC ${btc} ETH ${eth}`}
+    >
+      <span className="inline-flex shrink-0 items-center rounded-md bg-white/10 px-1.5 py-0.5 text-[11px] font-medium tabular-nums text-white/80">
+        BTC {btc}
+      </span>
+      <span className="inline-flex shrink-0 items-center rounded-md bg-white/10 px-1.5 py-0.5 text-[11px] font-medium tabular-nums text-white/80">
+        ETH {eth}
+      </span>
+    </div>
+  );
+}
 
 function ChampionLotList({ lots }: { lots: LivePosition[] }) {
   return (
@@ -140,10 +158,11 @@ export default function Champions() {
         aside={run ? `${champs.length} / ${targetMax} champions · last cycle ${fmtWhen(run.cycle.last_cycle_at)}` : `${champs.length} / ${targetMax} champions`}
       >
         <div className="text-sm text-white/60 mb-3">
-          Each name is an isolated paper account. The open-lots count on the card is the
-          same total as Overview and Positions (BTC + ETH on one champion = 2); tap the
-          card to expand that account's rows. After <b>{evalLimit} closed entries</b> the
-          account leaves this list. <code>GRADUATED_PAPER</code> is graduated paper, not live money.
+          Each name is an isolated paper account. The card shows that account's open
+          lots split BTC vs ETH (same /api/live lots as Positions: two BTC + one ETH
+          = BTC 2 · ETH 1, total 3). Tap to expand the rows. After{" "}
+          <b>{evalLimit} closed entries</b> the account leaves this list.{" "}
+          <code>GRADUATED_PAPER</code> is graduated paper, not live money.
           {run?.strategy.mode === "sma_stack_fallback" && (
             <> Pool empty — book is running <code>sma_stack</code> fallback.</>
           )}
@@ -162,7 +181,9 @@ export default function Champions() {
               const isOpen = expandedChampion === c.name;
               const panelId = `champion-lots-${accountSlug(c.name)}`;
               const knownCount = c.open_lots ?? 0;
+              const split = openLotsByPair(qLive.data, c.name);
               const lots = isOpen ? lotsForChampion(qLive.data?.positions, c.name) : [];
+              const liveLotsKnown = qLive.data != null;
               return (
                 <li key={c.name} className="rounded-lg border border-white/10 min-w-0 overflow-hidden">
                   <button
@@ -184,8 +205,12 @@ export default function Champions() {
                         </span>
                       </span>
                     </div>
+                    <PairLotChips
+                      btc={liveLotsKnown ? split.btc : "—"}
+                      eth={liveLotsKnown ? split.eth : "—"}
+                    />
                     <FieldGrid>
-                      <Field label="Open lots">{knownCount}</Field>
+                      <Field label="Open lots">{liveLotsKnown ? split.total : knownCount}</Field>
                       <Field label={`Closed (of ${evalLimit})`}>{c.closed} / {evalLimit}</Field>
                       <Field label="Wins">{c.wins}</Field>
                       <Field label="Paper P&L" className={c.pnl >= 0 ? "text-emerald-400" : "text-rose-400"}>
