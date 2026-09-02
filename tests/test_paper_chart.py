@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -104,10 +105,87 @@ class LiveLotsForChartTests(unittest.TestCase):
         self.assertEqual(len(prev["lots"]), 2)
 
 
+TF_MS = 5 * 60 * 1000
+BARS_PER_DAY = 288
+DEFAULT_CANDLE_BARS = 3 * BARS_PER_DAY  # 864
+MAX_CANDLE_BARS = 7 * BARS_PER_DAY  # 2016
+ENTRY_PAD_BARS = 12
+
+
 def _one_bar():
     from hedge_fund.data.binance import Candle
 
     return Candle(ts=1_700_000_000_000, open=1, high=2, low=0.5, close=1.5, volume=10)
+
+
+def _now_aligned_ms() -> int:
+    now = int(time.time() * 1000)
+    return now - (now % TF_MS)
+
+
+class FakeVenue:
+    """Public klines with unique timestamps. Honors since; never new-ups ccxt."""
+
+    def __init__(self, n=4000, end_ts=None):
+        self.step = TF_MS
+        self.end_ts = _now_aligned_ms() if end_ts is None else end_ts
+        self.start_ts = self.end_ts - (n - 1) * self.step
+        self.calls: list[dict] = []
+
+    def fetch_klines(self, symbol, timeframe="5m", limit=200, since=None):
+        from hedge_fund.data.binance import Candle
+
+        self.calls.append({"symbol": symbol, "timeframe": timeframe, "limit": limit, "since": since})
+        if since is None:
+            start = self.end_ts - (limit - 1) * self.step
+        else:
+            start = since
+            rem = (start - self.start_ts) % self.step
+            if rem:
+                start += self.step - rem
+            start = max(start, self.start_ts)
+        out = []
+        t = start
+        while len(out) < limit and t <= self.end_ts:
+            out.append(Candle(ts=t, open=1, high=2, low=0.5, close=1.5, volume=10))
+            t += self.step
+        if not out:
+            raise RuntimeError("no klines")
+        return out
+
+
+def _iso(ms: int) -> str:
+    from datetime import datetime, timezone
+
+    return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
+
+
+def _candle_limit_for_entries(entry_times, now_ms: int) -> int:
+    """Mirror frontend candleLimitForEntries. Null/empty times are skipped, not invented."""
+    earliest = None
+    for iso in entry_times:
+        if not iso:
+            continue
+        try:
+            ms = int(datetime_parse(iso))
+        except (TypeError, ValueError):
+            continue
+        if earliest is None or ms < earliest:
+            earliest = ms
+    if earliest is None:
+        return DEFAULT_CANDLE_BARS
+    bars = -(-(now_ms - earliest) // TF_MS) + ENTRY_PAD_BARS  # ceil
+    return min(MAX_CANDLE_BARS, max(DEFAULT_CANDLE_BARS, bars))
+
+
+def datetime_parse(iso: str) -> int:
+    from datetime import datetime, timezone
+
+    raw = iso.replace("Z", "+00:00")
+    dt = datetime.fromisoformat(raw)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return int(dt.timestamp() * 1000)
 
 
 class CandlesEndpointTests(unittest.TestCase):
@@ -136,20 +214,84 @@ class CandlesEndpointTests(unittest.TestCase):
         self.assertEqual(out["symbol"], "ETH/USDT")
         self.assertTrue(out["paper_only"])
 
-    def test_caps_limit_500_below_crash_size(self):
+    def test_default_is_three_days_cap_is_seven(self):
+        from hedge_fund.web.candles import (
+            BARS_PER_DAY,
+            CHUNK_SIZE,
+            DEFAULT_LIMIT,
+            MAX_LIMIT,
+            candles_payload,
+        )
+
+        self.assertEqual(BARS_PER_DAY, 288)
+        self.assertEqual(DEFAULT_LIMIT, 3 * BARS_PER_DAY)
+        self.assertEqual(MAX_LIMIT, 7 * BARS_PER_DAY)
+        self.assertEqual(CHUNK_SIZE, 200)
+        self.assertLessEqual(CHUNK_SIZE, 200)
+        self.assertGreater(MAX_LIMIT, DEFAULT_LIMIT)
+        self.assertGreater(MAX_LIMIT, 500)
+        src = FakeVenue()
+        out = candles_payload("BTC/USDT", "5m", None, source=src)
+        self.assertEqual(len(out["candles"]), DEFAULT_LIMIT)
+        for call in src.calls:
+            self.assertLessEqual(call["limit"], CHUNK_SIZE)
+
+    def test_limit_500_is_chunked_not_oneshot(self):
+        from hedge_fund.web.candles import CHUNK_SIZE, candles_payload
+
+        src = FakeVenue()
+        out = candles_payload("BTC/USDT", "5m", 500, source=src)
+        self.assertEqual(len(out["candles"]), 500)
+        self.assertGreater(len(src.calls), 1)
+        for call in src.calls:
+            self.assertLessEqual(call["limit"], CHUNK_SIZE)
+            self.assertLessEqual(call["limit"], 200)
+        ts = [c["t"] for c in out["candles"]]
+        self.assertEqual(ts, sorted(ts))
+        self.assertEqual(len(set(ts)), 500)
+
+    def test_chunked_fetch_does_not_construct_ccxt_per_chunk(self):
+        from hedge_fund.web.candles import CHUNK_SIZE, candles_payload
+
+        venue = FakeVenue()
+        with patch("hedge_fund.data.binance.CcxtSource", return_value=venue) as ctor:
+            out = candles_payload("BTC/USDT", "5m", 500)
+        self.assertEqual(ctor.call_count, 1)
+        self.assertGreater(len(venue.calls), 1)
+        for call in venue.calls:
+            self.assertLessEqual(call["limit"], CHUNK_SIZE)
+        self.assertEqual(len(out["candles"]), 500)
+
+    def test_since_older_than_three_days_extends_up_to_seven(self):
         from hedge_fund.web.candles import DEFAULT_LIMIT, MAX_LIMIT, candles_payload
 
-        self.assertGreaterEqual(DEFAULT_LIMIT, 180)
-        self.assertLessEqual(DEFAULT_LIMIT, 250)
-        self.assertLessEqual(MAX_LIMIT, 250)
-        self.assertGreaterEqual(MAX_LIMIT, DEFAULT_LIMIT)
-        self.assertLess(MAX_LIMIT, 500)
-        src = MagicMock()
-        src.fetch_klines.return_value = [_one_bar()]
-        candles_payload("BTC/USDT", "5m", 500, source=src)
-        src.fetch_klines.assert_called_once_with(
-            "BTC/USDT", timeframe="5m", limit=MAX_LIMIT
-        )
+        src = FakeVenue()
+        now = _now_aligned_ms()
+        since = now - 4 * 24 * 60 * 60 * 1000
+        out = candles_payload("ETH/USDT", "5m", None, source=src, since=since)
+        self.assertGreater(len(out["candles"]), DEFAULT_LIMIT)
+        self.assertLessEqual(len(out["candles"]), MAX_LIMIT)
+        self.assertLessEqual(out["candles"][0]["t"], since)
+
+    def test_ten_day_since_caps_at_seven_days(self):
+        from hedge_fund.web.candles import MAX_LIMIT, candles_payload
+
+        src = FakeVenue(n=5000)
+        now = _now_aligned_ms()
+        since = now - 10 * 24 * 60 * 60 * 1000
+        out = candles_payload("BTC/USDT", "5m", 5000, source=src, since=since)
+        self.assertEqual(len(out["candles"]), MAX_LIMIT)
+        self.assertGreater(out["candles"][0]["t"], since)
+        for call in src.calls:
+            self.assertLessEqual(call["limit"], 200)
+
+    def test_bad_since_is_400(self):
+        from hedge_fund.web.candles import CandleRequestError, candles_payload
+
+        with self.assertRaises(CandleRequestError):
+            candles_payload("BTC/USDT", "5m", 50, since="yesterday")
+        with self.assertRaises(CandleRequestError):
+            candles_payload("BTC/USDT", "5m", 50, since=-1)
 
     def test_accepts_hyphen_and_uses_public_klines(self):
         from hedge_fund.web.candles import candles_payload
@@ -275,8 +417,14 @@ class CandlesEndpointTests(unittest.TestCase):
         self.assertIn("CcxtSource", candles_py)
         self.assertNotIn("live broker", candles_py.lower())
         self.assertIn("binanceus", candles_py)
-        self.assertIn("MAX_LIMIT = 250", candles_py)
-        self.assertIn("DEFAULT_LIMIT = 200", candles_py)
+        self.assertIn("CHUNK_SIZE = 200", candles_py)
+        self.assertIn("DEFAULT_LIMIT = DEFAULT_DAYS * BARS_PER_DAY", candles_py)
+        self.assertIn("MAX_LIMIT = MAX_DAYS * BARS_PER_DAY", candles_py)
+        self.assertIn("since=qs.get(\"since\")", src)
+        self.assertNotIn("MAX_LIMIT = 250", candles_py)
+        self.assertNotIn("DEFAULT_LIMIT = 200", candles_py)
+        self.assertIn("_fetch_last_n", candles_py)
+        self.assertIn("_call_klines", candles_py)
 
 
 class TradesFilterTests(unittest.TestCase):
@@ -321,13 +469,19 @@ class ChartUiTests(unittest.TestCase):
         self.assertIn("BTC/USDT", tape)
         self.assertIn("ETH/USDT", tape)
         self.assertIn("aria-pressed", tape)
-        self.assertIn("CANDLE_LIMIT = 200", client)
+        self.assertIn("DEFAULT_CANDLE_BARS = 3 * BARS_PER_DAY", client)
+        self.assertIn("MAX_CANDLE_BARS = 7 * BARS_PER_DAY", client)
+        self.assertNotIn("CANDLE_LIMIT = 200", client)
         self.assertNotIn("limit = 500", client)
         self.assertNotIn("limit: 500", client)
-        self.assertIn("CANDLE_LIMIT", tape)
-        self.assertIn("api.candles(symbol, \"5m\", CANDLE_LIMIT)", tape)
+        self.assertIn("candleLimitForEntries", tape)
+        self.assertIn("api.candles(symbol, \"5m\", candleLimit)", tape)
+        self.assertNotIn("CANDLE_LIMIT", tape)
         self.assertNotIn("limit = 500", tape)
         self.assertNotIn('"5m", 500', tape)
+        self.assertNotIn('"4h"', tape)
+        self.assertIn("7-day tape", tape)
+        self.assertIn("lotsOlderThanTape", tape)
         self.assertIn("min-h-12", tape)
         self.assertIn("{n} lots", tape)
         self.assertIn("openLotsByPair", tape)
@@ -344,6 +498,9 @@ class ChartUiTests(unittest.TestCase):
         self.assertIn("function lotsForChampionSymbol", numbering)
         self.assertIn("function closedTradesForChampionSymbol", numbering)
         self.assertIn("function defaultChampionName", numbering)
+        self.assertIn("function candleLimitForEntries", numbering)
+        self.assertIn("function lotsOlderThanTape", numbering)
+        self.assertIn("if (!iso) continue", numbering)
         self.assertIn("accountsMatch(l.account, championName)", numbering)
         self.assertIn("accountsMatch(t.account, championName)", numbering)
         paper = (REPO / "frontend" / "src" / "chart" / "PaperChart.tsx").read_text()
@@ -469,6 +626,53 @@ class ChampionScopedChartTests(unittest.TestCase):
         grad = champs[champs.index("Graduated paper") :]
         self.assertNotIn("ChampionTape", grad)
 
+
+class CandleWindowTests(unittest.TestCase):
+    def test_default_three_days_when_no_entry_ts(self):
+        now = 1_800_000_000_000
+        self.assertEqual(_candle_limit_for_entries([], now), DEFAULT_CANDLE_BARS)
+        self.assertEqual(_candle_limit_for_entries([None, ""], now), DEFAULT_CANDLE_BARS)
+        numbering = (REPO / "frontend" / "src" / "chart" / "numberTrades.ts").read_text()
+        self.assertIn("if (!iso) continue", numbering)
+        self.assertIn("return DEFAULT_CANDLE_BARS", numbering)
+
+    def test_two_day_entry_stays_at_default(self):
+        now = 1_800_000_000_000
+        two_days = now - 2 * 24 * 60 * 60 * 1000
+        self.assertEqual(
+            _candle_limit_for_entries([_iso(two_days)], now),
+            DEFAULT_CANDLE_BARS,
+        )
+
+    def test_four_day_entry_extends_past_three_days(self):
+        now = 1_800_000_000_000
+        four_days = now - 4 * 24 * 60 * 60 * 1000
+        n = _candle_limit_for_entries([_iso(four_days), None], now)
+        self.assertGreater(n, DEFAULT_CANDLE_BARS)
+        self.assertLessEqual(n, MAX_CANDLE_BARS)
+        self.assertGreaterEqual(n, 4 * BARS_PER_DAY + ENTRY_PAD_BARS)
+
+    def test_ten_day_entry_caps_at_seven_days(self):
+        now = 1_800_000_000_000
+        ten_days = now - 10 * 24 * 60 * 60 * 1000
+        self.assertEqual(
+            _candle_limit_for_entries([_iso(ten_days)], now),
+            MAX_CANDLE_BARS,
+        )
+
+    def test_null_entry_ts_does_not_invent_a_window(self):
+        now = 1_800_000_000_000
+        known = now - 5 * 24 * 60 * 60 * 1000
+        n_known = _candle_limit_for_entries([_iso(known)], now)
+        n_mixed = _candle_limit_for_entries([None, _iso(known), ""], now)
+        self.assertEqual(n_known, n_mixed)
+        self.assertEqual(_candle_limit_for_entries([None], now), DEFAULT_CANDLE_BARS)
+
+    def test_paper_chart_does_not_glue_off_window_entries_to_bar_zero(self):
+        paper = (REPO / "frontend" / "src" / "chart" / "PaperChart.tsx").read_text()
+        snap = paper.split("function snapToCandle")[1].split("export default")[0]
+        self.assertIn("if (t < candleSec[0]) return null", snap)
+        self.assertNotIn("if (t <= candleSec[0]) return candleSec[0]", snap)
 
 
 if __name__ == "__main__":

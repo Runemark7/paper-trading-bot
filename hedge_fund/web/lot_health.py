@@ -149,11 +149,12 @@ def fetch_signal_closes(limit: int | None = None) -> dict[str, list]:
     from hedge_fund.web.candles import (
         CandleFetchError,
         CandleRequestError,
-        DEFAULT_LIMIT,
         candles_payload,
     )
 
-    n = DEFAULT_LIMIT if limit is None else limit
+    # Recent 5m bars for this-bar signal — not the champion chart window.
+    # Chart history is 3–7 days; lot health only needs a short lookback.
+    n = 200 if limit is None else limit
     out: dict[str, list] = {}
     for sym in QUAL_SYMBOLS:
         try:

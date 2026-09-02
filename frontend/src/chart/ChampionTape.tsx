@@ -1,14 +1,17 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { api, CANDLE_LIMIT } from "../api/client";
+import { api } from "../api/client";
 import type { ChartSymbol } from "../api/types";
 import { Empty, fmt, fmtPct } from "../components/ui";
 import { LotHealthChips } from "../status/LotHealth";
 import { openLotsByPair } from "../status/format";
 import PaperChart from "./PaperChart";
 import {
+  candleLimitForEntries,
   closedTradesForChampionSymbol,
+  entryTimesForTape,
   lotsForChampionSymbol,
+  lotsOlderThanTape,
   numberClosedTrades,
   numberOpenLots,
   tradesInCandleWindow,
@@ -114,12 +117,6 @@ export default function ChampionTape({
 }) {
   const [symbol, setSymbol] = useState<ChartSymbol>("BTC/USDT");
 
-  const candles = useQuery({
-    queryKey: ["candles", symbol, CANDLE_LIMIT],
-    queryFn: () => api.candles(symbol, "5m", CANDLE_LIMIT),
-    refetchInterval: REFRESH_MS,
-    enabled: Boolean(championName),
-  });
   const live = useQuery({
     queryKey: ["live"],
     queryFn: api.live,
@@ -129,6 +126,19 @@ export default function ChampionTape({
   const trades = useQuery({
     queryKey: ["trades", symbol],
     queryFn: () => api.trades(symbol, compact ? 80 : 200),
+    refetchInterval: REFRESH_MS,
+    enabled: Boolean(championName),
+  });
+
+  const candleLimit = useMemo(() => {
+    const lots = lotsForChampionSymbol(live.data, championName, symbol);
+    const closed = closedTradesForChampionSymbol(trades.data, championName, symbol);
+    return candleLimitForEntries(entryTimesForTape(lots, closed));
+  }, [live.data, trades.data, championName, symbol]);
+
+  const candles = useQuery({
+    queryKey: ["candles", symbol, candleLimit],
+    queryFn: () => api.candles(symbol, "5m", candleLimit),
     refetchInterval: REFRESH_MS,
     enabled: Boolean(championName),
   });
@@ -144,6 +154,10 @@ export default function ChampionTape({
     const visible = tradesInCandleWindow(forChamp, bars ?? []);
     return numberClosedTrades(visible, symbol);
   }, [trades.data, championName, symbol, bars]);
+  const offChart = useMemo(
+    () => lotsOlderThanTape(openNumbered, bars ?? []),
+    [openNumbered, bars],
+  );
 
   return (
     <div className="min-w-0 space-y-2">
@@ -168,6 +182,11 @@ export default function ChampionTape({
         />
       )}
       <TradeLegend openLots={openNumbered} closed={closedNumbered} compact={compact} />
+      {offChart.length > 0 ? (
+        <p className="text-xs text-white/40 leading-relaxed min-w-0 break-words">
+          Trade {offChart.map((x) => x.n).join(", ")} opened before this 7-day tape.
+        </p>
+      ) : null}
       {!compact && (
         <p className="text-xs text-white/45 leading-relaxed min-w-0 break-words">
           This tape is {championName} on {symbol} only. Open lots: entry + stop + take-profit (2:1 vs
