@@ -2,9 +2,10 @@
 import json, sqlite3, sys
 from hedge_fund.paths import state_root
 from hedge_fund.data.binance import CcxtSource
+from hedge_fund.trading.constants import QUAL_TIMEFRAME
 from hedge_fund.signals.momentum import compute_signal
 
-TF = "4h"
+TF = QUAL_TIMEFRAME
 SYMBOLS = ["BTC/USDT", "ETH/USDT"]
 STRATS = ["sma_stack", "sma_stack_5_20_50", "sma_100_abv",
           "rsi_30_57", "rsi_trend_50", "robust_open"]

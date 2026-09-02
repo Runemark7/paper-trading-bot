@@ -16,6 +16,7 @@ from hedge_fund.trading.constants import (
     CYCLE_INTERVAL_SECONDS,
     GRADUATED_PAPER,
     MAX_ACTIVE_CHAMPIONS,
+    QUAL_TIMEFRAME,
     TRADE_EVALUATION_LIMIT,
 )
 from hedge_fund.trading.heartbeat import HEARTBEAT_SECONDS
@@ -313,7 +314,7 @@ def build_status() -> dict:
             },
             "cycle": {
                 "interval_seconds": CYCLE_INTERVAL_SECONDS,
-                "bar_timeframe": "4h",
+                "bar_timeframe": QUAL_TIMEFRAME,
                 "window": f"{CYCLE_WINDOW_START_HOUR:02d}–{CYCLE_WINDOW_END_HOUR:02d} Europe/Stockholm",
                 "last_cycle_at": last_cycle,
                 "account_saved_at": _account_saved_at(dbs),

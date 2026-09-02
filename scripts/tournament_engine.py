@@ -1,7 +1,7 @@
 """Tournament Arena & Continuous Discovery Engine.
 
-1. Walk-forward backtests on **4h** OHLCV (same tape as live TradingLoop).
-   5m history scripts must not admit champions.
+1. Walk-forward backtests on **5m** OHLCV (same tape as live TradingLoop).
+   4h history must not admit champions.
 2. Hard qualification filter (hedge_fund.trading.constants): OOS-only score,
    every window's test PnL >= 0, >= 30 OOS trades, OOS Sharpe >= 0.30,
    OOS beats buy-and-hold and sma_stack after fees. Risk policy: rm_v1.
@@ -42,12 +42,8 @@ from hedge_fund.trading.universe import generate_universe, near_duplicate_key
 FALLBACK_BENCHMARK = "sma_stack"
 
 
-def _hist_4h():
+def _hist_qual():
     return state_root() / f"crypto_history_{QUAL_TIMEFRAME}.json"
-
-
-def _hist_5m():
-    return state_root() / "crypto_history_5m.json"
 
 
 def _discovery_log_file():
@@ -55,7 +51,7 @@ def _discovery_log_file():
 
 
 def generate_candidate_pool() -> list[str]:
-    """Explicit 4h universe (no daily()/h1()/m5() or MFI)."""
+    """Explicit 5m universe (no daily()/h1()/m5() or MFI)."""
     return generate_universe()
 
 
@@ -138,8 +134,8 @@ def qualification_decision(
 
 
 def _load_qual_history() -> dict | None:
-    """4h tape only. A 5m-only state dir must not admit anyone."""
-    path = _hist_4h()
+    """5m tape only. A 4h-only state dir must not admit anyone."""
+    path = _hist_qual()
     if not path.exists():
         return None
     try:
@@ -278,7 +274,7 @@ def discover_and_qualify(
     n_windows: int = QUAL_N_WINDOWS,
     stride: int = QUAL_STRIDE,
 ) -> tuple[list[dict], list[dict]]:
-    """Walk-forward qualification on 4h BTC/ETH. 5m-only history does not admit."""
+    """Walk-forward qualification on 5m BTC/ETH. 4h-only history does not admit."""
     if batch_size is None:
         batch_size = DISCOVER_BATCH_SIZE
     data = _load_qual_history()
@@ -344,7 +340,7 @@ def discover_and_qualify(
 
 
 def replenish_and_evaluate(batch_size: int | None = None) -> dict:
-    """Admit 4h-qualified names only into free slots (pool cap 20)."""
+    """Admit 5m-qualified names only into free slots (pool cap 20)."""
     if batch_size is None:
         batch_size = DISCOVER_BATCH_SIZE
     st = load_pool()
@@ -375,7 +371,7 @@ def replenish_and_evaluate(batch_size: int | None = None) -> dict:
                 "sharpe_qual": q["sharpe"],
                 "winrate_qual": q["win_rate_pct"],
                 "admitted_at": datetime.now(timezone.utc).isoformat(),
-                "source": "4h_qualification_filter",
+                "source": "5m_qualification_filter",
                 "timeframe": QUAL_TIMEFRAME,
                 "risk_policy": RISK_POLICY,
             })

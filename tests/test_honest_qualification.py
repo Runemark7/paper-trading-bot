@@ -1,4 +1,4 @@
-"""Honest 4h qualification gates, small arena, paper vs buy-and-hold graduation."""
+"""Honest 5m qualification gates, small arena, paper vs buy-and-hold graduation."""
 from __future__ import annotations
 
 import json
@@ -108,13 +108,13 @@ class QualTapeTests(unittest.TestCase):
         ts = 1_600_000_000_000
         for i in range(n):
             px *= 1.0 + drift
-            rows.append([ts + i * 14_400_000, px, px * 1.01, px * 0.99, px])
+            rows.append([ts + i * 300_000, px, px * 1.01, px * 0.99, px])
         return rows
 
-    def test_5m_only_history_does_not_admit(self):
+    def test_4h_only_history_does_not_admit(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            (root / "crypto_history_5m.json").write_text(json.dumps({
+            (root / "crypto_history_4h.json").write_text(json.dumps({
                 "BTC/USDT": self._ohlcv(),
                 "ETH/USDT": self._ohlcv(start=10.0),
             }))
@@ -123,21 +123,21 @@ class QualTapeTests(unittest.TestCase):
         self.assertEqual(qualified, [])
         self.assertEqual(evaluated, [])
 
-    def test_4h_path_used_when_present(self):
+    def test_5m_path_used_when_present(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             payload = {
                 "BTC/USDT": self._ohlcv(),
                 "ETH/USDT": self._ohlcv(start=10.0),
             }
-            (root / "crypto_history_4h.json").write_text(json.dumps(payload))
-            (root / "crypto_history_5m.json").write_text(json.dumps({"should": "not_be_used"}))
+            (root / "crypto_history_5m.json").write_text(json.dumps(payload))
+            (root / "crypto_history_4h.json").write_text(json.dumps({"should": "not_be_used"}))
             with patch.dict(os.environ, {"PAPER_STATE": str(root)}):
                 with patch("scripts.tournament_engine.random.sample", side_effect=lambda pop, k: list(pop)[:k]):
                     _q, evaluated = discover_and_qualify(batch_size=3, window_size=80, n_windows=3)
-        self.assertTrue(evaluated, "4h tape should produce evaluations")
+        self.assertTrue(evaluated, "5m tape should produce evaluations")
         for rec in evaluated:
-            self.assertEqual(rec["timeframe"], "4h")
+            self.assertEqual(rec["timeframe"], "5m")
             self.assertEqual(rec["risk_policy"], "rm_v1")
 
 
@@ -205,7 +205,7 @@ class GraduationVsBuyAndHoldTests(unittest.TestCase):
                 store = TradeStore(root / "trades_loser_vs_bh.sqlite")
                 for i in range(TRADE_EVALUATION_LIMIT):
                     tid = store.open_trade(
-                        "BTC/USDT", "4h", "sma_stack_long", 0.6, 100.0, 0.01, 0.01, lot_id=i,
+                        "BTC/USDT", "5m", "sma_stack_long", 0.6, 100.0, 0.01, 0.01, lot_id=i,
                     )
                     # Tiny paper PnL, huge B&H (100 → 150).
                     store.close_trade(tid, 150.0, "take_profit", 0.01, 0.05, 0.5, 1)
@@ -225,7 +225,7 @@ class GraduationVsBuyAndHoldTests(unittest.TestCase):
                 store = TradeStore(root / "trades_beater.sqlite")
                 for i in range(TRADE_EVALUATION_LIMIT):
                     tid = store.open_trade(
-                        "BTC/USDT", "4h", "sma_stack_long", 0.6, 100.0, 0.01, 0.01, lot_id=i,
+                        "BTC/USDT", "5m", "sma_stack_long", 0.6, 100.0, 0.01, 0.01, lot_id=i,
                     )
                     store.close_trade(tid, 100.0, "take_profit", 0.01, 1.0, 0.0, 1)
                 (root / "champions.json").write_text(json.dumps({

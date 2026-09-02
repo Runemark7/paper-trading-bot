@@ -6,8 +6,8 @@ Rules (hedge_fund.trading.constants — do not document different numbers):
    Paper PnL greater than buy-and-hold of the same assets over the same
    period (after fees) → GRADUATED_PAPER (graduated paper, not live trading).
    Else REJECTED_NEGATIVE_PNL. Results go to graduated.json.
-3. If active champions < MAX_ACTIVE_CHAMPIONS, 4h-qualified candidates fill
-   free slots only — never a 5m admit bar.
+3. If active champions < MAX_ACTIVE_CHAMPIONS, 5m-qualified candidates fill
+   free slots only — never a 4h admit bar.
 """
 from __future__ import annotations
 
@@ -245,7 +245,7 @@ def collect_live_results() -> dict:
 
 
 def promote_candidates(candidates: list[dict]) -> dict:
-    """Add 4h-qualified names until pool reaches MAX_ACTIVE_CHAMPIONS (20)."""
+    """Add 5m-qualified names until pool reaches MAX_ACTIVE_CHAMPIONS (20)."""
     st = load_pool()
     grad_list = load_graduated()
     existing = {c["name"] for c in st["champions"]}.union({g["name"] for g in grad_list})

@@ -2,9 +2,10 @@
 import json, sqlite3, sys
 from hedge_fund.paths import state_root
 from hedge_fund.data.binance import CcxtSource
+from hedge_fund.trading.constants import QUAL_TIMEFRAME
 from hedge_fund.signals.momentum import compute_signal
 
-TF = "4h"
+TF = QUAL_TIMEFRAME
 SYMBOLS = ["BTC/USDT", "ETH/USDT"]
 # current run set: live default + evolve champion + champion pool
 STRATS = ["sma_stack_7_25_50", "sma_100_abv", "rsi_30_57", "robust_open",

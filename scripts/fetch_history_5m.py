@@ -1,7 +1,8 @@
-"""5m history fetch — research tape only.
+"""5m history fetch — live and qualification tape.
 
-Must not admit champions. Qualification and the live book use 4h
+Writes crypto_history_5m.json. Qualification and the live book use 5m
 (`scripts/tournament_engine.py`, TradingLoop, CcxtSource.DEFAULT_TIMEFRAME).
+4h history must not admit champions.
 """
 from __future__ import annotations
 

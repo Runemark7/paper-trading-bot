@@ -41,7 +41,7 @@ services:
           else
             echo "live_cycle: outside 07-21 Stockholm (H=$H), skip"
           fi
-          sleep 3600
+          sleep 300
         done
     restart: unless-stopped
 

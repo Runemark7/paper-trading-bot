@@ -127,16 +127,16 @@ class StatusPayloadTests(unittest.TestCase):
         self.assertEqual(st["in_progress"]["graduation"]["last_status"], "GRADUATED_PAPER")
         self.assertFalse(st["in_progress"]["graduation"]["running"])
 
-    def test_cycle_interval_is_hourly_not_4h(self):
+    def test_cycle_interval_is_5m_not_hourly(self):
         from hedge_fund.trading.constants import CYCLE_INTERVAL_SECONDS
         from hedge_fund.web.status import build_status
 
-        self.assertEqual(CYCLE_INTERVAL_SECONDS, 3600)
+        self.assertEqual(CYCLE_INTERVAL_SECONDS, 300)
         with tempfile.TemporaryDirectory() as tmp:
             with patch.dict(os.environ, {"PAPER_STATE": str(tmp)}):
                 st = build_status()
-        self.assertEqual(st["running_now"]["cycle"]["interval_seconds"], 3600)
-        self.assertEqual(st["running_now"]["cycle"]["bar_timeframe"], "4h")
+        self.assertEqual(st["running_now"]["cycle"]["interval_seconds"], 300)
+        self.assertEqual(st["running_now"]["cycle"]["bar_timeframe"], "5m")
 
 
 class LiveAliasTests(unittest.TestCase):
@@ -223,7 +223,11 @@ class RouteAndCopyTests(unittest.TestCase):
         self.assertIn("In progress", overview)
         self.assertIn("display only", overview.lower())
         self.assertIn("sma_stack", overview)
+        self.assertIn('?? "5m"', overview)
+        self.assertNotIn('?? "4h"', overview)
         champs = (REPO / "frontend" / "src" / "pages" / "Champions.tsx").read_text()
+        self.assertIn("5m history, same tape as live", champs)
+        self.assertNotIn("4h history, same tape as live", champs)
         self.assertNotIn("Production Ready", champs)
         self.assertNotIn("Real-time stream", champs)
         self.assertIn("GRADUATED_PAPER", champs)

@@ -1,6 +1,7 @@
 """Research debug over 5m history. Does not write champions.json.
 
-Admission is 4h-only via scripts/tournament_engine.py.
+Admission is 5m-only via scripts/tournament_engine.py (native bars, not this
+downsampled research path).
 """
 import json
 from hedge_fund.paths import state_root
