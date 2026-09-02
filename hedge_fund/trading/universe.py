@@ -1,16 +1,18 @@
 """Combinatorial paper-strategy universe.
 
 The live cycle fetches a single 5m OHLCV series (no 1h/4h bars). Close-only
-atoms still parse without highs/lows. Structure atoms (Donchian / swing)
-use high/low from those same klines — this generator does not emit
-daily()/h1()/m5() wrappers, MFI, H&S, flags, triangles, FVGs, or
-order-blocks: those would be silent lies or a kitchen-sink arena.
+atoms still parse without highs/lows. Structure atoms (Donchian / swing /
+double bottom) use high/low from those same klines — this generator does
+not emit daily()/h1()/m5() wrappers, MFI, H&S, flags, triangles, FVGs,
+order-blocks, or standalone dbl_top longs: those would be silent lies, a
+kitchen-sink arena, or a short we do not trade.
 
 Amendment 2026-09-01: explicit ~50-name universe instead of ~3500
 combinatorial clones. Amendment 2026-09-03: a handful of OHLC structure
-AND-gates, still inside UNIVERSE_TARGET_MAX. Near-duplicate keys collapse
-tiny param tweaks. Lookbacks in names (e.g. dip_24b) are bar counts: on
-5m, 24 bars = 2 hours.
+AND-gates, then double-bottom pattern names, still inside UNIVERSE_TARGET_MAX.
+Trend / breakout / momentum stay as sma_stack/sma_abv, don_hi_*, mom_* —
+not a second stack. Near-duplicate keys collapse tiny param tweaks.
+Lookbacks in names (e.g. dip_24b) are bar counts: on 5m, 24 bars = 2 hours.
 """
 from __future__ import annotations
 
@@ -66,7 +68,7 @@ def _canon_atom(atom: str) -> str:
     m = re.match(r"^vol_lowsm_(\d+)_(\d+)$", atom)
     if m:
         return f"vol_lowsm_{_round_period(int(m.group(1)))}_{_round_period(int(m.group(2)))}"
-    m = re.match(r"^(don_hi|don_lo|near_swing_hi|near_swing_lo)_(\d+)$", atom)
+    m = re.match(r"^(don_hi|don_lo|near_swing_hi|near_swing_lo|dbl_bot|dbl_top)_(\d+)$", atom)
     if m:
         n = int(round(int(m.group(2)) / 6.0) * 6) or 6
         return f"{m.group(1)}_{n}"
@@ -146,6 +148,17 @@ def generate_universe() -> list[str]:
         "rsi_14_>50&don_hi_24",
         "dip_6b_lt2pc&don_lo_24",
         "ema_abv_50&don_hi_24",
+        "sma_stack_20_50_100&don_hi_24",
+    })
+
+    # Double bottom (pattern). dbl_top is parsed but not listed as a long.
+    # Trend/breakout/momentum already exist as sma_* / don_hi_* / mom_* —
+    # do not duplicate those families here.
+    universe.update({
+        "dbl_bot_12",
+        "dbl_bot_12&sma_abv_50",
+        "dbl_bot_12&don_lo_24",
+        "dbl_bot_12&sma_stack_20_50_100",
     })
 
     return sorted(universe)

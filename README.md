@@ -12,7 +12,9 @@ study). Amendment 2026-09-01: qualification uses the same tape as live
 graduation. Amendment 2026-09-02: live book, admit, and walk-forward are 5m
 bars; the decision cycle runs every 5 minutes. Amendment 2026-09-03:
 Donchian / fractal-swing structure atoms exist; they use high/low from
-the same 5m klines; still paper.
+the same 5m klines. Double bottom (`dbl_bot_k`) is the new pattern;
+trend / breakout / momentum already map to `sma_stack`/`sma_abv`,
+`don_hi_*`, `mom_*`. Still paper.
 
 Built on **[ai-hedge-fund](https://github.com/virattt/ai-hedge-fund)** (MIT, © Virat Singh)
 for Signal models, sim broker, risk limits, portfolio, backtesting, and the LLM layer.

@@ -3,8 +3,8 @@
 This is the deterministic, reproducible layer. It computes a handful of
 cheap technical features and buckets the latest bar into a named condition
 (e.g. "sma_stack_long"). Close-only atoms use the close series; Donchian /
-swing structure atoms also use high/low from the same klines. The
-*condition* is what the calibration layer keys on.
+swing / double-bottom structure atoms also use high/low from the same klines.
+The *condition* is what the calibration layer keys on.
 
 Deliberately simple and transparent — this is the substrate for the
 probability experiment, not a black-box. The conditions are named by
