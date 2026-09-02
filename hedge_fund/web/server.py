@@ -307,7 +307,11 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(build_trades(symbol=qs.get("symbol"), limit=lim))
         elif route == "/api/candles":
             try:
-                from hedge_fund.web.candles import CandleRequestError, candles_payload
+                from hedge_fund.web.candles import (
+                    CandleFetchError,
+                    CandleRequestError,
+                    candles_payload,
+                )
 
                 self._send_json(
                     candles_payload(
@@ -318,8 +322,11 @@ class Handler(BaseHTTPRequestHandler):
                 )
             except CandleRequestError as exc:
                 self._send_json({"error": str(exc)}, 400)
+            except CandleFetchError as exc:
+                self._send_json({"error": str(exc), "paper_only": True}, exc.status)
             except Exception as exc:
-                self._send_json({"error": str(exc)}, 502)
+                # Never a bare nginx 502 — JSON 503 so the chart can show why.
+                self._send_json({"error": str(exc), "paper_only": True}, 503)
         elif route == "/api/champions":
             try:
                 from hedge_fund.trading.champions import (

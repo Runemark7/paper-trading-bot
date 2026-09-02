@@ -12,6 +12,9 @@ import type {
   ChartSymbol,
 } from "./types";
 
+/** 5m bars for the paper chart. 200 ≈ 16.7h; 500 502s the production worker. */
+export const CANDLE_LIMIT = 200;
+
 async function get<T>(path: string): Promise<T> {
   const res = await fetch(path);
   if (!res.ok) throw new Error(`${path} -> ${res.status}`);
@@ -29,7 +32,7 @@ export const api = {
     const s = q.toString();
     return get<TradeRow[]>(`/api/trades${s ? `?${s}` : ""}`);
   },
-  candles: (symbol: ChartSymbol | string, timeframe = "5m", limit = 500) => {
+  candles: (symbol: ChartSymbol | string, timeframe = "5m", limit = CANDLE_LIMIT) => {
     const q = new URLSearchParams({
       symbol,
       timeframe,

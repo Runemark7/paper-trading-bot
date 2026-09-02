@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { api } from "../api/client";
+import { api, CANDLE_LIMIT } from "../api/client";
 import type { ChartSymbol } from "../api/types";
 import { Empty, fmt, fmtPct } from "../components/ui";
 import PaperChart from "./PaperChart";
@@ -103,8 +103,8 @@ export default function ChampionTape({
   const [symbol, setSymbol] = useState<ChartSymbol>("BTC/USDT");
 
   const candles = useQuery({
-    queryKey: ["candles", symbol],
-    queryFn: () => api.candles(symbol, "5m"),
+    queryKey: ["candles", symbol, CANDLE_LIMIT],
+    queryFn: () => api.candles(symbol, "5m", CANDLE_LIMIT),
     refetchInterval: REFRESH_MS,
     enabled: Boolean(championName),
   });

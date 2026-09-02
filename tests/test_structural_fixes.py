@@ -236,6 +236,8 @@ class GraduatedPaperTokenTests(unittest.TestCase):
         self.assertIn("location = /run", tmpl)
         self.assertIn("return 404", tmpl)
         self.assertNotIn("proxy_pass         ${BACKEND_URL}/run", tmpl)
+        self.assertIn("proxy_read_timeout    60s", tmpl)
+        self.assertIn("proxy_connect_timeout 10s", tmpl)
 
     def test_kustomization_has_no_cronjob(self):
         kust = (REPO / "k8s" / "kustomization.yaml").read_text()
