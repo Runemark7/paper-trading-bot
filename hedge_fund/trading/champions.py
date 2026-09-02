@@ -25,7 +25,7 @@ from hedge_fund.trading.constants import (
     REJECTED_NEGATIVE_PNL,
     TRADE_EVALUATION_LIMIT,
 )
-from hedge_fund.trading.open_lots import attach_open_lots
+from hedge_fund.trading.open_lots import account_slug, attach_open_lots
 from hedge_fund.trading.store import TradeStore, connect_sqlite
 
 # Re-export so existing `from hedge_fund.trading.champions import TRADE_EVALUATION_LIMIT` still works.
@@ -35,7 +35,9 @@ __all__ = [
     "REJECTED_NEGATIVE_PNL",
     "TRADE_EVALUATION_LIMIT",
     "attach_open_lots",
+    "backfill_champion_since",
     "collect_live_results",
+    "infer_champion_since",
     "load_graduated",
     "load_pool",
     "paper_beats_buy_and_hold",
@@ -67,6 +69,23 @@ def load_pool() -> dict:
 def save_pool(st: dict):
     path = _champ_file()
     path.parent.mkdir(parents=True, exist_ok=True)
+    prev_by_name: dict[str, dict] = {}
+    if path.exists():
+        try:
+            prev = json.loads(path.read_text())
+            prev_by_name = {
+                c["name"]: c
+                for c in (prev.get("champions") or [])
+                if isinstance(c, dict) and c.get("name")
+            }
+        except Exception:
+            prev_by_name = {}
+    for c in st.get("champions") or []:
+        if not isinstance(c, dict):
+            continue
+        prev = prev_by_name.get(c.get("name"))
+        if prev and prev.get("champion_since"):
+            c["champion_since"] = prev["champion_since"]
     path.write_text(json.dumps(st, indent=2))
 
 
@@ -233,6 +252,7 @@ def collect_live_results() -> dict:
     if max_ts:
         st["synced_until"] = max_ts
 
+    backfill_champion_since(st)
     save_pool(st)
     if graduated_now:
         save_graduated(grad_list)
@@ -264,19 +284,98 @@ def promote_candidates(candidates: list[dict]) -> dict:
                     "pnl": 0.0,
                     "wins": 0,
                     "source": cand.get("source") or "sweep_promotion",
+                    "champion_since": datetime.now(timezone.utc).isoformat(),
                 })
                 existing.add(name)
                 added.append(name)
 
+    backfill_champion_since(st)
     save_pool(st)
     return {"added": added, "active_count": len(st["champions"]), "target": MAX_ACTIVE_CHAMPIONS}
 
 
+def _load_discovery_log() -> list[dict]:
+    path = state_root() / "discovery_log.json"
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text())
+    except Exception:
+        return []
+    return data if isinstance(data, list) else []
+
+
+def _earliest_trade_entry_ts(name: str) -> str | None:
+    """Earliest entry_ts on this account (open or closed). Not file mtime."""
+    if not name:
+        return None
+    db = state_root() / f"trades_{account_slug(name)}.sqlite"
+    if not db.exists():
+        return None
+    try:
+        con = connect_sqlite(db)
+        row = con.execute(
+            "SELECT MIN(entry_ts) FROM trades "
+            "WHERE entry_ts IS NOT NULL AND entry_ts != ''"
+        ).fetchone()
+        con.close()
+    except Exception:
+        return None
+    ts = row[0] if row else None
+    return ts or None
+
+
+def _qualified_discovery_tested_at(name: str, log: list[dict]) -> str | None:
+    found: list[str] = []
+    for row in log:
+        if not isinstance(row, dict):
+            continue
+        if row.get("strategy") != name or not row.get("qualified"):
+            continue
+        ts = row.get("tested_at")
+        if ts:
+            found.append(str(ts))
+    return min(found) if found else None
+
+
+def infer_champion_since(name: str, discovery_log: list[dict] | None = None) -> str | None:
+    """Honest start date: first paper trade, else qualified discovery tested_at."""
+    ts = _earliest_trade_entry_ts(name)
+    if ts:
+        return ts
+    if discovery_log is None:
+        discovery_log = _load_discovery_log()
+    return _qualified_discovery_tested_at(name, discovery_log)
+
+
+def backfill_champion_since(st: dict) -> bool:
+    """Fill missing champion_since from trades / discovery. Never stamps now()."""
+    changed = False
+    log: list[dict] | None = None
+    for c in st.get("champions") or []:
+        if not isinstance(c, dict) or c.get("champion_since"):
+            continue
+        if log is None:
+            log = _load_discovery_log()
+        ts = infer_champion_since(c.get("name") or "", discovery_log=log)
+        if ts:
+            c["champion_since"] = ts
+            changed = True
+    return changed
+
+
 def pool_status() -> dict:
     st = load_pool()
+    if backfill_champion_since(st):
+        save_pool(st)
+    champs = []
+    for c in st["champions"]:
+        row = dict(c)
+        row["champion_since"] = c.get("champion_since") or None
+        champs.append(row)
     grad = load_graduated()
     return attach_open_lots({
-        "active_champions": st["champions"],
+        "active_champions": champs,
         "active_count": len(st["champions"]),
         "target_active": MAX_ACTIVE_CHAMPIONS,
         "evaluation_limit": TRADE_EVALUATION_LIMIT,

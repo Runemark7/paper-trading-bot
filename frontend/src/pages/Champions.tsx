@@ -9,11 +9,24 @@ import {
   accountSlug,
   accountsMatch,
   certaintyLabel,
+  fmtChampionSince,
   fmtWhen,
   lotUnrealized,
   openLotsByPair,
   openLotsForChampion,
 } from "../status/format";
+
+function ChampionSinceChip({ since }: { since?: string | null }) {
+  const label = fmtChampionSince(since);
+  return (
+    <span
+      className="inline-flex max-w-full min-w-0 items-center rounded-md bg-white/10 px-1.5 py-0.5 text-[11px] font-medium text-white/80 break-words whitespace-normal [overflow-wrap:anywhere]"
+      aria-label={`Champion since ${label}`}
+    >
+      Champion since {label}
+    </span>
+  );
+}
 
 /** Always-visible BTC vs ETH lot counts. Short chips so they wrap on a phone. */
 function PairLotChips({ btc, eth }: { btc: number | string; eth: number | string }) {
@@ -202,9 +215,9 @@ export default function Champions() {
                     onClick={() => setExpandedChampion(isOpen ? null : c.name)}
                     className="w-full text-left p-3 min-h-11 space-y-2 min-w-0 cursor-pointer hover:bg-white/[0.04] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-indigo-400"
                   >
-                    <div className="flex items-start justify-between gap-2 min-w-0">
+                    <div className="flex flex-wrap items-start justify-between gap-2 min-w-0">
                       <MonoName className="block text-sm font-medium text-white min-w-0">{c.name}</MonoName>
-                      <span className="shrink-0 flex items-center gap-2">
+                      <span className="shrink-0 flex flex-wrap items-center gap-2">
                         <Badge tone="run">running now</Badge>
                         <span
                           aria-hidden
@@ -220,6 +233,7 @@ export default function Champions() {
                         eth={liveLotsKnown ? split.eth : "—"}
                       />
                       <LotHealthSummaryChips lots={lots} />
+                      <ChampionSinceChip since={c.champion_since} />
                     </div>
                     <FieldGrid>
                       <Field label="Open lots">{liveLotsKnown ? split.total : knownCount}</Field>
@@ -228,6 +242,7 @@ export default function Champions() {
                       <Field label="Paper P&L" className={c.pnl >= 0 ? "text-emerald-400" : "text-rose-400"}>
                         <span className="font-medium">{fmt(c.pnl)}</span>
                       </Field>
+                      <Field label="Champion since">{fmtChampionSince(c.champion_since)}</Field>
                     </FieldGrid>
                   </button>
                   {isOpen && (
@@ -235,6 +250,11 @@ export default function Champions() {
                       id={panelId}
                       className="border-t border-white/10 px-3 py-3 bg-white/[0.02] min-w-0 space-y-3"
                     >
+                      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 min-w-0 text-xs text-white/50">
+                        <span className="min-w-0 break-words [overflow-wrap:anywhere]">
+                          Started {fmtChampionSince(c.champion_since)}
+                        </span>
+                      </div>
                       <ExpandedChampionLots
                         lots={lots}
                         liveReady={liveReady}

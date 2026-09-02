@@ -363,6 +363,7 @@ def replenish_and_evaluate(batch_size: int | None = None) -> dict:
             break
         name = q["strategy"]
         if name not in existing_names:
+            admitted_at = datetime.now(timezone.utc).isoformat()
             st["champions"].append({
                 "name": name,
                 "closed": 0,
@@ -370,7 +371,8 @@ def replenish_and_evaluate(batch_size: int | None = None) -> dict:
                 "wins": 0,
                 "sharpe_qual": q["sharpe"],
                 "winrate_qual": q["win_rate_pct"],
-                "admitted_at": datetime.now(timezone.utc).isoformat(),
+                "admitted_at": admitted_at,
+                "champion_since": admitted_at,
                 "source": "5m_qualification_filter",
                 "timeframe": QUAL_TIMEFRAME,
                 "risk_policy": RISK_POLICY,

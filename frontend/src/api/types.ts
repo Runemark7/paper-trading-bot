@@ -116,6 +116,9 @@ export interface Champion {
   wins: number;
   passed?: boolean;
   open_lots?: number;
+  /** UTC ISO-8601 when this name joined the paper champion pool, or null if unknown. */
+  champion_since?: string | null;
+  source?: string;
 }
 
 export interface GraduatedTrade {
