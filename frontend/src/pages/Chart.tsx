@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { fetchChampions } from "../api/client";
+import { fetchChampions, api } from "../api/client";
 import { Badge, Card, Empty } from "../components/ui";
 import ChampionTape from "../chart/ChampionTape";
 import { defaultChampionName } from "../chart/numberTrades";
+import { openLotsByPair } from "../status/format";
 
 export default function ChartPage() {
   const qChamps = useQuery({
@@ -11,9 +12,15 @@ export default function ChartPage() {
     queryFn: fetchChampions,
     refetchInterval: 30_000,
   });
+  const qLive = useQuery({
+    queryKey: ["live"],
+    queryFn: api.live,
+    refetchInterval: 30_000,
+  });
   const champs = qChamps.data?.active_champions ?? [];
   const [champion, setChampion] = useState("");
   const selected = champs.find((c) => c.name === champion);
+  const selectedSplit = openLotsByPair(qLive.data, selected?.name ?? "");
 
   useEffect(() => {
     if (!champs.length) return;
@@ -42,11 +49,18 @@ export default function ChartPage() {
           {!champs.length ? (
             <option value="">No active paper-book names</option>
           ) : (
-            champs.map((c) => (
-              <option key={c.name} value={c.name}>
-                {c.name} · {c.open_lots ?? 0} open lots
-              </option>
-            ))
+            champs.map((c) => {
+              const split = openLotsByPair(qLive.data, c.name);
+              const lots =
+                qLive.data != null
+                  ? `BTC ${split.btc} · ETH ${split.eth}`
+                  : `${c.open_lots ?? 0} open lots`;
+              return (
+                <option key={c.name} value={c.name}>
+                  {c.name} · {lots}
+                </option>
+              );
+            })
           )}
         </select>
       </label>
@@ -55,7 +69,9 @@ export default function ChartPage() {
         title={champion ? `${champion} · 5m` : "Champion chart"}
         aside={
           selected
-            ? `${selected.open_lots ?? 0} open lots on this account`
+            ? qLive.data != null
+              ? `BTC ${selectedSplit.btc} · ETH ${selectedSplit.eth} · ${selectedSplit.total} lots`
+              : `${selected.open_lots ?? 0} open lots on this account`
             : undefined
         }
       >

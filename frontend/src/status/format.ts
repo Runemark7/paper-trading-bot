@@ -1,4 +1,4 @@
-import type { LivePosition } from "../api/types";
+import type { LivePosition, OpenLot } from "../api/types";
 
 export function fmtWhen(iso?: string | null): string {
   if (!iso) return "never recorded";
@@ -81,6 +81,54 @@ export function lotsForChampion(
 ): LivePosition[] {
   if (!positions?.length) return [];
   return positions.filter((p) => accountsMatch(p.account, championName));
+}
+
+export type PairLotSplit = { btc: number; eth: number; total: number };
+
+/** BTC vs ETH from a /api/live symbol. Unit is lots, not symbol-rows. */
+export function pairOf(symbol: string | undefined): "BTC" | "ETH" | null {
+  if (!symbol) return null;
+  const s = symbol.toUpperCase();
+  if (s.startsWith("BTC")) return "BTC";
+  if (s.startsWith("ETH")) return "ETH";
+  return null;
+}
+
+function addPairLots(split: PairLotSplit, symbol: string | undefined, n: number): void {
+  const pair = pairOf(symbol);
+  if (pair === "BTC") split.btc += n;
+  else if (pair === "ETH") split.eth += n;
+  split.total = split.btc + split.eth;
+}
+
+function lotCount(p: LivePosition): number {
+  if (p.lots?.length) return p.lots.length;
+  return p.lot_count ?? 1;
+}
+
+/**
+ * Open-lot split for one champion: BTC vs ETH.
+ * Prefers /api/live lots[] (one entry per lot). Falls back to that
+ * account's position rows using lot_count, never 1-per-symbol-row.
+ * Join is the same name/slug/trades_* keys as lotsForChampion.
+ */
+export function openLotsByPair(
+  live: { lots?: OpenLot[]; positions?: LivePosition[] } | undefined | null,
+  championName: string,
+): PairLotSplit {
+  const split: PairLotSplit = { btc: 0, eth: 0, total: 0 };
+  if (!live || !championName) return split;
+
+  const lots = (live.lots ?? []).filter((l) => accountsMatch(l.account, championName));
+  if (lots.length) {
+    for (const l of lots) addPairLots(split, l.symbol, 1);
+    return split;
+  }
+
+  for (const p of lotsForChampion(live.positions, championName)) {
+    addPairLots(split, p.symbol, lotCount(p));
+  }
+  return split;
 }
 
 /** Shared UI count: open lots, never champion/account rows. */

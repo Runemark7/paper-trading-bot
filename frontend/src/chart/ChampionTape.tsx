@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { api, CANDLE_LIMIT } from "../api/client";
 import type { ChartSymbol } from "../api/types";
 import { Empty, fmt, fmtPct } from "../components/ui";
+import { openLotsByPair } from "../status/format";
 import PaperChart from "./PaperChart";
 import {
   closedTradesForChampionSymbol,
@@ -20,14 +21,19 @@ const REFRESH_MS = 20_000;
 function SymbolToggle({
   symbol,
   onChange,
+  btcLots,
+  ethLots,
 }: {
   symbol: ChartSymbol;
   onChange: (s: ChartSymbol) => void;
+  btcLots: number;
+  ethLots: number;
 }) {
   return (
     <div className="grid grid-cols-2 gap-2" role="group" aria-label="Chart symbol">
       {SYMBOLS.map((s) => {
         const on = s === symbol;
+        const n = s === "BTC/USDT" ? btcLots : ethLots;
         return (
           <button
             key={s}
@@ -41,7 +47,7 @@ function SymbolToggle({
             }`}
           >
             {s.replace("/USDT", "")}
-            <span className="block text-[11px] font-normal opacity-70">/USDT</span>
+            <span className="block text-[11px] font-normal opacity-70 tabular-nums">{n} lots</span>
           </button>
         );
       })}
@@ -122,6 +128,7 @@ export default function ChampionTape({
   });
 
   const bars = candles.data?.candles;
+  const split = useMemo(() => openLotsByPair(live.data, championName), [live.data, championName]);
   const openNumbered = useMemo(
     () => numberOpenLots(lotsForChampionSymbol(live.data, championName, symbol), symbol),
     [live.data, championName, symbol],
@@ -134,7 +141,12 @@ export default function ChampionTape({
 
   return (
     <div className="min-w-0 space-y-2">
-      <SymbolToggle symbol={symbol} onChange={setSymbol} />
+      <SymbolToggle
+        symbol={symbol}
+        onChange={setSymbol}
+        btcLots={split.btc}
+        ethLots={split.eth}
+      />
       {candles.isError ? (
         <Empty>Could not load /api/candles: {String(candles.error)}. Public Binance only — no trading keys.</Empty>
       ) : !(bars && bars.length) ? (
