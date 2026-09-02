@@ -1,5 +1,17 @@
 // API contract — mirrors hedge_fund/web/server.py endpoints.
 
+export interface OpenLot {
+  lot_id: number;
+  symbol: string;
+  entry: number;
+  stop: number;
+  take_profit: number;
+  quantity: number;
+  condition?: string;
+  entry_ts?: string | null;
+  account?: string;
+}
+
 export interface LivePosition {
   symbol: string;
   entry_price?: number;
@@ -16,12 +28,14 @@ export interface LivePosition {
   unrealized_pct?: number;
   account?: string;
   lot_count?: number;
+  lots?: OpenLot[];
 }
 
 export interface LivePreview {
   live_equity: number;
   cash: number;
   positions: LivePosition[];
+  lots?: OpenLot[];
   as_of?: string;
   accounts?: number;
   open_lots?: number;
@@ -50,6 +64,7 @@ export interface TradeRow {
   pnl_pct: number | null;
   hit: number | null;
   account?: string;
+  lot_id?: number | null;
 }
 
 export interface Summary {
@@ -243,4 +258,24 @@ export interface ChampionsPayload {
   open_lots?: number;
   open_lots_by_account?: Record<string, number>;
   open_lots_unit?: "open_lots" | string;
+}
+
+export type ChartSymbol = "BTC/USDT" | "ETH/USDT";
+
+export interface CandleBar {
+  t: number;
+  o: number;
+  h: number;
+  l: number;
+  c: number;
+  v: number;
+}
+
+export interface CandlesPayload {
+  symbol: string;
+  timeframe: string;
+  candles: CandleBar[];
+  as_of?: string;
+  source?: string;
+  paper_only?: boolean;
 }

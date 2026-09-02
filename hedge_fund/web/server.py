@@ -30,6 +30,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 from hedge_fund.paths import state_root
 from hedge_fund.regime.gate import RegimeGate
@@ -105,6 +106,48 @@ def build_summary() -> dict:
         "source": "per-strategy paper accounts" if per_strategy_dbs() else "legacy trades.sqlite",
         "account_count": len(dbs),
     }
+
+
+def parse_route(path: str) -> tuple[str, dict[str, str]]:
+    """Split request path into route + last-wins query values."""
+    parsed = urlparse(path)
+    route = parsed.path.rstrip("/") or "/"
+    qs = {k: v[-1] for k, v in parse_qs(parsed.query, keep_blank_values=True).items()}
+    return route, qs
+
+
+def build_trades(symbol: str | None = None, limit: int = 60) -> list[dict]:
+    """Closed paper trades across the same DBs as /api/live.
+
+    Optional ``symbol`` (BTC/USDT or ETH/USDT) filters before the tail slice.
+    ``lot_id`` is included so pyramids stay individually identifiable.
+    """
+    try:
+        n = int(limit)
+    except (TypeError, ValueError):
+        n = 60
+    n = max(1, min(n, 500))
+    want = None
+    if symbol:
+        from hedge_fund.web.candles import normalize_symbol
+
+        want = normalize_symbol(symbol)
+        if want is None:
+            return []
+    rows: list[dict] = []
+    for db in store_dbs():
+        try:
+            st = TradeStore(db)
+            for t in st.trades(closed_only=True):
+                d = dict(t)
+                if want and d.get("symbol") != want:
+                    continue
+                d["account"] = Path(db).stem
+                rows.append(d)
+        except Exception:
+            continue
+    rows.sort(key=lambda r: (r.get("exit_ts") or r.get("entry_ts") or "", r.get("id") or 0))
+    return rows[-n:]
 
 
 def build_learning() -> dict:
@@ -208,9 +251,7 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_GET(self):
-        route = self.path.split("?")[0].rstrip("/")
-        if not route:
-            route = "/"
+        route, qs = parse_route(self.path)
         if route in ("/health", "/healthz"):
             self._send_json({"ok": True, "ts": time.time()})
         elif route == "/dashboard" or route == "/":
@@ -233,6 +274,7 @@ class Handler(BaseHTTPRequestHandler):
                     "live_equity": 0.0,
                     "cash": 0.0,
                     "positions": [],
+                    "lots": [],
                     "accounts": len(dbs),
                     "as_of": None,
                     "open_lots": lots["open_lots"],
@@ -245,8 +287,12 @@ class Handler(BaseHTTPRequestHandler):
                         merged["live_equity"] += lp.get("live_equity", 0.0) or 0.0
                         merged["cash"] += lp.get("cash", 0.0) or 0.0
                         merged["as_of"] = lp.get("as_of") or merged["as_of"]
+                        acct = Path(db).stem
                         for p in lp.get("positions", []):
-                            p["account"] = Path(db).stem
+                            p["account"] = acct
+                            for lot in p.get("lots") or []:
+                                lot["account"] = acct
+                                merged["lots"].append(lot)
                             merged["positions"].append(p)
                     except Exception:
                         continue
@@ -254,17 +300,26 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self._send_json({"error": str(exc)})
         elif route == "/api/trades":
-            rows = []
-            for db in store_dbs():
-                try:
-                    st = TradeStore(db)
-                    for t in st.trades(closed_only=True)[-60:]:
-                        d = dict(t)
-                        d["account"] = Path(db).stem
-                        rows.append(d)
-                except Exception:
-                    continue
-            self._send_json(rows[-60:])
+            try:
+                lim = int(qs["limit"]) if qs.get("limit") else 60
+            except (TypeError, ValueError):
+                lim = 60
+            self._send_json(build_trades(symbol=qs.get("symbol"), limit=lim))
+        elif route == "/api/candles":
+            try:
+                from hedge_fund.web.candles import CandleRequestError, candles_payload
+
+                self._send_json(
+                    candles_payload(
+                        qs.get("symbol"),
+                        qs.get("timeframe") or "5m",
+                        qs.get("limit"),
+                    )
+                )
+            except CandleRequestError as exc:
+                self._send_json({"error": str(exc)}, 400)
+            except Exception as exc:
+                self._send_json({"error": str(exc)}, 502)
         elif route == "/api/champions":
             try:
                 from hedge_fund.trading.champions import (
@@ -302,7 +357,7 @@ class Handler(BaseHTTPRequestHandler):
         self.do_GET()
 
     def do_POST(self):
-        route = self.path.split("?")[0].rstrip("/")
+        route, _qs = parse_route(self.path)
         if route == "/run":
             self._send_json(trigger_run())
         else:
