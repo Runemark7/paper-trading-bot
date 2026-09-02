@@ -1,11 +1,10 @@
 """Signal engine — turns OHLCV klines into named signal conditions.
 
 This is the deterministic, reproducible layer. It computes a handful of
-cheap technical features on closing prices and buckets the latest bar into a
-named condition (e.g. "mom_pos_rsi_mid"). The *condition* is what the
-calibration layer keys on: each condition accumulates its own measured
-success rate, so the strategy learns which conditions actually predict
-the next move.
+cheap technical features and buckets the latest bar into a named condition
+(e.g. "sma_stack_long"). Close-only atoms use the close series; Donchian /
+swing structure atoms also use high/low from the same klines. The
+*condition* is what the calibration layer keys on.
 
 Deliberately simple and transparent — this is the substrate for the
 probability experiment, not a black-box. The conditions are named by
@@ -112,10 +111,12 @@ def compute_signal(
         price=price,
     )
 
-    from hedge_fund.signals.dynamic import parse_strategy
+    from hedge_fund.signals.dynamic import eval_predicate, parse_strategy
     pred = parse_strategy(strategy)
     i = len(closes) - 1
-    take_long = bool(pred(closes, i))
+    highs = [c.high for c in candle_series]
+    lows = [c.low for c in candle_series]
+    take_long = eval_predicate(pred, closes, i, highs=highs, lows=lows)
 
     cond = f"{strategy}_long" if take_long else f"{strategy}_flat"
     score = 0.5 if take_long else -0.5

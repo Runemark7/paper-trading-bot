@@ -215,7 +215,7 @@ def backtest(closes, highs, lows, strategy, start_cash=10_000.0,
         TAKE_PROFIT_RR,
         atr_stop_price,
     )
-    from hedge_fund.signals.dynamic import parse_strategy
+    from hedge_fund.signals.dynamic import eval_predicate, parse_strategy
 
     taker_fee = FEE_TAKER if taker_fee is None else taker_fee
     slippage = FEE_SLIPPAGE if slippage is None else slippage
@@ -258,7 +258,7 @@ def backtest(closes, highs, lows, strategy, start_cash=10_000.0,
 
     for i in range(warmup, n):
         cur = closes[i]
-        take = bool(pred(closes, i))
+        take = eval_predicate(pred, closes, i, highs=highs, lows=lows)
         high_i = highs[i] if i < len(highs) else cur
         low_i = lows[i] if i < len(lows) else cur
 

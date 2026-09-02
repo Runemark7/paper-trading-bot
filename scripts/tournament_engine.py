@@ -51,7 +51,7 @@ def _discovery_log_file():
 
 
 def generate_candidate_pool() -> list[str]:
-    """Explicit 5m universe (no daily()/h1()/m5() or MFI)."""
+    """Explicit 5m universe (no daily()/h1()/m5() or MFI). Structure ANDs ok."""
     return generate_universe()
 
 

@@ -97,6 +97,35 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertIn("5m is the admit tape", text)
         self.assertIn("live and admit are 5m", text)
 
+    def test_amendment_2026_09_03(self):
+        from hedge_fund.trading.constants import (
+            CYCLE_INTERVAL_SECONDS,
+            MAX_ACTIVE_CHAMPIONS,
+            MIN_BACKTEST_SHARPE,
+            MIN_BACKTEST_TRADES,
+            QUAL_TIMEFRAME,
+            RISK_POLICY,
+            TRADE_EVALUATION_LIMIT,
+        )
+
+        text = (REPO / "PROTOCOL.md").read_text()
+        self.assertIn("Amendment 2026-09-03", text)
+        self.assertIn("2026-09-03", text)
+        self.assertIn("structure atoms", text.lower())
+        self.assertIn("OHLC", text)
+        self.assertIn("Paper only", text)
+        self.assertIn("don_hi_N", text)
+        self.assertIn("near_swing_lo_N", text)
+        # Gates unchanged from 2026-09-02.
+        self.assertEqual(QUAL_TIMEFRAME, "5m")
+        self.assertEqual(CYCLE_INTERVAL_SECONDS, 300)
+        self.assertEqual(RISK_POLICY, "rm_v1")
+        self.assertEqual(MIN_BACKTEST_TRADES, 30)
+        self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
+        self.assertEqual(MAX_ACTIVE_CHAMPIONS, 20)
+        self.assertEqual(TRADE_EVALUATION_LIMIT, 80)
+        self.assertIn("OOS gates are unchanged", text)
+        self.assertIn("arena 20", text)
 
 class IsolatedRunnerTests(unittest.TestCase):
     def test_no_second_hardcoded_book(self):

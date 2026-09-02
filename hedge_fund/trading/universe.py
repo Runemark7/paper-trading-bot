@@ -1,12 +1,16 @@
 """Combinatorial paper-strategy universe.
 
-The live cycle fetches a single 5m close series (no 1h/4h bars, and
-parse_strategy is close-only). This generator therefore does not emit
-daily()/h1()/m5() wrappers or MFI rules — those would be silent lies.
+The live cycle fetches a single 5m OHLCV series (no 1h/4h bars). Close-only
+atoms still parse without highs/lows. Structure atoms (Donchian / swing)
+use high/low from those same klines — this generator does not emit
+daily()/h1()/m5() wrappers, MFI, H&S, flags, triangles, FVGs, or
+order-blocks: those would be silent lies or a kitchen-sink arena.
 
 Amendment 2026-09-01: explicit ~50-name universe instead of ~3500
-combinatorial clones. Near-duplicate keys collapse tiny param tweaks.
-Lookbacks in names (e.g. dip_24b) are bar counts: on 5m, 24 bars = 2 hours.
+combinatorial clones. Amendment 2026-09-03: a handful of OHLC structure
+AND-gates, still inside UNIVERSE_TARGET_MAX. Near-duplicate keys collapse
+tiny param tweaks. Lookbacks in names (e.g. dip_24b) are bar counts: on
+5m, 24 bars = 2 hours.
 """
 from __future__ import annotations
 
@@ -62,6 +66,10 @@ def _canon_atom(atom: str) -> str:
     m = re.match(r"^vol_lowsm_(\d+)_(\d+)$", atom)
     if m:
         return f"vol_lowsm_{_round_period(int(m.group(1)))}_{_round_period(int(m.group(2)))}"
+    m = re.match(r"^(don_hi|don_lo|near_swing_hi|near_swing_lo)_(\d+)$", atom)
+    if m:
+        n = int(round(int(m.group(2)) / 6.0) * 6) or 6
+        return f"{m.group(1)}_{n}"
     if atom == "sma_stack":
         return "sma_stack_5_25_50"  # default 7,25,50 rounds near 5/25/50
     return atom
@@ -125,6 +133,19 @@ def generate_universe() -> list[str]:
         "bb_lower_20_2&sma_stack_20_50_100",
         "mom_6b_gt2pc&sma_abv_20",
         "rsi_7_>45&sma_abv_50",
+    })
+
+    # Structure atoms (OHLC Donchian / fractal swing) — handful of AND gates,
+    # not a cartesian product. See hedge_fund/signals/structure.py.
+    universe.update({
+        "don_hi_24",
+        "dip_6b_lt2pc&near_swing_lo_12",
+        "dip_12b_lt3pc&don_lo_24",
+        "mom_12b_gt3pc&don_hi_24",
+        "sma_abv_50&don_hi_24",
+        "rsi_14_>50&don_hi_24",
+        "dip_6b_lt2pc&don_lo_24",
+        "ema_abv_50&don_hi_24",
     })
 
     return sorted(universe)
