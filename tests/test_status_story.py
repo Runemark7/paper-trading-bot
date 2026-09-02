@@ -39,6 +39,32 @@ class StatusPayloadTests(unittest.TestCase):
         self.assertFalse(prog["graduation"]["running"])
         self.assertEqual(prog["pipeline"]["certainty"], "no_signal")
         self.assertEqual(prog["discovery"]["certainty"], "no_signal")
+        self.assertTrue(prog["replenish"]["needed"])
+        self.assertNotIn("target_active", prog["tournament"])
+        self.assertNotIn("slots_open", prog["tournament"])
+        self.assertNotIn("slots_open", prog["replenish"])
+
+    def test_thirty_one_names_does_not_mark_replenish_unneeded(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "champions.json").write_text(json.dumps({
+                "champions": [
+                    {"name": f"n{i}", "closed": 0, "pnl": 0.0, "wins": 0} for i in range(31)
+                ],
+                "synced_until": "",
+            }))
+            with patch.dict(os.environ, {"PAPER_STATE": str(root)}):
+                from hedge_fund.web.status import build_status
+                from hedge_fund.trading.champions import pool_status
+
+                st = build_status()
+                pool = pool_status()
+        self.assertEqual(st["in_progress"]["tournament"]["active_count"], 31)
+        self.assertTrue(st["in_progress"]["replenish"]["needed"])
+        self.assertNotIn("target_active", st["in_progress"]["tournament"])
+        self.assertNotIn("slots_open", st["in_progress"]["replenish"])
+        self.assertEqual(pool["active_count"], 31)
+        self.assertNotIn("target_active", pool)
 
     def test_last_cycle_uses_equity_snapshot_not_heartbeat_saved_at(self):
         from hedge_fund.trading.store import TradeStore
@@ -232,6 +258,10 @@ class RouteAndCopyTests(unittest.TestCase):
         self.assertNotIn("Real-time stream", champs)
         self.assertIn("GRADUATED_PAPER", champs)
         self.assertIn("last-known", champs)
+        self.assertNotIn("targetMax", champs)
+        self.assertNotIn("pool at capacity", overview)
+        self.assertNotIn("slots_open", overview)
+        self.assertIn("untested names remain", overview)
         self.assertIn("open lots", overview)
         self.assertIn("open lots", champs)
         bar = (REPO / "frontend" / "src" / "status" / "StatusBar.tsx").read_text()

@@ -1,4 +1,4 @@
-"""Honest 5m qualification gates, small arena, paper vs buy-and-hold graduation."""
+"""Honest 5m qualification gates, unbounded paper pool, paper vs buy-and-hold graduation."""
 from __future__ import annotations
 
 import json
@@ -141,50 +141,44 @@ class QualTapeTests(unittest.TestCase):
             self.assertEqual(rec["risk_policy"], "rm_v1")
 
 
-class PoolCapTests(unittest.TestCase):
-    def test_pool_will_not_exceed_20_and_replenish_only_free_slots(self):
-        from hedge_fund.trading.champions import load_pool, promote_candidates, save_pool
-        from hedge_fund.trading.constants import MAX_ACTIVE_CHAMPIONS
+class PoolAdmitTests(unittest.TestCase):
+    def test_pool_at_31_still_admits_new_qualified_and_skips_dup_graduated(self):
+        from hedge_fund.trading.champions import load_pool, promote_candidates, save_graduated, save_pool
 
-        self.assertEqual(MAX_ACTIVE_CHAMPIONS, 20)
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
+            champs = [{"name": f"n{i}", "closed": 0, "pnl": 0.0, "wins": 0} for i in range(31)]
             with patch.dict(os.environ, {"PAPER_STATE": str(root)}):
-                save_pool({"champions": [], "synced_until": ""})
-                cands = [{"strategy": f"sma_abv_{20 + i}"} for i in range(50)]
-                out = promote_candidates(cands)
-                self.assertEqual(len(out["added"]), 20)
-                self.assertEqual(out["active_count"], 20)
-                self.assertEqual(len(load_pool()["champions"]), 20)
-
-                more = promote_candidates([{"strategy": "rsi_14_>50"}])
-                self.assertEqual(more["added"], [])
-                self.assertEqual(more["active_count"], 20)
-
-                st = load_pool()
-                st["champions"] = st["champions"][:19]
-                save_pool(st)
-                one = promote_candidates([
-                    {"strategy": "mom_12b_gt3pc"},
-                    {"strategy": "dip_6b_lt2pc"},
-                    {"strategy": "bb_lower_20_2"},
+                save_pool({"champions": champs, "synced_until": ""})
+                save_graduated([{"name": "already_grad"}])
+                out = promote_candidates([
+                    {"strategy": "n0"},
+                    {"strategy": "already_grad"},
+                    {"strategy": "dbl_bot_12"},
+                    {"strategy": "dbl_bot_12&sma_abv_50"},
                 ])
-                self.assertEqual(len(one["added"]), 1)
-                self.assertEqual(one["active_count"], 20)
+                pool = load_pool()["champions"]
+        self.assertEqual(out["added"], ["dbl_bot_12", "dbl_bot_12&sma_abv_50"])
+        self.assertEqual(out["active_count"], 33)
+        self.assertEqual(len(pool), 33)
+        new_rows = [c for c in pool if c["name"] in out["added"]]
+        self.assertEqual(len(new_rows), 2)
+        for row in new_rows:
+            self.assertTrue(row.get("champion_since"))
 
-    def test_replenish_skips_work_when_pool_full(self):
+    def test_replenish_still_runs_when_pool_has_31(self):
         from hedge_fund.trading.champions import save_pool
-        from hedge_fund.trading.constants import MAX_ACTIVE_CHAMPIONS
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            champs = [{"name": f"n{i}", "closed": 0, "pnl": 0.0, "wins": 0} for i in range(MAX_ACTIVE_CHAMPIONS)]
+            champs = [{"name": f"n{i}", "closed": 0, "pnl": 0.0, "wins": 0} for i in range(31)]
             with patch.dict(os.environ, {"PAPER_STATE": str(root)}):
                 save_pool({"champions": champs, "synced_until": ""})
                 res = replenish_and_evaluate(batch_size=30)
+        self.assertNotIn("pool full", str(res.get("reason", "")))
+        self.assertEqual(res["active_champions_count"], 31)
+        # No 5m history here, so nothing qualifies — but discovery was attempted.
         self.assertEqual(res["admitted_new_count"], 0)
-        self.assertEqual(res["total_tested_in_batch"], 0)
-        self.assertIn("pool full", res["reason"])
 
 
 class GraduationVsBuyAndHoldTests(unittest.TestCase):

@@ -19,6 +19,18 @@ export function fmtWhen(iso?: string | null): string {
   return `in ${rel} (${when})`;
 }
 
+/** Short local date for when a name joined the champion pool. Never invent a date. */
+export function fmtChampionSince(iso?: string | null): string {
+  if (!iso) return "before dating";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleDateString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
+}
+
 export function certaintyLabel(c?: string | null): string {
   switch (c) {
     case "stamp":

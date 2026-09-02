@@ -34,7 +34,6 @@ from urllib.parse import parse_qs, urlparse
 
 from hedge_fund.paths import state_root
 from hedge_fund.regime.gate import RegimeGate
-from hedge_fund.trading.constants import MAX_ACTIVE_CHAMPIONS
 from hedge_fund.trading.open_lots import attach_open_lots, open_lots_snapshot, paper_book_dbs
 from hedge_fund.trading.store import TradeStore
 from hedge_fund.web.live import live_preview, live_prices
@@ -341,7 +340,7 @@ class Handler(BaseHTTPRequestHandler):
                 collect_live_results()
                 self._send_json(attach_open_lots(pool_status()))
             except Exception as exc:
-                self._send_json({"error": str(exc), "champions": [], "count": 0, "max": MAX_ACTIVE_CHAMPIONS}, 500)
+                self._send_json({"error": str(exc), "champions": [], "count": 0}, 500)
         elif route == "/api/graduated":
             try:
                 from hedge_fund.trading.champions import load_graduated

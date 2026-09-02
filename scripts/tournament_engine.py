@@ -5,7 +5,8 @@
 2. Hard qualification filter (hedge_fund.trading.constants): OOS-only score,
    every window's test PnL >= 0, >= 30 OOS trades, OOS Sharpe >= 0.30,
    OOS beats buy-and-hold and sma_stack after fees. Risk policy: rm_v1.
-3. Arena capacity MAX_ACTIVE_CHAMPIONS (20); replenish only into free slots.
+3. No live-slot cap: every 5m-qualified name not already pooled or
+   graduated is admitted. Universe size (~40–120) is the combinatorial bound.
 4. Graduation: TRADE_EVALUATION_LIMIT (80) closed paper trades vs B&H.
 
 Qualification uses hedge_fund.backtest.strategies with rm_v1 stops/fees,
@@ -25,7 +26,6 @@ from hedge_fund.trading.buy_and_hold import buy_and_hold_window_pnl
 from hedge_fund.trading.champions import load_graduated, load_pool, save_pool
 from hedge_fund.trading.constants import (
     DISCOVER_BATCH_SIZE,
-    MAX_ACTIVE_CHAMPIONS,
     MIN_BACKTEST_SHARPE,
     MIN_BACKTEST_TRADES,
     PAPER_START_CASH,
@@ -340,29 +340,21 @@ def discover_and_qualify(
 
 
 def replenish_and_evaluate(batch_size: int | None = None) -> dict:
-    """Admit 5m-qualified names only into free slots (pool cap 20)."""
+    """Qualify a 5m batch; admit every new name not already pooled or graduated."""
     if batch_size is None:
         batch_size = DISCOVER_BATCH_SIZE
     st = load_pool()
-    existing_names = {c["name"] for c in st["champions"]}
-    needed = MAX_ACTIVE_CHAMPIONS - len(st["champions"])
-    if needed <= 0:
-        return {
-            "active_champions_count": len(st["champions"]),
-            "evaluation_limit": TRADE_EVALUATION_LIMIT,
-            "total_tested_in_batch": 0,
-            "admitted_new_count": 0,
-            "admitted": [],
-            "reason": f"pool full ({len(st['champions'])}/{MAX_ACTIVE_CHAMPIONS})",
-        }
+    grad_list = load_graduated()
+    existing_names = {c["name"] for c in st["champions"]}.union(
+        {g["name"] for g in grad_list}
+    )
 
     qualified, all_eval = discover_and_qualify(batch_size=batch_size)
     admitted = []
     for q in qualified:
-        if needed <= 0:
-            break
         name = q["strategy"]
         if name not in existing_names:
+            admitted_at = datetime.now(timezone.utc).isoformat()
             st["champions"].append({
                 "name": name,
                 "closed": 0,
@@ -370,14 +362,14 @@ def replenish_and_evaluate(batch_size: int | None = None) -> dict:
                 "wins": 0,
                 "sharpe_qual": q["sharpe"],
                 "winrate_qual": q["win_rate_pct"],
-                "admitted_at": datetime.now(timezone.utc).isoformat(),
+                "admitted_at": admitted_at,
+                "champion_since": admitted_at,
                 "source": "5m_qualification_filter",
                 "timeframe": QUAL_TIMEFRAME,
                 "risk_policy": RISK_POLICY,
             })
             existing_names.add(name)
             admitted.append(q)
-            needed -= 1
 
     save_pool(st)
     return {

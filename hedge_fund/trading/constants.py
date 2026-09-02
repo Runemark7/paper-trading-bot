@@ -1,9 +1,10 @@
 """Live paper-tournament constants. Single source of truth.
 
-Imported by champions, tournament, and dashboard. PROTOCOL amendment
-2026-09-02 cites these values (5m live/admit, 300s decision cycle).
+Imported by champions, tournament, and dashboard. PROTOCOL amendments
+cite these values (5m live/admit, 300s decision cycle, no live-slot cap).
 Do not document a 4h live book, hourly-only decisions, Sharpe 0.10,
-WR 38%, 4-trade minimum, 25-trade graduation, or arena capacity 1000.
+WR 38%, 4-trade minimum, 25-trade graduation, arena capacity 1000,
+or a homemade 20-slot live-arena cap.
 """
 
 from __future__ import annotations
@@ -32,7 +33,9 @@ MIN_BACKTEST_TRADES = 30  # OOS trades across all windows (not train+test)
 
 # Paper graduation: TRADE_EVALUATION_LIMIT closed paper trades, then vs B&H.
 TRADE_EVALUATION_LIMIT = 80
-MAX_ACTIVE_CHAMPIONS = 20  # small arena; replenish only into free slots
+# No MAX_ACTIVE_CHAMPIONS. The 2026-09-01 20-slot arena starved prod's 31
+# grandfathered names (needed = 20 - 31 <= 0). Admission is OOS 5m / rm_v1
+# only. Universe size (~40–120) is the combinatorial bound, not a live cap.
 DISCOVER_BATCH_SIZE = 30  # untested names per sweep (20–40), not 150
 
 PAPER_START_CASH = 10_000.0

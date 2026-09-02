@@ -15,7 +15,6 @@ from hedge_fund.trading.champions import load_graduated, load_pool
 from hedge_fund.trading.constants import (
     CYCLE_INTERVAL_SECONDS,
     GRADUATED_PAPER,
-    MAX_ACTIVE_CHAMPIONS,
     QUAL_TIMEFRAME,
     TRADE_EVALUATION_LIMIT,
 )
@@ -23,6 +22,7 @@ from hedge_fund.trading.heartbeat import HEARTBEAT_SECONDS
 from hedge_fund.trading.open_lots import open_lots_snapshot, paper_book_dbs
 from hedge_fund.trading.stamps import HEARTBEAT_STAMP, PIPELINE_STAMP, read_json_stamp
 from hedge_fund.trading.store import TradeStore
+from hedge_fund.trading.universe import untested_candidates
 
 STOCKHOLM = ZoneInfo("Europe/Stockholm")
 CYCLE_WINDOW_START_HOUR = 7
@@ -284,13 +284,15 @@ def build_status() -> dict:
     active = names or [fallback]
     mode = "champion_accounts" if names else "sma_stack_fallback"
     last_cycle = _last_cycle_at(dbs)
-    slots_open = max(0, MAX_ACTIVE_CHAMPIONS - len(champs))
     pipeline = _pipeline_block(now)
     discovery = _discovery_block(root)
     graduation = _graduation_block()
     heartbeat = _heartbeat_block(now)
+    grad = load_graduated()
+    blocked = {n for n in names if n} | {g.get("name") for g in grad if g.get("name")}
+    replenish_needed = bool(untested_candidates(blocked))
 
-    # Replenish/tournament are implied by pool size; only the stamp can say "now".
+    # Replenish is implied by leftover universe names, not a slot cap.
     stamp_phase = pipeline.get("phase")
     stamp_in_progress = bool(pipeline.get("stamp_says_in_progress"))
     replenish_phase = stamp_in_progress and stamp_phase in ("tournament", "collect_live_results")
@@ -345,26 +347,25 @@ def build_status() -> dict:
                 "running": False,
                 "stamp_says_this_phase": stamp_in_progress and stamp_phase == "tournament",
                 "active_count": len(champs),
-                "target_active": MAX_ACTIVE_CHAMPIONS,
-                "slots_open": slots_open,
                 "evaluation_limit": TRADE_EVALUATION_LIMIT,
                 "synced_until": pool.get("synced_until") or None,
                 "file": _file_mtime_note(root / "champions.json"),
                 "note": (
                     "Active names are on the paper book (see Running now). "
-                    "Qualification/replenish is last-known from champions.json "
-                    "and discovery_log.json."
+                    "There is no live-slot cap. Qualification/replenish is "
+                    "last-known from champions.json and discovery_log.json."
                 ),
             },
             "replenish": {
-                "certainty": "inferred" if slots_open else "last_known",
+                "certainty": "inferred" if replenish_needed else "last_known",
                 "running": False,
-                "needed": slots_open > 0,
-                "slots_open": slots_open,
+                "needed": replenish_needed,
                 "stamp_says_this_phase": replenish_phase,
                 "note": (
-                    "Slots open means the pool is below capacity. That does not "
-                    "mean replenish is running unless the pipeline stamp says so."
+                    "needed means the universe still has names not in the pool "
+                    "or graduated.json — not leftover slots under a cap of 20. "
+                    "That does not mean replenish is running unless the pipeline "
+                    "stamp says so."
                 ),
             },
             "graduation": graduation,

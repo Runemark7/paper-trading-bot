@@ -116,6 +116,9 @@ export interface Champion {
   wins: number;
   passed?: boolean;
   open_lots?: number;
+  /** UTC ISO-8601 when this name joined the paper champion pool, or null if unknown. */
+  champion_since?: string | null;
+  source?: string;
 }
 
 export interface GraduatedTrade {
@@ -239,15 +242,12 @@ export interface StatusSnapshot {
     tournament: CertaintyNote & {
       stamp_says_this_phase?: boolean;
       active_count: number;
-      target_active: number;
-      slots_open: number;
       evaluation_limit: number;
       synced_until: string | null;
       file: { path: string; mtime: string | null; exists: boolean };
     };
     replenish: CertaintyNote & {
       needed: boolean;
-      slots_open: number;
       stamp_says_this_phase?: boolean;
     };
     graduation: CertaintyNote & {
@@ -267,7 +267,6 @@ export interface StatusSnapshot {
 export interface ChampionsPayload {
   active_champions: Champion[];
   active_count: number;
-  target_active: number;
   evaluation_limit: number;
   graduated_count: number;
   graduated: GraduatedStrategy[];

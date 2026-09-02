@@ -269,8 +269,15 @@ class ChampionsAccordionUiTests(unittest.TestCase):
         self.assertIn("split.eth", collapsed)
         self.assertIn("split.total", collapsed)
         self.assertIn("LotHealthSummaryChips", collapsed)
+        self.assertIn("ChampionSinceChip", collapsed)
+        self.assertIn('label="Champion since"', collapsed)
         self.assertNotIn("open_lots_btc", collapsed)
         self.assertNotIn("open_lots_eth", collapsed)
+
+    def test_expanded_header_shows_started_date(self):
+        expanded = CHAMPS_TSX.split("{isOpen &&", 1)[1]
+        self.assertIn("Started {fmtChampionSince(c.champion_since)}", expanded)
+        self.assertIn("flex flex-wrap", expanded)
 
     def test_graduated_section_does_not_invent_live_lots(self):
         grad = CHAMPS_TSX[CHAMPS_TSX.index("Graduated paper") :]

@@ -224,11 +224,11 @@ export default function Overview() {
                   prog.replenish.stamp_says_this_phase
                     ? "stamp says tournament/replenish"
                     : prog.replenish.needed
-                      ? `${prog.replenish.slots_open} slots open`
-                      : "pool at capacity"
+                      ? "untested names remain"
+                      : "universe exhausted"
                 }
                 tone={prog.replenish.stamp_says_this_phase ? "wait" : "neutral"}
-                body={prog.replenish.note ?? "Slots open does not mean replenish is running."}
+                body={prog.replenish.note ?? "No live-slot cap. needed is leftover universe names, not slots under 20."}
               />
               <PipelineRow
                 title="Graduation → GRADUATED_PAPER"
