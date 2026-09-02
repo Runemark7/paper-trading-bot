@@ -45,11 +45,13 @@ export default function PaperChart({
   openLots,
   closed,
   symbol,
+  compact = false,
 }: {
   candles: CandleBar[];
   openLots: NumberedOpenLot[];
   closed: NumberedClosedTrade[];
   symbol: string;
+  compact?: boolean;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -124,15 +126,17 @@ export default function PaperChart({
 
     for (const line of linesRef.current) series.removePriceLine(line);
     linesRef.current = [];
-    for (const { n, lot } of openLots) {
+    // Open lots only: entry + stop + TP. Titles live in the list under the chart
+    // so twelve axis tags do not stack on the candles.
+    for (const { lot } of openLots) {
       linesRef.current.push(
         series.createPriceLine({
           price: lot.entry,
           color: ENTRY,
           lineWidth: 2,
           lineStyle: LineStyle.Solid,
-          axisLabelVisible: true,
-          title: `${n} entry`,
+          axisLabelVisible: false,
+          title: "",
         }),
       );
       linesRef.current.push(
@@ -141,8 +145,8 @@ export default function PaperChart({
           color: STOP,
           lineWidth: 1,
           lineStyle: LineStyle.Dashed,
-          axisLabelVisible: true,
-          title: `${n} stop`,
+          axisLabelVisible: false,
+          title: "",
         }),
       );
       linesRef.current.push(
@@ -151,8 +155,8 @@ export default function PaperChart({
           color: TP,
           lineWidth: 1,
           lineStyle: LineStyle.Dashed,
-          axisLabelVisible: true,
-          title: `${n} TP`,
+          axisLabelVisible: false,
+          title: "",
         }),
       );
     }
@@ -167,9 +171,10 @@ export default function PaperChart({
         position: "belowBar",
         color: ENTRY,
         shape: "arrowUp",
-        text: `${n} open`,
+        text: `${n}`,
       });
     }
+    // Closed lots: open/close marks only — no stop/TP lines.
     for (const { n, trade } of closed) {
       const openMs = isoToMs(trade.entry_ts);
       const closeMs = isoToMs(trade.exit_ts);
@@ -182,7 +187,7 @@ export default function PaperChart({
           position: "belowBar",
           color: ENTRY,
           shape: "arrowUp",
-          text: `${n} open`,
+          text: `${n}`,
         });
       }
       if (closeT != null) {
@@ -191,7 +196,7 @@ export default function PaperChart({
           position: "aboveBar",
           color: win ? TP : STOP,
           shape: "arrowDown",
-          text: `${n} close`,
+          text: `${n}`,
         });
       }
     }
@@ -207,7 +212,11 @@ export default function PaperChart({
   return (
     <div
       ref={hostRef}
-      className="w-full min-h-[280px] h-[min(55vh,440px)] rounded-lg overflow-hidden bg-[#0b1020]"
+      className={
+        compact
+          ? "w-full min-h-[200px] h-[240px] rounded-lg overflow-hidden bg-[#0b1020]"
+          : "w-full min-h-[280px] h-[min(52vh,440px)] rounded-lg overflow-hidden bg-[#0b1020]"
+      }
       role="img"
       aria-label={`${symbol} 5m paper chart`}
     />

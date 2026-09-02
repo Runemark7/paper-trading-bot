@@ -89,6 +89,8 @@ class ChampionsAccordionUiTests(unittest.TestCase):
         self.assertIn("no open lots", CHAMPS_TSX)
         self.assertIn('label="Condition" span', CHAMPS_TSX)
         self.assertIn("accountsMatch(name, c.name)", CHAMPS_TSX)
+        self.assertIn("ChampionTape", CHAMPS_TSX)
+        self.assertIn("championName={c.name}", CHAMPS_TSX)
 
     def test_graduated_section_does_not_invent_live_lots(self):
         grad = CHAMPS_TSX[CHAMPS_TSX.index("Graduated paper") :]
@@ -96,6 +98,7 @@ class ChampionsAccordionUiTests(unittest.TestCase):
         self.assertNotIn("ChampionLotList", grad)
         self.assertNotIn("qLive", grad)
         self.assertNotIn("ExpandedChampionLots", grad)
+        self.assertNotIn("ChampionTape", grad)
 
 
 if __name__ == "__main__":

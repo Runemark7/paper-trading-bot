@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchChampions, fetchGraduated, fetchDiscovery, api } from "../api/client";
 import type { LivePosition } from "../api/types";
+import ChampionTape from "../chart/ChampionTape";
 import { Card, fmt, Badge, Empty, MonoName, Field, FieldGrid, PhoneCards, DesktopTable } from "../components/ui";
 import {
   accountSlug,
@@ -129,8 +130,9 @@ export default function Champions() {
     <div className="space-y-6 min-w-0">
       <p className="text-sm text-white/55">
         Names on the paper book are isolated €10k accounts. Tap a champion to list
-        that account's open lots. Discovery and graduation below are last-known
-        pipeline results — not a live job unless the sidecar stamp says so.
+        that account's open lots and a compact BTC/ETH chart. Discovery and graduation
+        below are last-known pipeline results — not a live job unless the sidecar stamp
+        says so.
       </p>
 
       <Card
@@ -194,13 +196,14 @@ export default function Champions() {
                   {isOpen && (
                     <div
                       id={panelId}
-                      className="border-t border-white/10 px-3 py-3 bg-white/[0.02] min-w-0"
+                      className="border-t border-white/10 px-3 py-3 bg-white/[0.02] min-w-0 space-y-3"
                     >
                       <ExpandedChampionLots
                         lots={lots}
                         liveReady={liveReady}
                         knownCount={knownCount}
                       />
+                      <ChampionTape championName={c.name} compact />
                     </div>
                   )}
                 </li>
