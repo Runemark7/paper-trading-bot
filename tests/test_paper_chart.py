@@ -190,29 +190,41 @@ class ChartUiTests(unittest.TestCase):
         self.assertIn("grid-cols-5", app)
         self.assertIn('path="/chart"', app)
         chart = (REPO / "frontend" / "src" / "pages" / "Chart.tsx").read_text()
-        self.assertIn("useState", chart)
-        self.assertIn("BTC/USDT", chart)
-        self.assertIn("ETH/USDT", chart)
-        self.assertIn("aria-pressed", chart)
+        tape = (REPO / "frontend" / "src" / "chart" / "ChampionTape.tsx").read_text()
+        self.assertIn("fetchChampions", chart)
+        self.assertIn('aria-label="Champion"', chart)
         self.assertIn("min-h-12", chart)
-        self.assertIn("Trade {n} open", chart)
-        self.assertIn("${n} close", chart)
-        self.assertIn("Take-profit", chart)
-        self.assertIn("2:1", chart)
+        self.assertIn("defaultChampionName", chart)
+        self.assertIn("<ChampionTape", chart)
+        self.assertIn("BTC/USDT", tape)
+        self.assertIn("ETH/USDT", tape)
+        self.assertIn("aria-pressed", tape)
+        self.assertIn("min-h-12", tape)
+        self.assertIn("Trade {n} open", tape)
+        self.assertIn("Trade {n} closed", tape)
+        self.assertIn("2:1", tape)
         self.assertIn("paper", chart.lower())
         self.assertNotIn("READY_FOR_LIVE", chart)
         numbering = (REPO / "frontend" / "src" / "chart" / "numberTrades.ts").read_text()
         self.assertIn("TAKE_PROFIT_RR = 2", numbering)
         self.assertIn("function numberOpenLots", numbering)
         self.assertIn("function numberClosedTrades", numbering)
+        self.assertIn("function lotsForChampionSymbol", numbering)
+        self.assertIn("function closedTradesForChampionSymbol", numbering)
+        self.assertIn("function defaultChampionName", numbering)
+        self.assertIn("accountsMatch(l.account, championName)", numbering)
+        self.assertIn("accountsMatch(t.account, championName)", numbering)
         paper = (REPO / "frontend" / "src" / "chart" / "PaperChart.tsx").read_text()
         self.assertIn("lightweight-charts", paper)
-        self.assertIn("${n} entry", paper)
-        self.assertIn("${n} stop", paper)
-        self.assertIn("${n} TP", paper)
-        self.assertIn("${n} open", paper)
-        self.assertIn("${n} close", paper)
+        self.assertIn("axisLabelVisible: false", paper)
+        self.assertNotIn("${n} entry", paper)
+        self.assertNotIn("${n} stop", paper)
+        self.assertNotIn("${n} TP", paper)
+        self.assertNotIn("${n} open", paper)
+        self.assertNotIn("${n} close", paper)
+        self.assertIn("text: `${n}`", paper)
         self.assertIn("min-h-[280px]", paper)
+        self.assertIn("compact", paper)
         bar = (REPO / "frontend" / "src" / "status" / "StatusBar.tsx").read_text()
         self.assertIn("Running now", bar)
         self.assertIn("In progress", bar)
@@ -222,6 +234,109 @@ class ChartUiTests(unittest.TestCase):
         self.assertIn("Open lots", positions)
         self.assertIn("Closed paper trades", positions)
         self.assertNotIn("lightweight-charts", positions)
+
+
+def _account_slug(name: str) -> str:
+    return name.replace("/", "_").replace(":", "_")
+
+
+def _paper_account_keys(name: str) -> set[str]:
+    stripped = name[len("trades_") :] if name.startswith("trades_") else name
+    slug = _account_slug(name)
+    stripped_slug = _account_slug(stripped)
+    return {name, slug, stripped, stripped_slug, f"trades_{slug}", f"trades_{stripped_slug}"}
+
+
+def _accounts_match(account: str | None, champion_name: str) -> bool:
+    if not account:
+        return False
+    return bool(_paper_account_keys(account) & _paper_account_keys(champion_name))
+
+
+def _lots_for_champion_symbol(lots: list[dict], champion: str, symbol: str) -> list[dict]:
+    return [l for l in lots if l.get("symbol") == symbol and _accounts_match(l.get("account"), champion)]
+
+
+def _default_champion_name(champs: list[dict]) -> str | None:
+    if not champs:
+        return None
+    best = champs[0]
+    for c in champs[1:]:
+        if (c.get("open_lots") or 0) > (best.get("open_lots") or 0):
+            best = c
+    return best["name"]
+
+
+class ChampionScopedChartTests(unittest.TestCase):
+    def test_selecting_champion_a_drops_champion_b_btc_lots(self):
+        lots = [
+            {"account": "trades_alpha", "symbol": "BTC/USDT", "lot_id": 1},
+            {"account": "trades_alpha", "symbol": "BTC/USDT", "lot_id": 2},
+            {"account": "trades_bravo", "symbol": "BTC/USDT", "lot_id": 9},
+            {"account": "trades_alpha", "symbol": "ETH/USDT", "lot_id": 3},
+        ]
+        alpha_btc = _lots_for_champion_symbol(lots, "alpha", "BTC/USDT")
+        self.assertEqual([l["lot_id"] for l in alpha_btc], [1, 2])
+        self.assertEqual([i for i, _ in enumerate(alpha_btc, 1)], [1, 2])
+        bravo_btc = _lots_for_champion_symbol(lots, "bravo", "BTC/USDT")
+        self.assertEqual([l["lot_id"] for l in bravo_btc], [9])
+        self.assertNotIn("trades_bravo", [l["account"] for l in alpha_btc])
+        self.assertEqual(_lots_for_champion_symbol(lots, "bravo", "ETH/USDT"), [])
+
+    def test_two_lots_on_one_champion_are_trade_1_and_trade_2(self):
+        lots = [
+            {"account": "trades_pair", "symbol": "BTC/USDT", "lot_id": 4},
+            {"account": "trades_pair", "symbol": "BTC/USDT", "lot_id": 5},
+        ]
+        numbered = [(i, l["lot_id"]) for i, l in enumerate(
+            _lots_for_champion_symbol(lots, "pair", "BTC/USDT"), 1
+        )]
+        self.assertEqual(numbered, [(1, 4), (2, 5)])
+
+    def test_default_champion_is_most_open_lots_else_first(self):
+        self.assertEqual(
+            _default_champion_name([
+                {"name": "quiet", "open_lots": 0},
+                {"name": "busy", "open_lots": 3},
+                {"name": "also_busy", "open_lots": 3},
+            ]),
+            "busy",
+        )
+        self.assertEqual(
+            _default_champion_name([
+                {"name": "first", "open_lots": 0},
+                {"name": "second", "open_lots": 0},
+            ]),
+            "first",
+        )
+        self.assertIsNone(_default_champion_name([]))
+        numbering = (REPO / "frontend" / "src" / "chart" / "numberTrades.ts").read_text()
+        self.assertIn("((c.open_lots ?? 0) > (best.open_lots ?? 0) ? c : best)", numbering)
+
+    def test_closed_lots_have_no_stop_or_tp_price_lines(self):
+        paper = (REPO / "frontend" / "src" / "chart" / "PaperChart.tsx").read_text()
+        closed_block = paper.split("Closed lots:")[1]
+        self.assertIn("shape: \"arrowDown\"", closed_block)
+        self.assertNotIn("createPriceLine", closed_block)
+        self.assertNotIn("lot.stop", closed_block)
+        self.assertNotIn("lot.take_profit", closed_block)
+        tape = (REPO / "frontend" / "src" / "chart" / "ChampionTape.tsx").read_text()
+        self.assertIn("no stop/TP", tape)
+        self.assertIn("Labels sit", tape)
+
+    def test_champions_expanded_card_mounts_one_tape_not_twenty(self):
+        champs = (REPO / "frontend" / "src" / "pages" / "Champions.tsx").read_text()
+        self.assertIn("ChampionTape", champs)
+        self.assertIn("championName={c.name}", champs)
+        self.assertIn("compact", champs)
+        open_idx = champs.index("{isOpen &&")
+        tape_idx = champs.index("<ChampionTape", open_idx)
+        self.assertGreater(tape_idx, open_idx)
+        collapsed_render = champs.split("{isOpen &&")[0]
+        self.assertNotIn("<ChampionTape", collapsed_render)
+        grad = champs[champs.index("Graduated paper") :]
+        self.assertNotIn("ChampionTape", grad)
+
 
 
 if __name__ == "__main__":
