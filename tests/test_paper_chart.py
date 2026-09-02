@@ -104,11 +104,18 @@ class LiveLotsForChartTests(unittest.TestCase):
         self.assertEqual(len(prev["lots"]), 2)
 
 
+def _one_bar():
+    from hedge_fund.data.binance import Candle
+
+    return Candle(ts=1_700_000_000_000, open=1, high=2, low=0.5, close=1.5, volume=10)
+
+
 class CandlesEndpointTests(unittest.TestCase):
     def setUp(self):
         from hedge_fund.web import candles as candles_mod
 
         candles_mod._CACHE.clear()
+        candles_mod._SOURCES.clear()
 
     def test_rejects_unknown_symbol_and_4h(self):
         from hedge_fund.web.candles import CandleRequestError, candles_payload
@@ -118,14 +125,37 @@ class CandlesEndpointTests(unittest.TestCase):
         with self.assertRaises(CandleRequestError):
             candles_payload("BTC/USDT", "4h")
 
-    def test_accepts_hyphen_and_uses_public_klines(self):
-        from hedge_fund.data.binance import Candle
+    def test_limit_50_ok(self):
         from hedge_fund.web.candles import candles_payload
 
         src = MagicMock()
-        src.fetch_klines.return_value = [
-            Candle(ts=1_700_000_000_000, open=1, high=2, low=0.5, close=1.5, volume=10),
-        ]
+        src.fetch_klines.return_value = [_one_bar()]
+        out = candles_payload("ETH/USDT", "5m", 50, source=src)
+        src.fetch_klines.assert_called_once_with("ETH/USDT", timeframe="5m", limit=50)
+        self.assertEqual(len(out["candles"]), 1)
+        self.assertEqual(out["symbol"], "ETH/USDT")
+        self.assertTrue(out["paper_only"])
+
+    def test_caps_limit_500_below_crash_size(self):
+        from hedge_fund.web.candles import DEFAULT_LIMIT, MAX_LIMIT, candles_payload
+
+        self.assertGreaterEqual(DEFAULT_LIMIT, 180)
+        self.assertLessEqual(DEFAULT_LIMIT, 250)
+        self.assertLessEqual(MAX_LIMIT, 250)
+        self.assertGreaterEqual(MAX_LIMIT, DEFAULT_LIMIT)
+        self.assertLess(MAX_LIMIT, 500)
+        src = MagicMock()
+        src.fetch_klines.return_value = [_one_bar()]
+        candles_payload("BTC/USDT", "5m", 500, source=src)
+        src.fetch_klines.assert_called_once_with(
+            "BTC/USDT", timeframe="5m", limit=MAX_LIMIT
+        )
+
+    def test_accepts_hyphen_and_uses_public_klines(self):
+        from hedge_fund.web.candles import candles_payload
+
+        src = MagicMock()
+        src.fetch_klines.return_value = [_one_bar()]
         out = candles_payload("btc-usdt", "5m", 10, source=src)
         src.fetch_klines.assert_called_once_with("BTC/USDT", timeframe="5m", limit=10)
         self.assertEqual(out["symbol"], "BTC/USDT")
@@ -136,13 +166,10 @@ class CandlesEndpointTests(unittest.TestCase):
         self.assertEqual(out["candles"][0]["c"], 1.5)
 
     def test_falls_back_to_binanceus_when_dot_com_blocked(self):
-        from hedge_fund.data.binance import Candle
         from hedge_fund.web.candles import _public_klines
 
         good = MagicMock()
-        good.fetch_klines.return_value = [
-            Candle(ts=1, open=1, high=1, low=1, close=1, volume=1),
-        ]
+        good.fetch_klines.return_value = [_one_bar()]
         blocked = MagicMock()
         blocked.fetch_klines.side_effect = RuntimeError("451 restricted location")
         with patch("hedge_fund.data.binance.CcxtSource", side_effect=[blocked, good]) as ctor:
@@ -152,13 +179,104 @@ class CandlesEndpointTests(unittest.TestCase):
         self.assertEqual(ctor.call_args_list[0].kwargs["exchange_id"], "binance")
         self.assertEqual(ctor.call_args_list[1].kwargs["exchange_id"], "binanceus")
 
+    def test_both_venues_fail_as_fetch_error_not_502(self):
+        from hedge_fund.web.candles import CandleFetchError, candles_payload
+
+        dead = MagicMock()
+        dead.fetch_klines.side_effect = TimeoutError("binance timed out")
+        with patch("hedge_fund.data.binance.CcxtSource", return_value=dead):
+            with self.assertRaises(CandleFetchError) as ctx:
+                candles_payload("BTC/USDT", "5m", 50)
+        self.assertEqual(ctx.exception.status, 504)
+
+    def test_handler_catches_fetch_errors_as_json_503(self):
+        import json
+        import threading
+        from http.server import ThreadingHTTPServer
+        from urllib.error import HTTPError
+        from urllib.request import urlopen
+
+        from hedge_fund.web.server import Handler
+
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        port = httpd.server_address[1]
+        thread = threading.Thread(target=httpd.handle_request, daemon=True)
+        thread.start()
+        try:
+            with patch(
+                "hedge_fund.web.candles.candles_payload",
+                side_effect=RuntimeError("ccxt boom"),
+            ):
+                try:
+                    urlopen(
+                        f"http://127.0.0.1:{port}/api/candles?symbol=BTC/USDT&timeframe=5m&limit=50",
+                        timeout=3,
+                    )
+                    self.fail("expected HTTPError")
+                except HTTPError as err:
+                    self.assertEqual(err.code, 503)
+                    self.assertNotEqual(err.code, 502)
+                    body = json.loads(err.read().decode())
+                    self.assertIn("error", body)
+                    self.assertIn("ccxt boom", body["error"])
+                    self.assertTrue(body.get("paper_only"))
+        finally:
+            thread.join(timeout=3)
+            httpd.server_close()
+
+    def test_handler_limit_50_ok_json(self):
+        import json
+        import threading
+        from http.server import ThreadingHTTPServer
+        from urllib.request import urlopen
+
+        from hedge_fund.web.server import Handler
+
+        payload = {
+            "symbol": "ETH/USDT",
+            "timeframe": "5m",
+            "candles": [{"t": 1, "o": 1, "h": 1, "l": 1, "c": 1, "v": 1}],
+            "as_of": "now",
+            "source": "binance_public",
+            "paper_only": True,
+        }
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        port = httpd.server_address[1]
+        thread = threading.Thread(target=httpd.handle_request, daemon=True)
+        thread.start()
+        try:
+            with patch(
+                "hedge_fund.web.candles.candles_payload",
+                return_value=payload,
+            ) as fetch:
+                raw = urlopen(
+                    f"http://127.0.0.1:{port}/api/candles?symbol=ETH/USDT&timeframe=5m&limit=50",
+                    timeout=3,
+                )
+                body = json.loads(raw.read().decode())
+                self.assertEqual(raw.status, 200)
+                self.assertEqual(len(body["candles"]), 1)
+                fetch.assert_called_once()
+                self.assertEqual(fetch.call_args.args[2], "50")
+        finally:
+            thread.join(timeout=3)
+            httpd.server_close()
+
     def test_server_registers_candles_route(self):
         src = (REPO / "hedge_fund" / "web" / "server.py").read_text()
         self.assertIn('route == "/api/candles"', src)
         self.assertIn("candles_payload", src)
-        self.assertIn("CcxtSource", (REPO / "hedge_fund" / "web" / "candles.py").read_text())
-        self.assertNotIn("live broker", (REPO / "hedge_fund" / "web" / "candles.py").read_text().lower())
-        self.assertIn("binanceus", (REPO / "hedge_fund" / "web" / "candles.py").read_text())
+        self.assertIn("CandleFetchError", src)
+        self.assertIn("exc.status", src)
+        candles_route = src.split('route == "/api/candles"')[1].split("elif route")[0]
+        self.assertNotIn(", 502)", candles_route)
+        self.assertIn(", 503)", candles_route)
+        candles_py = (REPO / "hedge_fund" / "web" / "candles.py").read_text()
+        self.assertIn("CcxtSource", candles_py)
+        self.assertNotIn("live broker", candles_py.lower())
+        self.assertIn("binanceus", candles_py)
+        self.assertIn("MAX_LIMIT = 250", candles_py)
+        self.assertIn("DEFAULT_LIMIT = 200", candles_py)
 
 
 class TradesFilterTests(unittest.TestCase):
@@ -191,6 +309,7 @@ class ChartUiTests(unittest.TestCase):
         self.assertIn('path="/chart"', app)
         chart = (REPO / "frontend" / "src" / "pages" / "Chart.tsx").read_text()
         tape = (REPO / "frontend" / "src" / "chart" / "ChampionTape.tsx").read_text()
+        client = (REPO / "frontend" / "src" / "api" / "client.ts").read_text()
         self.assertIn("fetchChampions", chart)
         self.assertIn('aria-label="Champion"', chart)
         self.assertIn("min-h-12", chart)
@@ -199,6 +318,13 @@ class ChartUiTests(unittest.TestCase):
         self.assertIn("BTC/USDT", tape)
         self.assertIn("ETH/USDT", tape)
         self.assertIn("aria-pressed", tape)
+        self.assertIn("CANDLE_LIMIT = 200", client)
+        self.assertNotIn("limit = 500", client)
+        self.assertNotIn("limit: 500", client)
+        self.assertIn("CANDLE_LIMIT", tape)
+        self.assertIn("api.candles(symbol, \"5m\", CANDLE_LIMIT)", tape)
+        self.assertNotIn("limit = 500", tape)
+        self.assertNotIn('"5m", 500', tape)
         self.assertIn("min-h-12", tape)
         self.assertIn("Trade {n} open", tape)
         self.assertIn("Trade {n} closed", tape)
