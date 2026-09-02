@@ -13,6 +13,7 @@ export default function ChartPage() {
   });
   const champs = qChamps.data?.active_champions ?? [];
   const [champion, setChampion] = useState("");
+  const selected = champs.find((c) => c.name === champion);
 
   useEffect(() => {
     if (!champs.length) return;
@@ -52,7 +53,11 @@ export default function ChartPage() {
 
       <Card
         title={champion ? `${champion} · 5m` : "Champion chart"}
-        aside={qChamps.data?.open_lots != null ? `${qChamps.data.open_lots} open lots on the book` : undefined}
+        aside={
+          selected
+            ? `${selected.open_lots ?? 0} open lots on this account`
+            : undefined
+        }
       >
         {qChamps.isError ? (
           <Empty>Could not load /api/champions: {String(qChamps.error)}</Empty>
