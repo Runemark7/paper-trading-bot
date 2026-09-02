@@ -84,6 +84,7 @@ over a meaningful sample, AND calibration is demonstrated independently of P&L.
 | 2026-09-01 | Qualification uses the same 4h tape and `rm_v1` stop/size policy as live. Arena 20, OOS-only admit bar, 80-trade paper gate vs buy-and-hold. Original §§ 1–8 and the 2026-08-30 amendment remain; superseded clauses are named in the 2026-09-01 amendment. |
 | 2026-09-02 | Live book and admit bar move to 5m candles. Decision cycle every 5 minutes (`CYCLE_INTERVAL_SECONDS = 300`). Walk-forward windows rescaled to ~90 calendar days of 5m per window. Strategy lookbacks are bar counts (e.g. `dip_24b` = 2 hours, not 4 days). 4h is superseded for live and admit. Paper only; `GRADUATED_PAPER` meaning unchanged. Original §§ 1–8 and prior amendments remain; superseded clauses are named in the 2026-09-02 amendment. |
 | 2026-09-03 | Structure atoms exist (`don_hi_N`, `don_lo_N`, `near_swing_hi_N`, `near_swing_lo_N`). They are OHLC (high/low from the same 5m klines), not close-only. Close-only names still parse. Qual/live still 5m, `rm_v1`, OOS gates unchanged. Still paper. |
+| 2026-09-03 | Pattern atoms: `dbl_bot_k` (long). `dbl_top_k` is parsed but not a standalone long. Trend / breakout / momentum already exist as `sma_stack`/`sma_abv`, `don_hi_*`, `mom_*` — not duplicated. Hold band: 1.0% or 1× ATR. Paper only; gates unchanged. |
 
 ### Amendment 2026-08-30 — what actually runs
 
@@ -189,4 +190,27 @@ Near-band: `max(0.20% of close, 0.25 × ATR(14))`. Documented in `structure.py`.
 
 - 2026-09-02 / earlier statements that live and `parse_strategy` are close-only *for every atom* — superseded in part: close-only names remain close-only; structure atoms are OHLC on the same 5m series.
 - 2026-09-02 "Universe remains the explicit ~50-name list" insofar as it freezes that list — superseded; a handful of structure names are added, still inside the 40–120 band.
+
+### Amendment 2026-09-03 — double bottom / double top (pattern only)
+
+This amendment does not rewrite original §§ 1–8 or prior amendments, including the 2026-09-03 structure-atom amendment above. It names one new **pattern** family. Qual/live remain 5m, risk policy remains `rm_v1`, OOS gates are unchanged. **Still paper.** `GRADUATED_PAPER` meaning is unchanged.
+
+**Already exist — not duplicated.** Trend following, breakout, and momentum already map to existing atoms:
+
+- Momentum: `mom_*` (e.g. `mom_12b_gt3pc`)
+- Breakout: `don_hi_*` (e.g. `don_hi_24`)
+- Trend: `sma_stack_*` / `sma_abv_*` (e.g. `sma_stack_20_50_100`, `sma_abv_50`)
+
+`mom_12b_gt3pc&don_hi_24` is already in the universe. This amendment does not add a second momentum / breakout / trend stack.
+
+**New pattern atoms** (`hedge_fund/signals/structure.py`), same Williams fractal as `near_swing_*_k`, OHLC, no lookahead:
+
+- `dbl_bot_k` — two confirmed swing lows. The second low **holds**: within `max(HOLD_PCT × first low, HOLD_ATR_MULT × ATR(14))` = `max(1.0% of the first low, 1 × ATR(14))` of the first (not a much lower low). Close has recovered off the second low (`close >` second swing low). The decision bar cannot be the unconfirmed pivot: `k` bars must exist to the right of the second swing (`j + k <= i`).
+- `dbl_top_k` — two confirmed swing highs, second not much higher (same hold band), close has broken down (`close <` second swing high). Long-only book: **not** listed as a standalone long. The combinator has no NOT; we do not emit `dbl_top` longs or invent a NOT gate to use it as a veto.
+
+**Universe** (still inside `UNIVERSE_TARGET_MAX` = 120): `dbl_bot_12`, `dbl_bot_12&sma_abv_50` (pattern + trend), `dbl_bot_12&don_lo_24`, `dbl_bot_12&sma_stack_20_50_100`, and `sma_stack_20_50_100&don_hi_24` (existing families, one missing AND). No head-and-shoulders, flags, triangles, or candlestick packs.
+
+**Superseded on this date** (prior text kept above for history):
+
+- 2026-09-03 structure-atom universe list insofar as it froze that handful — a few pattern names are added, still inside the 40–120 band.
 

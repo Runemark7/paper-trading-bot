@@ -1,4 +1,4 @@
-"""Donchian / fractal-swing structure atoms: no lookahead, OHLC, close-only still parses."""
+"""Donchian / fractal-swing / double-bottom structure atoms: no lookahead, OHLC, close-only still parses."""
 from __future__ import annotations
 
 import unittest
@@ -6,8 +6,11 @@ import unittest
 from hedge_fund.data.binance import Candle
 from hedge_fund.signals.dynamic import eval_predicate, parse_strategy
 from hedge_fund.signals.structure import (
+    HOLD_ATR_MULT,
+    HOLD_PCT,
     NEAR_ATR_MULT,
     NEAR_PCT,
+    confirmed_swings,
     last_confirmed_swing,
     prior_donchian_high,
 )
@@ -132,6 +135,95 @@ class SwingAndDipFixtureTests(unittest.TestCase):
         self.assertEqual(NEAR_ATR_MULT, 0.25)
 
 
+class DoubleBottomTests(unittest.TestCase):
+    def _w_tape(self, second_low=90.3, bounce_close=100.0):
+        """Two k=12 fractal swing lows (first at 90), then a bounce.
+
+        First trough at j1=24; second at j2=49; first confirmation bar
+        i = j2 + k = 61. Right-hand k bars of the second swing exist only
+        at i >= 61 — earlier bars must not see the second pivot.
+        """
+        k = 12
+        j1 = 2 * k
+        j2 = j1 + 2 * k + 1
+        n = j2 + k + 10
+        closes, highs, lows = _flat(n, close=100.0, w=1.0)
+        lows[j1], closes[j1], highs[j1] = 90.0, 91.0, 92.0
+        lows[j2] = second_low
+        closes[j2] = second_low + 1.0
+        highs[j2] = second_low + 2.0
+        i = j2 + k
+        closes[i] = bounce_close
+        highs[i] = bounce_close + 1.0
+        lows[i] = min(bounce_close - 1.0, 99.0)
+        return closes, highs, lows, k, j1, j2, i
+
+    def test_hold_tolerance_is_documented(self):
+        self.assertEqual(HOLD_PCT, 0.01)
+        self.assertEqual(HOLD_ATR_MULT, 1.0)
+
+    def test_second_swing_invisible_until_k_right_hand_bars(self):
+        closes, highs, lows, k, j1, j2, i = self._w_tape()
+        pred = parse_strategy("dbl_bot_12")
+        i_early = j2 + k - 1
+        # Only the first swing is confirmed; the second is not visible yet.
+        self.assertEqual(len(confirmed_swings(lows, k, i_early, want_high=False, limit=2)), 1)
+        self.assertFalse(eval_predicate(pred, closes, i_early, highs=highs, lows=lows))
+        self.assertEqual(len(confirmed_swings(lows, k, i, want_high=False, limit=2)), 2)
+        self.assertTrue(eval_predicate(pred, closes, i, highs=highs, lows=lows))
+
+    def test_two_similar_lows_then_bounce_is_true(self):
+        closes, highs, lows, k, j1, j2, i = self._w_tape(second_low=90.3, bounce_close=100.0)
+        pred = parse_strategy("dbl_bot_12")
+        self.assertTrue(eval_predicate(pred, closes, i, highs=highs, lows=lows))
+        # Extra OHLC kwargs path used by eval_predicate / live.
+        self.assertTrue(pred(closes, i, highs=highs, lows=lows))
+
+    def test_single_low_is_false(self):
+        closes, highs, lows, k, j1, j2, i = self._w_tape()
+        # Wipe the second trough — only one swing low remains.
+        lows[j2], closes[j2], highs[j2] = 99.0, 100.0, 101.0
+        pred = parse_strategy("dbl_bot_12")
+        self.assertFalse(eval_predicate(pred, closes, i, highs=highs, lows=lows))
+
+    def test_much_lower_second_low_is_false(self):
+        closes, highs, lows, k, j1, j2, i = self._w_tape(second_low=80.0, bounce_close=100.0)
+        pred = parse_strategy("dbl_bot_12")
+        self.assertFalse(eval_predicate(pred, closes, i, highs=highs, lows=lows))
+
+    def test_close_still_at_second_low_is_not_recovered(self):
+        closes, highs, lows, k, j1, j2, i_conf = self._w_tape()
+        # After confirmation, give back the bounce: close sits on the second low.
+        i = i_conf + 5
+        lo2 = lows[j2]
+        closes[i] = lo2
+        highs[i] = lo2 + 1.0
+        lows[i] = lo2
+        pred = parse_strategy("dbl_bot_12")
+        self.assertFalse(eval_predicate(pred, closes, i, highs=highs, lows=lows))
+
+    def test_dbl_bot_refuses_close_as_high_proxy(self):
+        pred = parse_strategy("dbl_bot_12")
+        with self.assertRaises(ValueError) as ctx:
+            pred([100.0] * 80)
+        self.assertIn("high/low", str(ctx.exception).lower())
+
+    def test_dbl_top_parses_but_is_not_a_universe_long(self):
+        k = 12
+        j1 = 2 * k
+        j2 = j1 + 2 * k + 1
+        n = j2 + k + 5
+        closes, highs, lows = _flat(n, close=100.0, w=1.0)
+        highs[j1], closes[j1], lows[j1] = 110.0, 109.0, 108.0
+        highs[j2], closes[j2], lows[j2] = 110.3, 109.3, 108.3
+        i = j2 + k
+        closes[i], highs[i], lows[i] = 100.0, 101.0, 99.0
+        pred = parse_strategy("dbl_top_12")
+        self.assertTrue(eval_predicate(pred, closes, i, highs=highs, lows=lows))
+        uni = generate_universe()
+        self.assertNotIn("dbl_top_12", uni)
+
+
 class CloseOnlyCompatTests(unittest.TestCase):
     def test_old_dip_24b_lt1pc_still_parses(self):
         pred = parse_strategy("dip_24b_lt1pc")
@@ -162,6 +254,11 @@ class UniverseBandTests(unittest.TestCase):
         "rsi_14_>50&don_hi_24",
         "dip_6b_lt2pc&don_lo_24",
         "ema_abv_50&don_hi_24",
+        "sma_stack_20_50_100&don_hi_24",
+        "dbl_bot_12",
+        "dbl_bot_12&sma_abv_50",
+        "dbl_bot_12&don_lo_24",
+        "dbl_bot_12&sma_stack_20_50_100",
     )
     REFUSED = (
         "head_and_shoulders",
@@ -172,6 +269,8 @@ class UniverseBandTests(unittest.TestCase):
         "order_block",
         "engulfing",
         "near_round_100",
+        "dbl_top_12",
+        "dbl_top_12&sma_abv_50",
     )
 
     def test_universe_stays_in_band_and_adds_structure_ands(self):
@@ -185,6 +284,11 @@ class UniverseBandTests(unittest.TestCase):
         blob = " ".join(uni)
         self.assertNotIn("daily(", blob)
         self.assertNotIn("mfi_", blob)
+        # Long-only: no standalone dbl_top longs (combinator has no NOT).
+        self.assertFalse(any(p == "dbl_top_12" or p.startswith("dbl_top_") for p in uni))
+        # Did not invent a second momentum / breakout / trend stack.
+        mom_don = [p for p in uni if "mom_" in p and "don_hi_" in p]
+        self.assertEqual(mom_don, ["mom_12b_gt3pc&don_hi_24"])
 
     def test_new_universe_names_parse(self):
         closes, highs, lows = _flat(80)
@@ -240,6 +344,21 @@ class ProtocolStructureAmendmentTests(unittest.TestCase):
         self.assertIn("Paper only", text)
         self.assertIn("don_hi_N", text)
         self.assertIn("highs[i-N:i]", text)
+
+    def test_amendment_2026_09_03_doubles_in_protocol(self):
+        from pathlib import Path
+
+        text = (Path(__file__).resolve().parents[1] / "PROTOCOL.md").read_text()
+        self.assertIn("double bottom", text.lower())
+        self.assertIn("dbl_bot_k", text)
+        self.assertIn("HOLD_PCT", text)
+        self.assertIn("1.0%", text)
+        self.assertIn("1 × ATR", text)
+        self.assertIn("mom_*", text)
+        self.assertIn("don_hi_*", text)
+        self.assertIn("sma_stack", text)
+        self.assertIn("not duplicated", text.lower())
+        self.assertIn("standalone long", text)
 
 
 if __name__ == "__main__":

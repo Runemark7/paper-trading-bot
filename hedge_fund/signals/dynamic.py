@@ -4,9 +4,9 @@ Provides a unified AST / rule parser so any strategy name, JSON spec, or composi
 can be evaluated dynamically across backtests and live execution without hardcoded elif chains.
 
 Close-only atoms (SMA/RSI/mom/dip/…) still evaluate as ``pred(closes, i)``.
-Structure atoms (Donchian / swing S&R) also accept ``highs=`` and ``lows=``
-from the same bar series — live klines already have OHLC. Missing highs/lows
-raises rather than using close as a high/low proxy.
+Structure atoms (Donchian / swing S&R / double bottom-top) also accept
+``highs=`` and ``lows=`` from the same bar series — live klines already have
+OHLC. Missing highs/lows raises rather than using close as a high/low proxy.
 """
 from __future__ import annotations
 
@@ -264,7 +264,7 @@ def parse_strategy(expr: str | Callable | dict) -> Predicate:
             "parse_strategy evaluate a single series; refusing silent same-series wrap"
         )
 
-    # 8e. OHLC structure atoms (Donchian / fractal swing). Need highs+lows.
+    # 8e. OHLC structure atoms (Donchian / fractal swing / double). Need highs+lows.
     m_don = re.match(r"^don_(hi|lo)_(\d+)$", expr_clean)
     if m_don:
         from hedge_fund.signals.structure import don_hi, don_lo
@@ -282,6 +282,15 @@ def parse_strategy(expr: str | Callable | dict) -> Predicate:
         if m_swing.group(1) == "hi":
             return lambda c, i=None, highs=None, lows=None, **_k: near_swing_hi(c, highs, lows, k, i)
         return lambda c, i=None, highs=None, lows=None, **_k: near_swing_lo(c, highs, lows, k, i)
+
+    m_dbl = re.match(r"^dbl_(bot|top)_(\d+)$", expr_clean)
+    if m_dbl:
+        from hedge_fund.signals.structure import dbl_bot, dbl_top
+
+        k = int(m_dbl.group(2))
+        if m_dbl.group(1) == "bot":
+            return lambda c, i=None, highs=None, lows=None, **_k: dbl_bot(c, highs, lows, k, i)
+        return lambda c, i=None, highs=None, lows=None, **_k: dbl_top(c, highs, lows, k, i)
 
     # 9. Composite patterns: sma200_rsi50, sma100_mom12_2
     m_sma_rsi = re.match(r"^sma(\d+)_rsi(\d+)$", expr_clean)
