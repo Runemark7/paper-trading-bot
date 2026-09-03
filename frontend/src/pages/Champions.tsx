@@ -189,9 +189,17 @@ export default function Champions() {
           )}
         </div>
 
-        {qChamps.error && <div className="text-rose-400 text-sm">Error: {String(qChamps.error)}</div>}
+        {qChamps.error && champs.length ? (
+          <div className="text-rose-400 text-sm mb-3">
+            Could not refresh /api/champions: {String(qChamps.error)} — showing last-known.
+          </div>
+        ) : null}
 
-        {!champs.length ? (
+        {qChamps.error && !champs.length ? (
+          <Empty>
+            Could not load /api/champions: {String(qChamps.error)}
+          </Empty>
+        ) : !champs.length ? (
           <Empty>
             No champions in champions.json. The live book falls back to{" "}
             <code>{run?.strategy.fallback ?? "sma_stack"}</code> until discovery admits names.
@@ -295,11 +303,15 @@ export default function Champions() {
         </div>
 
         {!graduated.length ? (
+          qGrad.error ? (
+            <Empty>Could not load /api/graduated: {String(qGrad.error)}</Empty>
+          ) : (
           <Empty>
             No graduations recorded yet. Silence here is last-known empty state, not a
             graduation job in flight.
             {prog?.graduation.note ? ` ${prog.graduation.note}` : ""}
           </Empty>
+          )
         ) : (
           <div className="space-y-4">
             {graduated.map((g) => {
@@ -417,10 +429,14 @@ export default function Champions() {
         </div>
 
         {!discoveryLog.length ? (
+          qDisc.error ? (
+            <Empty>Could not load /api/discovery: {String(qDisc.error)}</Empty>
+          ) : (
           <Empty>
             No discovery_log.json yet. Tournament writes it after a qualification batch.
             Empty means nothing has been recorded — not that discovery is running.
           </Empty>
+          )
         ) : (
           <>
             <PhoneCards>

@@ -34,7 +34,7 @@ from urllib.parse import parse_qs, urlparse
 
 from hedge_fund.paths import state_root
 from hedge_fund.regime.gate import RegimeGate
-from hedge_fund.trading.open_lots import attach_open_lots, open_lots_snapshot, paper_book_dbs
+from hedge_fund.trading.open_lots import open_lots_snapshot, paper_book_dbs
 from hedge_fund.trading.store import TradeStore
 from hedge_fund.web.live import live_preview, live_prices
 
@@ -274,6 +274,7 @@ class Handler(BaseHTTPRequestHandler):
                 try:
                     closes = fetch_signal_closes()
                 except Exception:
+                    # Lots still render; signal stays unknown. Never stall → 502.
                     closes = {}
                 merged = {
                     "live_equity": 0.0,
@@ -303,7 +304,17 @@ class Handler(BaseHTTPRequestHandler):
                         continue
                 self._send_json(merged)
             except Exception as exc:
-                self._send_json({"error": str(exc)})
+                # JSON 503 — never a bare nginx 502.
+                self._send_json(
+                    {
+                        "error": str(exc),
+                        "lots": [],
+                        "positions": [],
+                        "open_lots": 0,
+                        "paper_only": True,
+                    },
+                    503,
+                )
         elif route == "/api/trades":
             try:
                 lim = int(qs["limit"]) if qs.get("limit") else 60
@@ -334,12 +345,13 @@ class Handler(BaseHTTPRequestHandler):
                 # Never a bare nginx 502 — JSON 503 so the chart can show why.
                 self._send_json({"error": str(exc), "paper_only": True}, 503)
         elif route == "/api/champions":
+            # Read-only: last-known champions.json + open-lots snapshot.
+            # collect_live_results mutates the pool / may graduate — that stays
+            # on live_cycle.py (and heartbeat after closes), not a browser GET.
             try:
-                from hedge_fund.trading.champions import (
-                    collect_live_results, pool_status,
-                )
-                collect_live_results()
-                self._send_json(attach_open_lots(pool_status()))
+                from hedge_fund.trading.champions import pool_status
+
+                self._send_json(pool_status(read_only=True))
             except Exception as exc:
                 self._send_json({"error": str(exc), "champions": [], "count": 0}, 500)
         elif route == "/api/graduated":

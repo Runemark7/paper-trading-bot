@@ -358,10 +358,17 @@ def backfill_champion_since(st: dict) -> bool:
     return changed
 
 
-def pool_status() -> dict:
+def pool_status(*, read_only: bool = False) -> dict:
+    """Last-known pool. ``read_only`` skips sqlite MIN() backfill + json write.
+
+    Browser GET /api/champions must not stall on 31 DBs or collide with
+    live_cycle writers. Prefer already-persisted ``champion_since``; omit
+    rather than infer. Cycle / collect_live_results still backfill.
+    """
     st = load_pool()
-    if backfill_champion_since(st):
-        save_pool(st)
+    if not read_only:
+        if backfill_champion_since(st):
+            save_pool(st)
     champs = []
     for c in st["champions"]:
         row = dict(c)

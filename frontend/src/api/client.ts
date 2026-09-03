@@ -19,10 +19,36 @@ export const MAX_CANDLE_BARS = 7 * BARS_PER_DAY; // 2016
 export const ENTRY_PAD_BARS = 12; // 1h of 5m so an entry is not glued to the left edge
 export const TF_MS = 5 * 60 * 1000;
 
-async function get<T>(path: string): Promise<T> {
+/** Bare nginx 502 or our JSON 503/504 — retry once, then show last-known / Empty. */
+export function isTransientHttpError(error: unknown): boolean {
+  const msg = error instanceof Error ? error.message : String(error ?? "");
+  return /-> 502\b|-> 503\b|-> 504\b/.test(msg);
+}
+
+async function getOnce<T>(path: string): Promise<T> {
   const res = await fetch(path);
-  if (!res.ok) throw new Error(`${path} -> ${res.status}`);
+  if (!res.ok) {
+    let detail = `${path} -> ${res.status}`;
+    try {
+      const body = (await res.json()) as { error?: string };
+      if (body?.error) detail = `${detail}: ${body.error}`;
+    } catch {
+      /* bare nginx 502 is HTML, not JSON */
+    }
+    throw new Error(detail);
+  }
   return res.json() as Promise<T>;
+}
+
+async function get<T>(path: string): Promise<T> {
+  try {
+    return await getOnce<T>(path);
+  } catch (err) {
+    if (isTransientHttpError(err)) {
+      return await getOnce<T>(path);
+    }
+    throw err;
+  }
 }
 
 export const api = {
@@ -59,21 +85,15 @@ export const api = {
   health: () => get<{ ok: boolean }>("/healthz"),
 };
 
-// Champion pool is served live; wrapped here so UI can poll it.
-export async function fetchChampions(): Promise<ChampionsPayload> {
-  const res = await fetch("/api/champions");
-  if (!res.ok) throw new Error(`/api/champions -> ${res.status}`);
-  return res.json();
+// Champion pool is last-known JSON; wrapped here so UI can poll it.
+export function fetchChampions(): Promise<ChampionsPayload> {
+  return get<ChampionsPayload>("/api/champions");
 }
 
-export async function fetchGraduated(): Promise<GraduatedStrategy[]> {
-  const res = await fetch("/api/graduated");
-  if (!res.ok) throw new Error(`/api/graduated -> ${res.status}`);
-  return res.json();
+export function fetchGraduated(): Promise<GraduatedStrategy[]> {
+  return get<GraduatedStrategy[]>("/api/graduated");
 }
 
-export async function fetchDiscovery(): Promise<DiscoveryEvaluation[]> {
-  const res = await fetch("/api/discovery");
-  if (!res.ok) throw new Error(`/api/discovery -> ${res.status}`);
-  return res.json();
+export function fetchDiscovery(): Promise<DiscoveryEvaluation[]> {
+  return get<DiscoveryEvaluation[]>("/api/discovery");
 }

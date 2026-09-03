@@ -75,7 +75,12 @@ export default function ChartPage() {
             : undefined
         }
       >
-        {qChamps.isError ? (
+        {qChamps.error && champs.length ? (
+          <p className="text-xs text-rose-400 mb-2 min-w-0 break-words">
+            Could not refresh /api/champions: {String(qChamps.error)} — showing last-known.
+          </p>
+        ) : null}
+        {qChamps.isError && !champs.length ? (
           <Empty>Could not load /api/champions: {String(qChamps.error)}</Empty>
         ) : !champs.length ? (
           <Empty>

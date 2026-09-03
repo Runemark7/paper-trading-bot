@@ -167,7 +167,12 @@ export default function ChampionTape({
         btcLots={split.btc}
         ethLots={split.eth}
       />
-      {candles.isError ? (
+      {candles.isError && bars && bars.length ? (
+        <p className="text-xs text-rose-400 min-w-0 break-words">
+          Could not refresh /api/candles: {String(candles.error)} — showing last-known tape.
+        </p>
+      ) : null}
+      {candles.isError && !(bars && bars.length) ? (
         <Empty>Could not load /api/candles: {String(candles.error)}. Public Binance only — no trading keys.</Empty>
       ) : !(bars && bars.length) ? (
         <Empty>{candles.isLoading ? "Loading 5m candles…" : "No 5m candles returned."}</Empty>

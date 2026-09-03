@@ -17,9 +17,17 @@ from __future__ import annotations
 
 import math
 import re
+import threading
+import time
 from typing import Any
 
 from hedge_fund.trading.constants import QUAL_SYMBOLS, QUAL_TIMEFRAME
+from hedge_fund.web.candles import SIGNAL_LIMIT
+
+# Short TTL; live path must not wait on a 3–7 day chart page-in.
+_SIGNAL_CACHE_TTL = 20.0
+_SIGNAL_CACHE: dict = {"ts": 0.0, "closes": {}}
+_SIGNAL_CACHE_LOCK = threading.Lock()
 
 # Inclusive bands: [0, 0.30] near stop, [0.70, 1] near TP, else mid.
 NEAR_STOP_FRAC = 0.30
@@ -144,30 +152,35 @@ def _bars_to_candles(rows: list[dict]) -> list:
 def fetch_signal_closes(limit: int | None = None) -> dict[str, list]:
     """5m OHLCV for BTC and ETH, once. Reuses the paper-chart candles cache.
 
-    Per-symbol failures are skipped so the other coin still gets a signal.
+    Lookback is ≤200 bars (not the 3–7 day chart window). On cache miss or a
+    busy venue lock, returns {} so lots render with ``signal: unknown``
+    rather than waiting on a multi-page kline fetch.
     """
-    from hedge_fund.web.candles import (
-        CandleFetchError,
-        CandleRequestError,
-        candles_payload,
-    )
+    from hedge_fund.web.candles import try_recent_candles
 
-    # Recent 5m bars for this-bar signal — not the champion chart window.
-    # Chart history is 3–7 days; lot health only needs a short lookback.
-    n = 200 if limit is None else limit
+    n = SIGNAL_LIMIT if limit is None else min(max(1, int(limit)), SIGNAL_LIMIT)
+    now = time.time()
+    with _SIGNAL_CACHE_LOCK:
+        hit = _SIGNAL_CACHE
+        if hit["closes"] and (now - hit["ts"] <= _SIGNAL_CACHE_TTL):
+            return hit["closes"]
+
     out: dict[str, list] = {}
     for sym in QUAL_SYMBOLS:
         try:
-            payload = candles_payload(sym, QUAL_TIMEFRAME, n)
-        except (CandleFetchError, CandleRequestError, Exception):
+            rows = try_recent_candles(sym, QUAL_TIMEFRAME, n)
+        except Exception:
             continue
-        rows = payload.get("candles") or []
-        if len(rows) < 2:
+        if not rows or len(rows) < 2:
             continue
         try:
             out[sym] = _bars_to_candles(rows)
         except (KeyError, TypeError, ValueError):
             continue
+    if out:
+        with _SIGNAL_CACHE_LOCK:
+            _SIGNAL_CACHE["ts"] = now
+            _SIGNAL_CACHE["closes"] = out
     return out
 
 

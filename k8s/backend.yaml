@@ -52,6 +52,9 @@ spec:
               memory: 128Mi
             limits:
               cpu: 500m
+              # 512Mi is enough: GET /api/champions is read-only (no collect_live_results)
+              # and GET /api/live / /api/candles reuse one CcxtSource per venue instead of
+              # constructing ccxt.binance() per request (that was the OOM, not the rows).
               memory: 512Mi
           volumeMounts:
             - name: state-storage

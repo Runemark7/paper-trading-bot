@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import time
 
-from hedge_fund.data.binance import CcxtSource
 from hedge_fund.risk.managed import RiskManager
 from hedge_fund.risk.rm_v1 import TAKE_PROFIT_RR
 from hedge_fund.trading.store import TradeStore
@@ -83,27 +82,28 @@ def serialize_open_lot(
 def live_prices(fresh: bool = False) -> dict:
     """Return current prices for the traded symbols, with a short cache.
 
-    Public Binance first; binanceus if .com is geo-restricted (HTTP 451).
+    Reuses the paper-chart ``CcxtSource`` (never a new ``ccxt.binance()`` per
+    request). If the venue is busy paging chart history, keep the stale cache
+    or mark lots at entry — do not wait on a 3–7 day kline fetch.
     Display only — not a live broker.
     """
     now = time.time()
-    if fresh or (now - _PRICE_CACHE["ts"] > CACHE_TTL):
-        px: dict = {}
-        for exchange_id in ("binance", "binanceus"):
-            try:
-                src = CcxtSource(exchange_id=exchange_id)
-                got = {}
-                for sym in SYMBOLS:
-                    got[sym] = src.fetch_price(sym)
-                px = got
-                break
-            except Exception:
-                continue
-        if not px:
-            px = {s: None for s in SYMBOLS}
+    cached = _PRICE_CACHE["prices"]
+    if not fresh and cached and (now - _PRICE_CACHE["ts"] <= CACHE_TTL):
+        return cached
+    from hedge_fund.web.candles import try_live_prices
+
+    try:
+        px = try_live_prices(SYMBOLS)
+    except Exception:
+        px = {}
+    if px:
         _PRICE_CACHE["ts"] = now
         _PRICE_CACHE["prices"] = px
-    return _PRICE_CACHE["prices"]
+        return px
+    if cached:
+        return cached
+    return {s: None for s in SYMBOLS}
 
 
 def live_preview(db: str, closes_by_symbol: dict | None = None) -> dict:
