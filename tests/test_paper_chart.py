@@ -194,6 +194,7 @@ class CandlesEndpointTests(unittest.TestCase):
 
         candles_mod._CACHE.clear()
         candles_mod._SOURCES.clear()
+        candles_mod._VENUE_LOCKS.clear()
 
     def test_rejects_unknown_symbol_and_4h(self):
         from hedge_fund.web.candles import CandleRequestError, candles_payload
@@ -425,6 +426,64 @@ class CandlesEndpointTests(unittest.TestCase):
         self.assertNotIn("DEFAULT_LIMIT = 200", candles_py)
         self.assertIn("_fetch_last_n", candles_py)
         self.assertIn("_call_klines", candles_py)
+        self.assertIn("FETCH_BUDGET", candles_py)
+        self.assertIn("try_recent_candles", candles_py)
+        self.assertIn("try_live_prices", candles_py)
+        self.assertIn("SIGNAL_LIMIT = 200", candles_py)
+        self.assertNotIn("with _SOURCE_LOCK:\n                return _fetch_last_n", candles_py)
+        self.assertIn("blocking=False", candles_py)
+        champs_route = src.split('route == "/api/champions"')[1].split("elif route")[0]
+        self.assertNotIn("collect_live_results()", champs_route)
+        self.assertIn("read_only=True", champs_route)
+        self.assertIn("pool_status", champs_route)
+        live_py = (REPO / "hedge_fund" / "web" / "live.py").read_text()
+        self.assertIn("try_live_prices", live_py)
+        self.assertNotIn("CcxtSource(exchange_id=", live_py)
+        self.assertNotIn("from hedge_fund.data.binance import CcxtSource", live_py)
+        self.assertNotIn("CcxtSource()", live_py)
+        client = (REPO / "frontend" / "src" / "api" / "client.ts").read_text()
+        self.assertIn("isTransientHttpError", client)
+        self.assertIn("-> 502", client)
+        self.assertIn("-> 503", client)
+        main = (REPO / "frontend" / "src" / "main.tsx").read_text()
+        self.assertIn("keepPreviousData", main)
+        self.assertIn("retry: false", main)
+
+    def test_paging_does_not_hold_source_lock(self):
+        from hedge_fund.web import candles as c
+        from hedge_fund.web.candles import candles_payload
+
+        held = []
+        real = c._call_klines
+
+        def wrapped(*a, **k):
+            held.append(c._SOURCE_LOCK.locked())
+            return real(*a, **k)
+
+        venue = FakeVenue()
+        with patch.object(c, "_call_klines", wrapped):
+            with patch("hedge_fund.data.binance.CcxtSource", return_value=venue):
+                out = candles_payload("BTC/USDT", "5m", 500)
+        self.assertEqual(len(out["candles"]), 500)
+        self.assertGreater(len(held), 1)
+        self.assertFalse(any(held))
+
+    def test_try_recent_candles_uses_chart_cache(self):
+        from hedge_fund.web import candles as c
+
+        rows = [
+            {"t": i, "o": 1, "h": 1, "l": 1, "c": 1.0, "v": 1}
+            for i in range(40)
+        ]
+        c._CACHE[("BTC/USDT", "5m", 864)] = {
+            "symbol": "BTC/USDT",
+            "timeframe": "5m",
+            "candles": rows,
+            "_ts": time.time(),
+        }
+        with patch.object(c, "_public_klines", side_effect=AssertionError("must not fetch")):
+            got = c.try_recent_candles("BTC/USDT", "5m", 200)
+        self.assertEqual(got, rows[-200:] if len(rows) > 200 else rows)
 
 
 class TradesFilterTests(unittest.TestCase):
@@ -463,6 +522,8 @@ class ChartUiTests(unittest.TestCase):
         self.assertIn("min-h-12", chart)
         self.assertIn("defaultChampionName", chart)
         self.assertIn("<ChampionTape", chart)
+        self.assertIn("Could not load /api/champions", chart)
+        self.assertIn("showing last-known", chart)
         self.assertIn("openLotsByPair", chart)
         self.assertIn("BTC ${split.btc}", chart)
         self.assertIn("ETH ${split.eth}", chart)
@@ -485,6 +546,8 @@ class ChartUiTests(unittest.TestCase):
         self.assertIn("min-h-12", tape)
         self.assertIn("{n} lots", tape)
         self.assertIn("openLotsByPair", tape)
+        self.assertIn("Could not load /api/candles", tape)
+        self.assertIn("showing last-known tape", tape)
         self.assertIn("LotHealthChips", tape)
         self.assertIn("Trade {n} open", tape)
         self.assertIn("Trade {n} closed", tape)

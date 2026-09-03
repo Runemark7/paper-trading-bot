@@ -5,7 +5,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from hedge_fund.data.binance import Candle
 from hedge_fund.web.lot_health import (
@@ -226,30 +226,50 @@ class AnnotateAndLivePreviewTests(unittest.TestCase):
         self.assertIn("gate", on["lots"][0])
         self.assertEqual(on["lots"][0]["gate"]["kind"], "mom")
 
-    def test_fetch_signal_closes_reuses_candles_payload(self):
+    def test_fetch_signal_closes_reuses_candles_cache_not_full_window(self):
+        from hedge_fund.web import lot_health as lh
+
+        lh._SIGNAL_CACHE["ts"] = 0.0
+        lh._SIGNAL_CACHE["closes"] = {}
         bars = [
             {"t": 1, "o": 1, "h": 1, "l": 1, "c": 100.0, "v": 1},
             {"t": 2, "o": 1, "h": 1, "l": 1, "c": 101.0, "v": 1},
         ]
-        payload = {
-            "symbol": "BTC/USDT",
-            "timeframe": "5m",
-            "candles": bars,
-        }
 
-        def _payload(symbol, timeframe, limit):
+        def _recent(symbol, timeframe, limit):
+            self.assertLessEqual(limit, 200)
             if symbol == "ETH/USDT":
                 raise RuntimeError("no eth")
-            return {**payload, "symbol": symbol}
+            return bars
 
-        with patch("hedge_fund.web.candles.candles_payload", side_effect=_payload) as fetch:
-            out = fetch_signal_closes()
+        with patch("hedge_fund.web.candles.candles_payload") as full:
+            with patch("hedge_fund.web.candles.try_recent_candles", side_effect=_recent) as fetch:
+                out = fetch_signal_closes()
+        full.assert_not_called()
         self.assertIn("BTC/USDT", out)
         self.assertNotIn("ETH/USDT", out)
         self.assertEqual(len(out["BTC/USDT"]), 2)
         self.assertEqual(fetch.call_count, 2)
         for c in fetch.call_args_list:
             self.assertEqual(c.args[2], 200)
+
+    def test_fetch_signal_closes_skips_when_venue_busy(self):
+        from hedge_fund.web import candles as candles_mod
+        from hedge_fund.web import lot_health as lh
+
+        lh._SIGNAL_CACHE["ts"] = 0.0
+        lh._SIGNAL_CACHE["closes"] = {}
+        candles_mod._CACHE.clear()
+        candles_mod._SOURCES["binance"] = MagicMock()
+        candles_mod._SOURCES["binanceus"] = MagicMock()
+        candles_mod._venue_lock("binance").acquire()
+        candles_mod._venue_lock("binanceus").acquire()
+        try:
+            out = fetch_signal_closes()
+        finally:
+            candles_mod._venue_lock("binance").release()
+            candles_mod._venue_lock("binanceus").release()
+        self.assertEqual(out, {})
 
     def test_api_live_fetches_klines_once(self):
         src = (REPO / "hedge_fund" / "web" / "server.py").read_text()

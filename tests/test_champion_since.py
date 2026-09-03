@@ -162,6 +162,28 @@ class BackfillChampionSinceTests(unittest.TestCase):
         self.assertIsNone(status["active_champions"][0]["champion_since"])
 
 
+    def test_read_only_skips_sqlite_min_and_does_not_write(self):
+        from hedge_fund.trading.champions import pool_status, save_pool
+
+        trade_ts = "2026-08-20T12:00:00+00:00"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch.dict(os.environ, {"PAPER_STATE": str(root)}):
+                save_pool({
+                    "champions": [{"name": "alpha", "closed": 0, "pnl": 0.0, "wins": 0}],
+                    "synced_until": "",
+                })
+                _write_trade(root, "alpha", trade_ts, closed=False)
+                with patch("hedge_fund.trading.champions.infer_champion_since") as infer:
+                    status = pool_status(read_only=True)
+                infer.assert_not_called()
+                self.assertIsNone(status["active_champions"][0]["champion_since"])
+                persisted = json.loads((root / "champions.json").read_text())
+                self.assertIsNone(persisted["champions"][0].get("champion_since"))
+                filled = pool_status()
+                self.assertEqual(filled["active_champions"][0]["champion_since"], trade_ts)
+
+
 class ChampionSinceUiContractTests(unittest.TestCase):
     def test_frontend_type_and_payload_include_the_field(self):
         self.assertIn("champion_since?: string | null", TYPES_TS)
