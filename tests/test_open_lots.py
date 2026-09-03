@@ -152,8 +152,10 @@ class OpenLotsHelperTests(unittest.TestCase):
         self.assertIn("from hedge_fund.trading.open_lots import", status_src)
         self.assertIn("open_lots_snapshot", status_src)
         self.assertIn("from hedge_fund.trading.open_lots import", server_src)
-        self.assertIn("attach_open_lots", server_src)
+        self.assertIn("open_lots_snapshot", server_src)
+        self.assertIn("pool_status(read_only=True)", server_src)
         self.assertIn("attach_open_lots", champs_src)
+        self.assertIn("def pool_status", champs_src)
         self.assertNotIn("def _open_positions_count", status_src)
 
 
