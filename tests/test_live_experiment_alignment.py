@@ -127,18 +127,17 @@ class ProtocolAmendmentTests(unittest.TestCase):
 
     def test_amendment_2026_09_03_revokes_live_slot_cap(self):
         import hedge_fund.trading.constants as constants
-        from hedge_fund.trading.constants import (
-            DISCOVER_BATCH_SIZE,
-            TRADE_EVALUATION_LIMIT,
-        )
+        from hedge_fund.trading.constants import TRADE_EVALUATION_LIMIT
 
         text = (REPO / "PROTOCOL.md").read_text()
         self.assertIn("20-slot arena revoked", text)
         self.assertIn("MAX_ACTIVE_CHAMPIONS` is deleted", text)
         self.assertIn("combinatorial bound", text)
+        # Historical 2026-09-03 text still names the old sample; the live
+        # constant is gone (2026-09-05 drains leftovers instead).
         self.assertIn("DISCOVER_BATCH_SIZE = 30", text)
         self.assertFalse(hasattr(constants, "MAX_ACTIVE_CHAMPIONS"))
-        self.assertEqual(DISCOVER_BATCH_SIZE, 30)
+        self.assertFalse(hasattr(constants, "DISCOVER_BATCH_SIZE"))
         self.assertEqual(TRADE_EVALUATION_LIMIT, 80)
 
     def test_amendment_2026_09_05_wavetrend(self):
@@ -155,6 +154,37 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertEqual(RISK_POLICY, "rm_v1")
         self.assertEqual(TRADE_EVALUATION_LIMIT, 80)
         self.assertFalse(hasattr(constants, "MAX_ACTIVE_CHAMPIONS"))
+
+    def test_amendment_2026_09_05_night_window_and_discovery_drain(self):
+        import hedge_fund.trading.constants as constants
+        from hedge_fund.trading.constants import (
+            CYCLE_INTERVAL_SECONDS,
+            MIN_BACKTEST_SHARPE,
+            MIN_BACKTEST_TRADES,
+            QUAL_TIMEFRAME,
+            RISK_POLICY,
+        )
+
+        text = (REPO / "PROTOCOL.md").read_text()
+        self.assertIn("24/7 cycle and leftover-universe discovery", text)
+        self.assertIn("Night window revoked", text)
+        self.assertIn("Discovery drains leftovers", text)
+        self.assertIn("no 30-name sample", text)
+        self.assertIn("Paper only", text)
+        self.assertIn("Do not cull existing champions", text)
+        self.assertIn("No new strategies", text)
+        self.assertIn("CYCLE_INTERVAL_SECONDS = 300", text)
+        self.assertEqual(CYCLE_INTERVAL_SECONDS, 300)
+        self.assertEqual(QUAL_TIMEFRAME, "5m")
+        self.assertEqual(RISK_POLICY, "rm_v1")
+        self.assertEqual(MIN_BACKTEST_TRADES, 30)
+        self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
+        self.assertFalse(hasattr(constants, "DISCOVER_BATCH_SIZE"))
+        self.assertFalse(hasattr(constants, "CYCLE_WINDOW_START_HOUR"))
+        self.assertFalse(hasattr(constants, "MAX_ACTIVE_CHAMPIONS"))
+        # Historical 09-02 night-window sentence stays; this amendment names the supersession.
+        self.assertIn("sidecar still skips outside 07–21 Europe/Stockholm", text)
+        self.assertIn("07–21 Europe/Stockholm; that night window is unchanged", text)
 
 class IsolatedRunnerTests(unittest.TestCase):
     def test_no_second_hardcoded_book(self):
@@ -232,6 +262,9 @@ class DashboardRulesTests(unittest.TestCase):
         self.assertIn(QUAL_TIMEFRAME, html)
         self.assertNotIn("5m history is not the admit bar", html)
         self.assertIn("Every 300s", html)
+        self.assertIn("around the clock", html)
+        self.assertNotIn("07–21", html)
+        self.assertNotIn("Discover batch 30", html)
 
 
 class SharedCycleTests(unittest.TestCase):

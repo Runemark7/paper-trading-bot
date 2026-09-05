@@ -163,6 +163,26 @@ class StatusPayloadTests(unittest.TestCase):
                 st = build_status()
         self.assertEqual(st["running_now"]["cycle"]["interval_seconds"], 300)
         self.assertEqual(st["running_now"]["cycle"]["bar_timeframe"], "5m")
+        self.assertEqual(st["running_now"]["cycle"]["window"], "24/7")
+        self.assertTrue(st["running_now"]["cycle"]["next"]["in_window_now"])
+        note = st["running_now"]["cycle"]["next"]["note"]
+        self.assertNotIn("07–21", note)
+        self.assertNotIn("07-21", note)
+        self.assertNotIn("night window", note)
+        self.assertNotIn("skips outside", note)
+
+    def test_overdue_cycle_at_stockholm_night_is_not_a_window_skip(self):
+        from hedge_fund.web.status import _infer_next_cycle
+
+        # 00:30 UTC on 2026-09-05 is 02:30 Europe/Stockholm (CEST).
+        now = datetime(2026, 9, 5, 0, 30, tzinfo=timezone.utc)
+        last = (now - timedelta(hours=2)).isoformat()
+        nxt = _infer_next_cycle(last, now)
+        self.assertTrue(nxt["overdue"])
+        self.assertTrue(nxt["in_window_now"])
+        self.assertNotIn("night window", nxt["note"])
+        self.assertNotIn("07–21", nxt["note"])
+        self.assertIn("due or down", nxt["note"])
 
 
 class LiveAliasTests(unittest.TestCase):
@@ -262,6 +282,9 @@ class RouteAndCopyTests(unittest.TestCase):
         self.assertNotIn("pool at capacity", overview)
         self.assertNotIn("slots_open", overview)
         self.assertIn("untested names remain", overview)
+        self.assertNotIn("07–21", overview)
+        self.assertNotIn("07-21 Stockholm", overview)
+        self.assertIn("24/7", overview)
         self.assertIn("open lots", overview)
         self.assertIn("open lots", champs)
         bar = (REPO / "frontend" / "src" / "status" / "StatusBar.tsx").read_text()
@@ -287,6 +310,15 @@ class RouteAndCopyTests(unittest.TestCase):
     def test_status_never_sets_on_true_for_heartbeat(self):
         src = (REPO / "hedge_fund" / "web" / "status.py").read_text()
         self.assertIn('"on": None', src)
+
+    def test_status_source_has_no_stockholm_night_window(self):
+        src = (REPO / "hedge_fund" / "web" / "status.py").read_text()
+        self.assertNotIn("CYCLE_WINDOW_START_HOUR", src)
+        self.assertNotIn("CYCLE_WINDOW_END_HOUR", src)
+        self.assertNotIn("07–21", src)
+        self.assertNotIn("night window", src)
+        self.assertIn('"window": "24/7"', src)
+        self.assertIn('"in_window_now": True', src)
 
 
 if __name__ == "__main__":

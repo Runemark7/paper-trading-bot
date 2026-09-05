@@ -83,9 +83,10 @@ spec:
             - name: state-storage
               mountPath: /app/state
 
-        # 5-minute decision cycle (07–21 Europe/Stockholm): tournament discovery
-        # → run_isolated → collect_live_results → hourly_report. Sleep 300s so
-        # 5m bars can trade on close (hourly sleep would still trade ~once/hour).
+        # 5-minute decision cycle (24/7): tournament discovery → run_isolated
+        # → collect_live_results → hourly_report. Sleep 300s so 5m bars can
+        # trade on close (hourly sleep would still trade ~once/hour). No
+        # Stockholm day window — same cadence at 02:00 as at noon.
         # Same pod as heartbeat/web so they share the RWO PVC; SQLite WAL +
         # file lock serializes writers. Replaces Hermes cron paperbot-live-cycle.
         - name: cycle
@@ -96,12 +97,7 @@ spec:
             - -c
             - |
               while true; do
-                H=$(TZ=Europe/Stockholm date +%H)
-                if [ "$H" -ge 7 ] && [ "$H" -le 21 ]; then
-                  python /app/scripts/live_cycle.py || true
-                else
-                  echo "live_cycle: outside 07-21 Stockholm (H=$H), skip"
-                fi
+                python /app/scripts/live_cycle.py || true
                 sleep 300
               done
           env:

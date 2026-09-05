@@ -74,7 +74,7 @@ export default function Overview() {
               {cycle?.next.overdue ? " — interval elapsed" : ""}
             </div>
             <div className="text-white/40 text-xs mt-1">
-              Sidecar window {cycle?.window ?? "07–21 Stockholm"}. {cycle?.next.note}
+              Sidecar {cycle?.window ?? "24/7"}. {cycle?.next.note}
             </div>
           </div>
           <div>

@@ -8,7 +8,6 @@ from __future__ import annotations
 import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 from hedge_fund.paths import state_root
 from hedge_fund.trading.champions import load_graduated, load_pool
@@ -24,9 +23,6 @@ from hedge_fund.trading.stamps import HEARTBEAT_STAMP, PIPELINE_STAMP, read_json
 from hedge_fund.trading.store import TradeStore
 from hedge_fund.trading.universe import untested_candidates
 
-STOCKHOLM = ZoneInfo("Europe/Stockholm")
-CYCLE_WINDOW_START_HOUR = 7
-CYCLE_WINDOW_END_HOUR = 21
 # Stamp "started" older than this with no finish is labeled stale, not running.
 STALE_PIPELINE_SECONDS = 2 * 3600
 HEARTBEAT_RECENT_SECONDS = 90
@@ -101,35 +97,28 @@ def _account_saved_at(dbs: list[str]) -> str | None:
     return best
 
 
-def _in_cycle_window(now: datetime) -> bool:
-    hour = now.astimezone(STOCKHOLM).hour
-    return CYCLE_WINDOW_START_HOUR <= hour <= CYCLE_WINDOW_END_HOUR
-
-
 def _infer_next_cycle(last_iso: str | None, now: datetime) -> dict:
     last = _parse_iso(last_iso)
-    in_window = _in_cycle_window(now)
     note = (
         "Inferred from last cycle + CYCLE_INTERVAL_SECONDS. The sidecar sleeps "
-        f"{CYCLE_INTERVAL_SECONDS}s and skips outside "
-        f"{CYCLE_WINDOW_START_HOUR:02d}–{CYCLE_WINDOW_END_HOUR:02d} Europe/Stockholm. "
+        f"{CYCLE_INTERVAL_SECONDS}s around the clock (no night skip). "
         "This API does not see the sidecar process."
     )
     if last is None:
         return {
             "at": None,
             "inferred": True,
-            "in_window_now": in_window,
+            "in_window_now": True,
             "note": "No cycle snapshot yet. " + note,
         }
     nxt = last + timedelta(seconds=CYCLE_INTERVAL_SECONDS)
     overdue = nxt <= now
-    extra = " Interval has elapsed; sidecar may be due, skipped (night window), or down." if overdue else ""
+    extra = " Interval has elapsed; sidecar may be due or down." if overdue else ""
     return {
         "at": _iso(nxt),
         "inferred": True,
         "overdue": overdue,
-        "in_window_now": in_window,
+        "in_window_now": True,
         "note": note + extra,
     }
 
@@ -317,7 +306,7 @@ def build_status() -> dict:
             "cycle": {
                 "interval_seconds": CYCLE_INTERVAL_SECONDS,
                 "bar_timeframe": QUAL_TIMEFRAME,
-                "window": f"{CYCLE_WINDOW_START_HOUR:02d}–{CYCLE_WINDOW_END_HOUR:02d} Europe/Stockholm",
+                "window": "24/7",
                 "last_cycle_at": last_cycle,
                 "account_saved_at": _account_saved_at(dbs),
                 "next": _infer_next_cycle(last_cycle, now),

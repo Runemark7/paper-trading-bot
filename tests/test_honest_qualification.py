@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from scripts.tournament_engine import (
+    _leftover_batch,
     discover_and_qualify,
     oos_admission_score,
     qualification_decision,
@@ -133,8 +134,7 @@ class QualTapeTests(unittest.TestCase):
             (root / "crypto_history_5m.json").write_text(json.dumps(payload))
             (root / "crypto_history_4h.json").write_text(json.dumps({"should": "not_be_used"}))
             with patch.dict(os.environ, {"PAPER_STATE": str(root)}):
-                with patch("scripts.tournament_engine.random.sample", side_effect=lambda pop, k: list(pop)[:k]):
-                    _q, evaluated = discover_and_qualify(batch_size=3, window_size=80, n_windows=3)
+                _q, evaluated = discover_and_qualify(batch_size=3, window_size=80, n_windows=3)
         self.assertTrue(evaluated, "5m tape should produce evaluations")
         for rec in evaluated:
             self.assertEqual(rec["timeframe"], "5m")
@@ -228,6 +228,70 @@ class GraduationVsBuyAndHoldTests(unittest.TestCase):
                 }))
                 out = collect_live_results()
                 self.assertEqual(out["graduated"][0]["status"], GRADUATED_PAPER)
+
+
+class LeftoverDrainTests(unittest.TestCase):
+    def test_leftover_batch_returns_all_untested_not_a_sample_of_30(self):
+        leftovers = [f"cand_{i}" for i in range(40)]
+        blocked = {"cand_0"}
+        out = _leftover_batch(leftovers, blocked)
+        self.assertGreater(len(out), 30)
+        self.assertEqual(len(out), 39)
+        self.assertNotIn("cand_0", out)
+        capped = _leftover_batch(leftovers, set(), batch_size=5)
+        self.assertEqual(len(capped), 5)
+
+    def test_replenish_evaluates_more_than_thirty_leftovers_when_mocked(self):
+        leftovers = [f"cand_{i}" for i in range(40)]
+        dummy_windows = [
+            {
+                "train_pnl": 0.0,
+                "test_pnl": -1.0,
+                "test_trades": 1,
+                "trades": 1,
+                "wins": 0,
+                "sharpe": 0.0,
+                "skipped": False,
+                "failed": False,
+            }
+            for _ in range(3)
+        ]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch.dict(os.environ, {"PAPER_STATE": str(root)}):
+                with (
+                    patch(
+                        "scripts.tournament_engine.generate_candidate_pool",
+                        return_value=leftovers,
+                    ),
+                    patch(
+                        "scripts.tournament_engine._load_qual_history",
+                        return_value={"BTC/USDT": [[0] * 5] * 10, "ETH/USDT": [[0] * 5] * 10},
+                    ),
+                    patch(
+                        "scripts.tournament_engine._window_slices",
+                        return_value=[{}, {}, {}],
+                    ),
+                    patch(
+                        "scripts.tournament_engine._benchmark_oos",
+                        return_value=(0.0, 0.0),
+                    ),
+                    patch(
+                        "scripts.tournament_engine.parse_strategy",
+                        return_value=lambda *a, **k: True,
+                    ),
+                    patch(
+                        "scripts.tournament_engine.evaluate_windows",
+                        return_value=dummy_windows,
+                    ) as ev,
+                ):
+                    res = replenish_and_evaluate()
+        self.assertEqual(res["total_tested_in_batch"], 40)
+        self.assertGreater(res["total_tested_in_batch"], 30)
+        self.assertEqual(ev.call_count, 40)
+        self.assertEqual(res["admitted_new_count"], 0)
+        self.assertEqual(res["active_champions_count"], 0)
 
 
 class NearDuplicateTests(unittest.TestCase):

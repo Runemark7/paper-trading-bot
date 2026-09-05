@@ -86,6 +86,7 @@ over a meaningful sample, AND calibration is demonstrated independently of P&L.
 | 2026-09-03 | Structure atoms exist (`don_hi_N`, `don_lo_N`, `near_swing_hi_N`, `near_swing_lo_N`). They are OHLC (high/low from the same 5m klines), not close-only. Close-only names still parse. Qual/live still 5m, `rm_v1`, OOS gates unchanged. Still paper. |
 | 2026-09-03 | Pattern atoms: `dbl_bot_k` (long). `dbl_top_k` is parsed but not a standalone long. Trend / breakout / momentum already exist as `sma_stack`/`sma_abv`, `don_hi_*`, `mom_*` — not duplicated. Hold band: 1.0% or 1× ATR. Paper only; gates unchanged. |
 | 2026-09-05 | Cipher-shaped paper atoms from public LazyBear WaveTrend / VuManChu-inspired green-dot rule (`wt_cross_up_os`). Not Market Cipher; not affiliated. Closed-bar 5m HLC3, LazyBear 10/21/4, OS=−60. No MFI. `rm_v1` / OOS gates unchanged. |
+| 2026-09-05 | Night window revoked. Decision cycle runs every 5 minutes around the clock. Discovery drains remaining untested universe names each sweep (no 30-name sample). OOS gates unchanged. Paper only. No cull of champions. No new strategies. |
 
 ### Amendment 2026-08-30 — what actually runs
 
@@ -255,5 +256,18 @@ This amendment does not rewrite original §§ 1–8 or prior amendments. It name
 **Superseded on this date** (prior text kept above for history):
 
 - 2026-09-03 universe list insofar as it froze that handful — a few WaveTrend names are added, still inside the 40–120 band.
+
+### Amendment 2026-09-05 — 24/7 cycle and leftover-universe discovery
+
+This amendment does not rewrite original §§ 1–8 or prior amendments. Qual/live remain 5m, risk policy remains `rm_v1`, OOS gates are unchanged (30 OOS trades, all windows ≥ 0, beat B&H + `sma_stack`, Sharpe ≥ 0.30, paper 80 vs B&H). No live-slot cap. **Still paper.** `GRADUATED_PAPER` meaning is unchanged. Do not cull existing champions. No new strategies.
+
+**Night window revoked.** The k8s cycle sidecar and compose scheduler run `live_cycle.py` (tournament → `run_isolated` → `collect_live_results` → report) on every `CYCLE_INTERVAL_SECONDS = 300` tick, including 02:00 Europe/Stockholm. There is no 07–21 skip and no slower night cadence. Heartbeat is already continuous and does not open trades.
+
+**Discovery drains leftovers.** Each tournament/replenish sweep evaluates **all** remaining untested universe names (not already in `champions.json` or `graduated.json`), still skipping near-duplicates of blocked names via `near_duplicate_key` / `untested_candidates`. The homemade `DISCOVER_BATCH_SIZE = 30` random sample is deleted. `MIN_BACKTEST_TRADES = 30` is the OOS trade floor, not a discovery sample size. Universe size (~40–120) remains the combinatorial bound. The cycle waits on tournament; there is no leftover sample as the product rule.
+
+**Superseded on this date** (prior text kept above for history):
+
+- 2026-09-02 "The sidecar still skips outside 07–21 Europe/Stockholm; that night window is unchanged."
+- 2026-09-01 / 2026-09-03 `DISCOVER_BATCH_SIZE = 30` as a sweep batch size.
 
 
