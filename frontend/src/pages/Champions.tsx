@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { fetchChampions, fetchGraduated, fetchDiscovery, api } from "../api/client";
+import { fetchChampions, fetchGraduated, api } from "../api/client";
+import DiscoveryBuckets from "../status/DiscoveryBuckets";
 import type { OpenLot } from "../api/types";
 import ChampionTape from "../chart/ChampionTape";
 import { Card, fmt, Badge, Empty, MonoName, Field, FieldGrid, PhoneCards, DesktopTable } from "../components/ui";
@@ -147,7 +148,6 @@ export default function Champions() {
   const qChamps = useQuery({ queryKey: ["champions"], queryFn: fetchChampions, refetchInterval: 30_000 });
   const qLive = useQuery({ queryKey: ["live"], queryFn: api.live, refetchInterval: 30_000 });
   const qGrad = useQuery({ queryKey: ["graduated"], queryFn: fetchGraduated, refetchInterval: 30_000 });
-  const qDisc = useQuery({ queryKey: ["discovery"], queryFn: fetchDiscovery, refetchInterval: 30_000 });
   const status = useQuery({ queryKey: ["status"], queryFn: api.status, refetchInterval: 15_000 });
 
   const [expandedChampion, setExpandedChampion] = useState<string | null>(null);
@@ -156,7 +156,6 @@ export default function Champions() {
   const champs = qChamps.data?.active_champions ?? [];
   const evalLimit = qChamps.data?.evaluation_limit ?? 80;
   const graduated = qGrad.data ?? [];
-  const discoveryLog = qDisc.data ?? [];
   const run = status.data?.running_now;
   const prog = status.data?.in_progress;
   const rowLots = champs.reduce((n, c) => n + (c.open_lots ?? 0), 0);
@@ -413,96 +412,7 @@ export default function Champions() {
         )}
       </Card>
 
-      <Card
-        title={`Discovery log (${discoveryLog.length} evaluations)`}
-        aside={
-          prog?.pipeline.stamp_says_in_progress && prog.pipeline.phase === "tournament"
-            ? `stamp: tournament since ${fmtWhen(prog.pipeline.started_at)} — liveness not verified`
-            : discoveryLog[0]?.tested_at
-              ? `last tested ${fmtWhen(discoveryLog[0].tested_at)}`
-              : "no live job signal"
-        }
-      >
-        <div className="text-sm text-white/60 mb-3">
-          Last-known backtest evaluations (5m history, same tape as live). This is not a
-          live stream. If the API cannot see a running job, there is no spinner.
-        </div>
-
-        {!discoveryLog.length ? (
-          qDisc.error ? (
-            <Empty>Could not load /api/discovery: {String(qDisc.error)}</Empty>
-          ) : (
-          <Empty>
-            No discovery_log.json yet. Tournament writes it after a qualification batch.
-            Empty means nothing has been recorded — not that discovery is running.
-          </Empty>
-          )
-        ) : (
-          <>
-            <PhoneCards>
-              {discoveryLog.slice(0, 40).map((d, i) => (
-                <li key={i} className="rounded-lg border border-white/10 p-3 space-y-2 min-w-0 overflow-hidden">
-                  <div className="flex items-start justify-between gap-2 min-w-0">
-                    <MonoName className="block text-xs font-medium text-white min-w-0">{d.strategy}</MonoName>
-                    <span className="shrink-0">
-                      <Badge tone={d.qualified ? "pos" : "neg"}>
-                        {d.qualified ? "QUALIFIED" : "REJECTED"}
-                      </Badge>
-                    </span>
-                  </div>
-                  <FieldGrid>
-                    <Field label="Tested">{d.tested_at?.replace("T", " ").slice(0, 16)}</Field>
-                    <Field label="Win rate">{d.win_rate_pct}%</Field>
-                    <Field label="Sharpe">{d.sharpe.toFixed(2)}</Field>
-                    <Field label="Train P&L">
-                      <span className={d.train_pnl >= 0 ? "text-emerald-400" : "text-rose-400"}>{fmt(d.train_pnl)}</span>
-                    </Field>
-                    <Field label="Test P&L">
-                      <span className={`font-bold ${d.test_pnl >= 0 ? "text-emerald-400" : "text-rose-400"}`}>{fmt(d.test_pnl)}</span>
-                    </Field>
-                  </FieldGrid>
-                </li>
-              ))}
-            </PhoneCards>
-            <DesktopTable>
-              <table className="w-full text-xs">
-                <thead className="text-white/40 uppercase">
-                  <tr>
-                    <th className="text-left py-1">Strategy Rule</th>
-                    <th className="text-left">Tested At</th>
-                    <th className="text-right">Win Rate</th>
-                    <th className="text-right">Sharpe</th>
-                    <th className="text-right">Train P&L</th>
-                    <th className="text-right">Test P&L</th>
-                    <th className="text-left">Result</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {discoveryLog.slice(0, 40).map((d, i) => (
-                    <tr key={i} className="border-t border-white/5">
-                      <td className="py-1 font-mono font-medium text-white break-all">{d.strategy}</td>
-                      <td className="text-white/50">{d.tested_at?.replace("T", " ").slice(0, 16)}</td>
-                      <td className="text-right">{d.win_rate_pct}%</td>
-                      <td className="text-right font-mono">{d.sharpe.toFixed(2)}</td>
-                      <td className={`text-right font-mono ${d.train_pnl >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
-                        {fmt(d.train_pnl)}
-                      </td>
-                      <td className={`text-right font-mono font-bold ${d.test_pnl >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
-                        {fmt(d.test_pnl)}
-                      </td>
-                      <td>
-                        <Badge tone={d.qualified ? "pos" : "neg"}>
-                          {d.qualified ? "QUALIFIED" : "REJECTED"}
-                        </Badge>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </DesktopTable>
-          </>
-        )}
-      </Card>
+      <DiscoveryBuckets />
     </div>
   );
 }

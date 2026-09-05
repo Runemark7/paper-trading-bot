@@ -169,6 +169,8 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertIn("24/7 cycle and leftover-universe discovery", text)
         self.assertIn("Night window revoked", text)
         self.assertIn("Discovery drains leftovers", text)
+        self.assertIn("Discovery buckets", text)
+        self.assertIn("/api/discovery/summary", text)
         self.assertIn("no 30-name sample", text)
         self.assertIn("Paper only", text)
         self.assertIn("Do not cull existing champions", text)

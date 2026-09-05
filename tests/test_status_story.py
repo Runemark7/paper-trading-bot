@@ -262,6 +262,8 @@ class RouteAndCopyTests(unittest.TestCase):
         src = (REPO / "hedge_fund" / "web" / "server.py").read_text()
         self.assertIn('route == "/api/status"', src)
         self.assertIn("build_status", src)
+        self.assertIn('route == "/api/discovery/summary"', src)
+        self.assertIn("build_discovery_summary", src)
 
     def test_frontend_has_running_vs_progress_story(self):
         overview = (REPO / "frontend" / "src" / "pages" / "Overview.tsx").read_text()

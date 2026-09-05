@@ -234,6 +234,7 @@ def _discovery_block(root: Path) -> dict:
         "file": _file_mtime_note(path),
         "note": (
             "Discovery writes discovery_log.json after a tournament batch. "
+            "GET /api/discovery/summary has tested / in-flight / leftover buckets. "
             "A quiet log is silence, not a running job."
         ),
     }

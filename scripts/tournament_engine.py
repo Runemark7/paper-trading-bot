@@ -23,6 +23,7 @@ from hedge_fund.paths import state_root
 from hedge_fund.signals.dynamic import parse_strategy
 from hedge_fund.trading.buy_and_hold import buy_and_hold_window_pnl
 from hedge_fund.trading.champions import load_graduated, load_pool, save_pool
+from hedge_fund.trading.discovery import clear_in_flight, write_in_flight
 from hedge_fund.trading.constants import (
     MIN_BACKTEST_SHARPE,
     MIN_BACKTEST_TRADES,
@@ -290,52 +291,56 @@ def discover_and_qualify(
 
     universe = generate_candidate_pool()
     leftover_batch = _leftover_batch(universe, blocked, batch_size)
+    write_in_flight(leftover_batch)
     qualified = []
     all_evaluated = []
-    bh_oos, sma_oos = _benchmark_oos(window_slices)
+    try:
+        bh_oos, sma_oos = _benchmark_oos(window_slices)
 
-    for name in leftover_batch:
-        try:
-            pred = parse_strategy(name)
-        except Exception:
-            continue
+        for name in leftover_batch:
+            try:
+                pred = parse_strategy(name)
+            except Exception:
+                continue
 
-        window_scores = evaluate_windows(pred, window_slices)
-        decision = qualification_decision(
-            window_scores,
-            expected_windows=n_windows,
-            bh_oos_pnl=bh_oos,
-            sma_stack_oos_pnl=sma_oos,
-        )
-        tot_wins = sum(int(ws.get("wins") or 0) for ws in window_scores)
-        oos_trades = decision["tot_oos_trades"]
-        overall_win_rate = (tot_wins / oos_trades) if oos_trades > 0 else 0.0
+            window_scores = evaluate_windows(pred, window_slices)
+            decision = qualification_decision(
+                window_scores,
+                expected_windows=n_windows,
+                bh_oos_pnl=bh_oos,
+                sma_stack_oos_pnl=sma_oos,
+            )
+            tot_wins = sum(int(ws.get("wins") or 0) for ws in window_scores)
+            oos_trades = decision["tot_oos_trades"]
+            overall_win_rate = (tot_wins / oos_trades) if oos_trades > 0 else 0.0
 
-        record = {
-            "strategy": name,
-            "tested_at": datetime.now(timezone.utc).isoformat(),
-            "timeframe": QUAL_TIMEFRAME,
-            "risk_policy": RISK_POLICY,
-            "train_pnl": round(decision["tot_train_pnl"], 2),
-            "test_pnl": round(decision["tot_test_pnl"], 2),
-            "sharpe": round(decision["avg_sharpe"], 2),
-            "win_rate_pct": round(overall_win_rate * 100, 1),
-            "trades": oos_trades,
-            "regimes_tested": len(window_scores),
-            "qualified": decision["passed"],
-            "bh_oos_pnl": None if bh_oos is None else round(bh_oos, 2),
-            "sma_stack_oos_pnl": None if sma_oos is None else round(sma_oos, 2),
-            "fail_reasons": decision["reasons"],
-        }
-        all_evaluated.append(record)
+            record = {
+                "strategy": name,
+                "tested_at": datetime.now(timezone.utc).isoformat(),
+                "timeframe": QUAL_TIMEFRAME,
+                "risk_policy": RISK_POLICY,
+                "train_pnl": round(decision["tot_train_pnl"], 2),
+                "test_pnl": round(decision["tot_test_pnl"], 2),
+                "sharpe": round(decision["avg_sharpe"], 2),
+                "win_rate_pct": round(overall_win_rate * 100, 1),
+                "trades": oos_trades,
+                "regimes_tested": len(window_scores),
+                "qualified": decision["passed"],
+                "bh_oos_pnl": None if bh_oos is None else round(bh_oos, 2),
+                "sma_stack_oos_pnl": None if sma_oos is None else round(sma_oos, 2),
+                "fail_reasons": decision["reasons"],
+            }
+            all_evaluated.append(record)
 
-        if decision["passed"]:
-            record["score"] = round(decision["score"], 2)
-            qualified.append(record)
+            if decision["passed"]:
+                record["score"] = round(decision["score"], 2)
+                qualified.append(record)
 
-    log_discovery_evaluations(all_evaluated)
-    qualified.sort(key=lambda x: x["score"], reverse=True)
-    return qualified, all_evaluated
+        log_discovery_evaluations(all_evaluated)
+        qualified.sort(key=lambda x: x["score"], reverse=True)
+        return qualified, all_evaluated
+    finally:
+        clear_in_flight()
 
 
 def replenish_and_evaluate(batch_size: int | None = None) -> dict:
