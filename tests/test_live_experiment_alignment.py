@@ -141,6 +141,21 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertEqual(DISCOVER_BATCH_SIZE, 30)
         self.assertEqual(TRADE_EVALUATION_LIMIT, 80)
 
+    def test_amendment_2026_09_05_wavetrend(self):
+        from hedge_fund.trading.constants import QUAL_TIMEFRAME, RISK_POLICY, TRADE_EVALUATION_LIMIT
+        import hedge_fund.trading.constants as constants
+
+        text = (REPO / "PROTOCOL.md").read_text()
+        self.assertIn("Amendment 2026-09-05", text)
+        self.assertIn("LazyBear", text)
+        self.assertIn("wt_cross_up_os", text)
+        self.assertIn("HLC3", text)
+        self.assertIn("not Market Cipher", text.lower())
+        self.assertEqual(QUAL_TIMEFRAME, "5m")
+        self.assertEqual(RISK_POLICY, "rm_v1")
+        self.assertEqual(TRADE_EVALUATION_LIMIT, 80)
+        self.assertFalse(hasattr(constants, "MAX_ACTIVE_CHAMPIONS"))
+
 class IsolatedRunnerTests(unittest.TestCase):
     def test_no_second_hardcoded_book(self):
         src = (REPO / "hedge_fund" / "trading" / "run_isolated.py").read_text()

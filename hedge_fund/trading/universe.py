@@ -2,14 +2,16 @@
 
 The live cycle fetches a single 5m OHLCV series (no 1h/4h bars). Close-only
 atoms still parse without highs/lows. Structure atoms (Donchian / swing /
-double bottom) use high/low from those same klines — this generator does
-not emit daily()/h1()/m5() wrappers, MFI, H&S, flags, triangles, FVGs,
-order-blocks, or standalone dbl_top longs: those would be silent lies, a
-kitchen-sink arena, or a short we do not trade.
+double bottom) and WaveTrend (HLC3) use high/low from those same klines —
+this generator does not emit daily()/h1()/m5() wrappers, MFI, H&S, flags,
+triangles, FVGs, order-blocks, standalone dbl_top / wt_cross_down_ob longs,
+Sommi diamonds, or gold-dot kitchen sink: those would be silent lies, a
+short we do not trade, or invite-only Market Cipher we do not scrape.
 
 Amendment 2026-09-01: explicit ~50-name universe instead of ~3500
 combinatorial clones. Amendment 2026-09-03: a handful of OHLC structure
 AND-gates, then double-bottom pattern names, still inside UNIVERSE_TARGET_MAX.
+Amendment 2026-09-05: LazyBear WaveTrend green-dot longs (wt_cross_up_os).
 Trend / breakout / momentum stay as sma_stack/sma_abv, don_hi_*, mom_* —
 not a second stack. Near-duplicate keys collapse tiny param tweaks.
 Lookbacks in names (e.g. dip_24b) are bar counts: on 5m, 24 bars = 2 hours.
@@ -159,6 +161,16 @@ def generate_universe() -> list[str]:
         "dbl_bot_12&sma_abv_50",
         "dbl_bot_12&don_lo_24",
         "dbl_bot_12&sma_stack_20_50_100",
+    })
+
+    # LazyBear WaveTrend green-dot (wt_cross_up_os). Not Market Cipher.
+    # Handful of ANDs, not a cartesian product. No MFI/CMF/VWAP, no
+    # standalone wt_cross_down_ob longs. See hedge_fund/signals/wavetrend.py.
+    universe.update({
+        "wt_cross_up_os",
+        "wt_cross_up_os&sma_abv_50",
+        "wt_cross_up_os&sma_stack_20_50_100",
+        "wt_cross_up_os&don_lo_24",
     })
 
     return sorted(universe)

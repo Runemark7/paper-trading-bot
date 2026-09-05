@@ -259,6 +259,10 @@ class UniverseBandTests(unittest.TestCase):
         "dbl_bot_12&sma_abv_50",
         "dbl_bot_12&don_lo_24",
         "dbl_bot_12&sma_stack_20_50_100",
+        "wt_cross_up_os",
+        "wt_cross_up_os&sma_abv_50",
+        "wt_cross_up_os&sma_stack_20_50_100",
+        "wt_cross_up_os&don_lo_24",
     )
     REFUSED = (
         "head_and_shoulders",
@@ -271,6 +275,7 @@ class UniverseBandTests(unittest.TestCase):
         "near_round_100",
         "dbl_top_12",
         "dbl_top_12&sma_abv_50",
+        "wt_cross_down_ob",
     )
 
     def test_universe_stays_in_band_and_adds_structure_ands(self):
