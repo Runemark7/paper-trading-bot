@@ -8,6 +8,7 @@ A small, dependency-free HTTP server (stdlib only) that exposes:
   GET /api/regime       -> JSON: current regime zone/score
   GET /api/trades       -> JSON: recent closed trades
   GET /api/status       -> running-now vs in-progress (last-known stamps)
+  GET /api/discovery/summary -> tested / in-flight / leftover-untested buckets
   POST /run             -> trigger a live decision cycle, then regenerate
   GET /health           -> liveness probe
 
@@ -358,6 +359,13 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 from hedge_fund.trading.champions import load_graduated
                 self._send_json(load_graduated())
+            except Exception as exc:
+                self._send_json({"error": str(exc)}, 500)
+        elif route == "/api/discovery/summary":
+            try:
+                from hedge_fund.web.discovery import build_discovery_summary
+
+                self._send_json(build_discovery_summary())
             except Exception as exc:
                 self._send_json({"error": str(exc)}, 500)
         elif route == "/api/discovery":

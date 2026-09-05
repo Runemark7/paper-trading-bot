@@ -198,7 +198,6 @@ class GraduatedPaperTokenTests(unittest.TestCase):
         from hedge_fund.data.binance import DEFAULT_TIMEFRAME
         from hedge_fund.trading.constants import (
             CYCLE_INTERVAL_SECONDS,
-            DISCOVER_BATCH_SIZE,
             MIN_BACKTEST_SHARPE,
             MIN_BACKTEST_TRADES,
             QUAL_TIMEFRAME,
@@ -219,7 +218,7 @@ class GraduatedPaperTokenTests(unittest.TestCase):
         self.assertEqual(MIN_BACKTEST_TRADES, 30)
         self.assertEqual(TRADE_EVALUATION_LIMIT, 80)
         self.assertFalse(hasattr(constants, "MAX_ACTIVE_CHAMPIONS"))
-        self.assertEqual(DISCOVER_BATCH_SIZE, 30)
+        self.assertFalse(hasattr(constants, "DISCOVER_BATCH_SIZE"))
         self.assertFalse(hasattr(constants, "MIN_BACKTEST_WIN_RATE"))
 
     def test_tournament_imports_champions_not_sys_path_opt(self):
@@ -229,6 +228,9 @@ class GraduatedPaperTokenTests(unittest.TestCase):
         self.assertIn("from hedge_fund.trading.champions import", src)
         self.assertNotIn("from hedge_fund.backtest.fast_quant", src)
         self.assertNotIn("import hedge_fund.backtest.fast_quant", src)
+        self.assertNotIn("import random", src)
+        self.assertNotIn("DISCOVER_BATCH_SIZE", src)
+        self.assertIn("untested_candidates", src)
 
     def test_nginx_does_not_proxy_run(self):
         tmpl = (REPO / "frontend" / "nginx-server.conf.template").read_text()
@@ -249,11 +251,17 @@ class GraduatedPaperTokenTests(unittest.TestCase):
         self.assertIn("sleep 300", backend)
         self.assertNotIn("sleep 3600", backend)
         self.assertNotIn("sleep 14400", backend)
+        self.assertNotIn("07–21", backend)
+        self.assertNotIn("07-21", backend)
+        self.assertNotIn("date +%H", backend)
         compose = (REPO / "docker-compose.yml").read_text()
         self.assertIn("live_cycle.py", compose)
         self.assertIn("sleep 300", compose)
         self.assertNotIn("sleep 3600", compose)
         self.assertNotIn("sleep 14400", compose)
+        self.assertNotIn("07–21", compose)
+        self.assertNotIn("07-21", compose)
+        self.assertNotIn("date +%H", compose)
         self.assertTrue((REPO / "scripts" / "live_cycle.py").exists())
         fetch = (REPO / "scripts" / "fetch_history.py").read_text()
         self.assertIn('os.environ.get("HIST_TIMEFRAME", QUAL_TIMEFRAME)', fetch)

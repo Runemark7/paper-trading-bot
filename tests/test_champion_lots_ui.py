@@ -7,6 +7,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 FORMAT_TS = (REPO / "frontend" / "src" / "status" / "format.ts").read_text()
 CHAMPS_TSX = (REPO / "frontend" / "src" / "pages" / "Champions.tsx").read_text()
+DISCOVERY_TSX = (REPO / "frontend" / "src" / "status" / "DiscoveryBuckets.tsx").read_text()
 OPEN_LOTS_PY = (REPO / "hedge_fund" / "trading" / "open_lots.py").read_text()
 
 
@@ -249,7 +250,11 @@ class ChampionsAccordionUiTests(unittest.TestCase):
         self.assertIn("showing last-known", CHAMPS_TSX)
         self.assertIn("Could not load /api/champions", CHAMPS_TSX)
         self.assertIn("Could not load /api/graduated", CHAMPS_TSX)
-        self.assertIn("Could not load /api/discovery", CHAMPS_TSX)
+        self.assertIn("Could not load /api/discovery/summary", DISCOVERY_TSX)
+        self.assertIn("DiscoveryBuckets", CHAMPS_TSX)
+        self.assertNotIn("Discovery log (", CHAMPS_TSX)
+        self.assertNotIn("slice(0, 40)", CHAMPS_TSX)
+        self.assertNotIn("slice(0, 40)", DISCOVERY_TSX)
         self.assertIn("expandedChampion", CHAMPS_TSX)
         self.assertIn("setExpandedChampion(isOpen ? null : c.name)", CHAMPS_TSX)
         self.assertIn("{isOpen &&", CHAMPS_TSX)
@@ -294,6 +299,22 @@ class ChampionsAccordionUiTests(unittest.TestCase):
         self.assertNotIn("openLotsByPair", grad)
         self.assertNotIn("LotHealthSummaryChips", grad)
         self.assertNotIn("openLotsForChampion", grad)
+
+
+class DiscoveryBucketsUiTests(unittest.TestCase):
+    def test_three_honest_blocks_not_a_scrap_log(self):
+        self.assertIn("Being tested", DISCOVERY_TSX)
+        self.assertIn("Already tested", DISCOVERY_TSX)
+        self.assertIn("Not tested yet", DISCOVERY_TSX)
+        self.assertIn("idle — last sweep", DISCOVERY_TSX)
+        self.assertIn("Show more", DISCOVERY_TSX)
+        self.assertIn("qualified", DISCOVERY_TSX)
+        self.assertIn("rejected", DISCOVERY_TSX)
+        self.assertIn("/api/discovery/summary", DISCOVERY_TSX)
+        self.assertIn("fetchDiscoverySummary", DISCOVERY_TSX)
+        self.assertIn("OOS trades", DISCOVERY_TSX)
+        self.assertNotIn("Discovery log (", DISCOVERY_TSX)
+        self.assertNotIn("Train P&L", DISCOVERY_TSX)
 
 
 if __name__ == "__main__":

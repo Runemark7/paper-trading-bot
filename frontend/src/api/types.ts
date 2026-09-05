@@ -148,13 +148,52 @@ export interface GraduatedStrategy {
 export interface DiscoveryEvaluation {
   strategy: string;
   tested_at: string;
-  train_pnl: number;
+  train_pnl?: number;
   test_pnl: number;
   sharpe: number;
-  win_rate_pct: number;
+  win_rate_pct?: number;
   trades: number;
   qualified: boolean;
   score?: number;
+  fail_reasons?: string[];
+  timeframe?: string;
+  risk_policy?: string;
+}
+
+export interface DiscoveryInFlight {
+  active: boolean;
+  running: boolean;
+  names: string[];
+  batch_size: number | null;
+  started_at: string | null;
+  stamp_started_at?: string | null;
+  note: string;
+}
+
+export interface DiscoveryCounts {
+  tested_pass: number;
+  tested_fail: number;
+  tested: number;
+  untested: number;
+  champions: number;
+  graduated: number;
+  in_flight: number;
+}
+
+export interface DiscoverySummary {
+  paper_only: boolean;
+  as_of: string;
+  certainty: string;
+  running: boolean;
+  stamp_says_in_progress: boolean;
+  tested: DiscoveryEvaluation[];
+  in_flight: DiscoveryInFlight;
+  queued: string[];
+  untested: string[];
+  counts: DiscoveryCounts;
+  last_tested_at: string | null;
+  last_strategy: string | null;
+  note: string;
 }
 
 export interface CertaintyNote {

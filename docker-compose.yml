@@ -35,12 +35,7 @@ services:
       - -c
       - |
         while true; do
-          H=$(TZ=Europe/Stockholm date +%H)
-          if [ "$H" -ge 7 ] && [ "$H" -le 21 ]; then
-            python /app/scripts/live_cycle.py || true
-          else
-            echo "live_cycle: outside 07-21 Stockholm (H=$H), skip"
-          fi
+          python /app/scripts/live_cycle.py || true
           sleep 300
         done
     restart: unless-stopped

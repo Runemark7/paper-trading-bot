@@ -15,7 +15,6 @@ not fast_quant or fee-free SimBroker.
 from __future__ import annotations
 
 import json
-import random
 from datetime import datetime, timezone
 
 import hedge_fund.backtest.strategies as bs
@@ -24,8 +23,8 @@ from hedge_fund.paths import state_root
 from hedge_fund.signals.dynamic import parse_strategy
 from hedge_fund.trading.buy_and_hold import buy_and_hold_window_pnl
 from hedge_fund.trading.champions import load_graduated, load_pool, save_pool
+from hedge_fund.trading.discovery import clear_in_flight, write_in_flight
 from hedge_fund.trading.constants import (
-    DISCOVER_BATCH_SIZE,
     MIN_BACKTEST_SHARPE,
     MIN_BACKTEST_TRADES,
     PAPER_START_CASH,
@@ -37,7 +36,7 @@ from hedge_fund.trading.constants import (
     RISK_POLICY,
     TRADE_EVALUATION_LIMIT,
 )
-from hedge_fund.trading.universe import generate_universe, near_duplicate_key
+from hedge_fund.trading.universe import generate_universe, untested_candidates
 
 FALLBACK_BENCHMARK = "sma_stack"
 
@@ -251,21 +250,20 @@ def _benchmark_oos(window_slices: list[dict]) -> tuple[float | None, float | Non
     return (bh_total if bh_ok else None), (sma_total if sma_ok else None)
 
 
-def _pick_batch(universe: list[str], blocked_names: set[str], batch_size: int) -> list[str]:
-    taken_keys = {near_duplicate_key(n) for n in blocked_names}
-    eligible = []
-    for cand in universe:
-        if cand in blocked_names:
-            continue
-        key = near_duplicate_key(cand)
-        if key in taken_keys:
-            continue
-        eligible.append(cand)
-        taken_keys.add(key)  # skip intra-universe twins in the same sweep
-    if not eligible:
-        return []
-    k = min(batch_size, len(eligible))
-    return random.sample(eligible, k)
+def _leftover_batch(
+    universe: list[str],
+    blocked_names: set[str],
+    batch_size: int | None = None,
+) -> list[str]:
+    """All remaining untested names, still skipping near-duplicates of blocked.
+
+    Default is no sample: drain leftovers. ``batch_size`` is a test hook only
+    (prefix of leftovers). There is no product-rule random sample of 30.
+    """
+    leftovers = untested_candidates(blocked_names, universe)
+    if batch_size is None:
+        return leftovers
+    return leftovers[:batch_size]
 
 
 def discover_and_qualify(
@@ -274,9 +272,11 @@ def discover_and_qualify(
     n_windows: int = QUAL_N_WINDOWS,
     stride: int = QUAL_STRIDE,
 ) -> tuple[list[dict], list[dict]]:
-    """Walk-forward qualification on 5m BTC/ETH. 4h-only history does not admit."""
-    if batch_size is None:
-        batch_size = DISCOVER_BATCH_SIZE
+    """Walk-forward qualification on 5m BTC/ETH. 4h-only history does not admit.
+
+    Default evaluates every leftover untested universe name. ``batch_size``
+    is optional (tests); production drains leftovers.
+    """
     data = _load_qual_history()
     if not data:
         return [], []
@@ -290,59 +290,65 @@ def discover_and_qualify(
     blocked = {c["name"] for c in st.get("champions", [])}.union({g["name"] for g in grad})
 
     universe = generate_candidate_pool()
-    sample_batch = _pick_batch(universe, blocked, batch_size)
+    leftover_batch = _leftover_batch(universe, blocked, batch_size)
+    write_in_flight(leftover_batch)
     qualified = []
     all_evaluated = []
-    bh_oos, sma_oos = _benchmark_oos(window_slices)
+    try:
+        bh_oos, sma_oos = _benchmark_oos(window_slices)
 
-    for name in sample_batch:
-        try:
-            pred = parse_strategy(name)
-        except Exception:
-            continue
+        for name in leftover_batch:
+            try:
+                pred = parse_strategy(name)
+            except Exception:
+                continue
 
-        window_scores = evaluate_windows(pred, window_slices)
-        decision = qualification_decision(
-            window_scores,
-            expected_windows=n_windows,
-            bh_oos_pnl=bh_oos,
-            sma_stack_oos_pnl=sma_oos,
-        )
-        tot_wins = sum(int(ws.get("wins") or 0) for ws in window_scores)
-        oos_trades = decision["tot_oos_trades"]
-        overall_win_rate = (tot_wins / oos_trades) if oos_trades > 0 else 0.0
+            window_scores = evaluate_windows(pred, window_slices)
+            decision = qualification_decision(
+                window_scores,
+                expected_windows=n_windows,
+                bh_oos_pnl=bh_oos,
+                sma_stack_oos_pnl=sma_oos,
+            )
+            tot_wins = sum(int(ws.get("wins") or 0) for ws in window_scores)
+            oos_trades = decision["tot_oos_trades"]
+            overall_win_rate = (tot_wins / oos_trades) if oos_trades > 0 else 0.0
 
-        record = {
-            "strategy": name,
-            "tested_at": datetime.now(timezone.utc).isoformat(),
-            "timeframe": QUAL_TIMEFRAME,
-            "risk_policy": RISK_POLICY,
-            "train_pnl": round(decision["tot_train_pnl"], 2),
-            "test_pnl": round(decision["tot_test_pnl"], 2),
-            "sharpe": round(decision["avg_sharpe"], 2),
-            "win_rate_pct": round(overall_win_rate * 100, 1),
-            "trades": oos_trades,
-            "regimes_tested": len(window_scores),
-            "qualified": decision["passed"],
-            "bh_oos_pnl": None if bh_oos is None else round(bh_oos, 2),
-            "sma_stack_oos_pnl": None if sma_oos is None else round(sma_oos, 2),
-            "fail_reasons": decision["reasons"],
-        }
-        all_evaluated.append(record)
+            record = {
+                "strategy": name,
+                "tested_at": datetime.now(timezone.utc).isoformat(),
+                "timeframe": QUAL_TIMEFRAME,
+                "risk_policy": RISK_POLICY,
+                "train_pnl": round(decision["tot_train_pnl"], 2),
+                "test_pnl": round(decision["tot_test_pnl"], 2),
+                "sharpe": round(decision["avg_sharpe"], 2),
+                "win_rate_pct": round(overall_win_rate * 100, 1),
+                "trades": oos_trades,
+                "regimes_tested": len(window_scores),
+                "qualified": decision["passed"],
+                "bh_oos_pnl": None if bh_oos is None else round(bh_oos, 2),
+                "sma_stack_oos_pnl": None if sma_oos is None else round(sma_oos, 2),
+                "fail_reasons": decision["reasons"],
+            }
+            all_evaluated.append(record)
 
-        if decision["passed"]:
-            record["score"] = round(decision["score"], 2)
-            qualified.append(record)
+            if decision["passed"]:
+                record["score"] = round(decision["score"], 2)
+                qualified.append(record)
 
-    log_discovery_evaluations(all_evaluated)
-    qualified.sort(key=lambda x: x["score"], reverse=True)
-    return qualified, all_evaluated
+        log_discovery_evaluations(all_evaluated)
+        qualified.sort(key=lambda x: x["score"], reverse=True)
+        return qualified, all_evaluated
+    finally:
+        clear_in_flight()
 
 
 def replenish_and_evaluate(batch_size: int | None = None) -> dict:
-    """Qualify a 5m batch; admit every new name not already pooled or graduated."""
-    if batch_size is None:
-        batch_size = DISCOVER_BATCH_SIZE
+    """Qualify leftover untested names; admit every new name not already pooled or graduated.
+
+    Default drains the leftover universe (no 30-name sample). ``batch_size``
+    is a test hook only.
+    """
     st = load_pool()
     grad_list = load_graduated()
     existing_names = {c["name"] for c in st["champions"]}.union(

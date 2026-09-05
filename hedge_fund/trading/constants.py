@@ -1,10 +1,12 @@
 """Live paper-tournament constants. Single source of truth.
 
 Imported by champions, tournament, and dashboard. PROTOCOL amendments
-cite these values (5m live/admit, 300s decision cycle, no live-slot cap).
+cite these values (5m live/admit, 300s 24/7 decision cycle, no live-slot
+cap, leftover-universe discovery).
 Do not document a 4h live book, hourly-only decisions, Sharpe 0.10,
 WR 38%, 4-trade minimum, 25-trade graduation, arena capacity 1000,
-or a homemade 20-slot live-arena cap.
+a homemade 20-slot live-arena cap, a 07–21 night skip, or a 30-name
+discovery sample.
 """
 
 from __future__ import annotations
@@ -36,7 +38,11 @@ TRADE_EVALUATION_LIMIT = 80
 # No MAX_ACTIVE_CHAMPIONS. The 2026-09-01 20-slot arena starved prod's 31
 # grandfathered names (needed = 20 - 31 <= 0). Admission is OOS 5m / rm_v1
 # only. Universe size (~40–120) is the combinatorial bound, not a live cap.
-DISCOVER_BATCH_SIZE = 30  # untested names per sweep (20–40), not 150
+# No DISCOVER_BATCH_SIZE. Each tournament/replenish sweep drains every
+# leftover untested name (not in champions.json / graduated.json), still
+# skipping near-duplicates of blocked names. The old random sample of 30
+# was a homemade throttle, not an OOS-quality rule. MIN_BACKTEST_TRADES
+# = 30 remains the OOS trade floor.
 
 PAPER_START_CASH = 10_000.0
 
@@ -48,5 +54,6 @@ REJECTED_NEGATIVE_PNL = "REJECTED_NEGATIVE_PNL"
 
 # Decision-cycle cadence. k8s cycle sidecar and compose scheduler must match.
 # This is the job interval (5 minutes), aligned with the 5m bar close.
-# Sidecar still skips outside 07–21 Europe/Stockholm.
-CYCLE_INTERVAL_SECONDS = 300  # 5 minutes (07–21 Stockholm window in the sidecar)
+# Runs around the clock — no 07–21 Europe/Stockholm skip, no slower night
+# cadence. Heartbeat is already continuous and does not open trades.
+CYCLE_INTERVAL_SECONDS = 300  # 5 minutes, 24/7
