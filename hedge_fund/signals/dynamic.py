@@ -4,9 +4,10 @@ Provides a unified AST / rule parser so any strategy name, JSON spec, or composi
 can be evaluated dynamically across backtests and live execution without hardcoded elif chains.
 
 Close-only atoms (SMA/RSI/mom/dip/…) still evaluate as ``pred(closes, i)``.
-Structure atoms (Donchian / swing S&R / double bottom-top) also accept
-``highs=`` and ``lows=`` from the same bar series — live klines already have
-OHLC. Missing highs/lows raises rather than using close as a high/low proxy.
+Structure atoms (Donchian / swing S&R / double bottom-top) and WaveTrend
+atoms also accept ``highs=`` and ``lows=`` from the same bar series — live
+klines already have OHLC. Missing highs/lows raises rather than using close
+as a high/low proxy (WaveTrend source is HLC3).
 """
 from __future__ import annotations
 
@@ -15,7 +16,7 @@ import re
 from typing import Callable, Any
 
 # Predicates accept (closes, i=None, highs=None, lows=None). Close-only atoms
-# ignore highs/lows; structure atoms require them.
+# ignore highs/lows; structure / WaveTrend atoms require them.
 Predicate = Callable[..., bool]
 
 # ---------------------------------------------------------------------------
@@ -126,8 +127,8 @@ def parse_strategy(expr: str | Callable | dict) -> Predicate:
     """Parse a strategy expression into ``(closes, i, highs=, lows=) -> bool``.
 
     Close-only names (``dip_24b_lt1pc``, ``sma_abv_50``, …) still work when
-    called as ``pred(closes)`` or ``pred(closes, i)``. Structure names need
-    ``highs``/``lows`` from the same bars.
+    called as ``pred(closes)`` or ``pred(closes, i)``. Structure and
+    WaveTrend names need ``highs``/``lows`` from the same bars.
     """
     if callable(expr):
         return _adapt_callable(expr)
@@ -291,6 +292,22 @@ def parse_strategy(expr: str | Callable | dict) -> Predicate:
         if m_dbl.group(1) == "bot":
             return lambda c, i=None, highs=None, lows=None, **_k: dbl_bot(c, highs, lows, k, i)
         return lambda c, i=None, highs=None, lows=None, **_k: dbl_top(c, highs, lows, k, i)
+
+    # 8f. LazyBear WaveTrend (HLC3). Frozen 10/21/4, OS=-60. Long-only book:
+    # wt_cross_up_os is the green-dot; wt_cross_down_ob parses but is not a
+    # universe long. Not Market Cipher.
+    if expr_clean == "wt_cross_up_os":
+        from hedge_fund.signals.wavetrend import wt_cross_up_os
+
+        return lambda c, i=None, highs=None, lows=None, **_k: wt_cross_up_os(c, highs, lows, i)
+    if expr_clean == "wt_below_os":
+        from hedge_fund.signals.wavetrend import wt_below_os
+
+        return lambda c, i=None, highs=None, lows=None, **_k: wt_below_os(c, highs, lows, i)
+    if expr_clean == "wt_cross_down_ob":
+        from hedge_fund.signals.wavetrend import wt_cross_down_ob
+
+        return lambda c, i=None, highs=None, lows=None, **_k: wt_cross_down_ob(c, highs, lows, i)
 
     # 9. Composite patterns: sma200_rsi50, sma100_mom12_2
     m_sma_rsi = re.match(r"^sma(\d+)_rsi(\d+)$", expr_clean)

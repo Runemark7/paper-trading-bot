@@ -85,6 +85,7 @@ over a meaningful sample, AND calibration is demonstrated independently of P&L.
 | 2026-09-02 | Live book and admit bar move to 5m candles. Decision cycle every 5 minutes (`CYCLE_INTERVAL_SECONDS = 300`). Walk-forward windows rescaled to ~90 calendar days of 5m per window. Strategy lookbacks are bar counts (e.g. `dip_24b` = 2 hours, not 4 days). 4h is superseded for live and admit. Paper only; `GRADUATED_PAPER` meaning unchanged. Original §§ 1–8 and prior amendments remain; superseded clauses are named in the 2026-09-02 amendment. |
 | 2026-09-03 | Structure atoms exist (`don_hi_N`, `don_lo_N`, `near_swing_hi_N`, `near_swing_lo_N`). They are OHLC (high/low from the same 5m klines), not close-only. Close-only names still parse. Qual/live still 5m, `rm_v1`, OOS gates unchanged. Still paper. |
 | 2026-09-03 | Pattern atoms: `dbl_bot_k` (long). `dbl_top_k` is parsed but not a standalone long. Trend / breakout / momentum already exist as `sma_stack`/`sma_abv`, `don_hi_*`, `mom_*` — not duplicated. Hold band: 1.0% or 1× ATR. Paper only; gates unchanged. |
+| 2026-09-05 | Cipher-shaped paper atoms from public LazyBear WaveTrend / VuManChu-inspired green-dot rule (`wt_cross_up_os`). Not Market Cipher; not affiliated. Closed-bar 5m HLC3, LazyBear 10/21/4, OS=−60. No MFI. `rm_v1` / OOS gates unchanged. |
 
 ### Amendment 2026-08-30 — what actually runs
 
@@ -227,4 +228,32 @@ This amendment does not rewrite original §§ 1–8 or prior amendments. It remo
 - 2026-09-01 "Small arena" `MAX_ACTIVE_CHAMPIONS = 20` and replenish-only-into-free-slots.
 - 2026-09-02 / earlier 2026-09-03 text insofar as it freezes "arena 20" as the live rule.
 - 2026-08-30 capacity 1000 insofar as any later text still treated a homemade cap as current.
+
+### Amendment 2026-09-05 — LazyBear WaveTrend green-dot (not Market Cipher)
+
+This amendment does not rewrite original §§ 1–8 or prior amendments. It names one new **oscillator** family on the same 5m OHLC series as live. Qual/live remain 5m (`QUAL_TIMEFRAME`), risk policy remains `rm_v1`, OOS gates are unchanged (30 trades, all windows ≥ 0, beat B&H + `sma_stack`, paper 80 vs B&H). No live-slot cap. **Still paper.** `GRADUATED_PAPER` meaning is unchanged. Do not cull existing champions.
+
+**Honesty.** Official Market Cipher (CF Strategies) is invite-only and not algo-ready. We do **not** scrape that Pine, do **not** webhook the VuManChu panel, and are **not affiliated** with Market Cipher. These atoms port the **public LazyBear WaveTrend** oscillator and the **VuManChu Cipher B–inspired green-dot long**: WT1 crosses above WT2 while WT2 is oversold. Credit LazyBear; inspired by the public green-dot family; not Market Cipher.
+
+**Frozen defaults** (`hedge_fund/signals/wavetrend.py`) — LazyBear-classic, not VuManChu 9/12/3:
+
+- Source = HLC3 = `(high + low + close) / 3` on the same 5m bars as live (not close-only; close is not silently used as high/low).
+- Channel length `n1 = 10`, average `n2 = 21`, signal SMA = 4.
+- `esa = EMA(HLC3, 10)`, `d = EMA(|HLC3 − esa|, 10)`, `CI = (HLC3 − esa) / (0.015 × d)`, `WT1 = EMA(CI, 21)`, `WT2 = SMA(WT1, 4)`.
+- Oversold / overbought bands: −60 / +60 (LazyBear `osLevel1` / `obLevel1`).
+
+**Closed-bar only.** Decision bar `i` is a closed 5m bar. Cross uses WT1/WT2 at `i−1` and `i` (both closed). No intrabar flicker, no Heikin-Ashi internal rewrite, no `request.security` higher-TF with lookahead.
+
+**Long predicates only** (long-only book):
+
+- `wt_cross_up_os` — WT1 crosses above WT2 while WT2 ≤ −60 (classic green-dot family).
+- `wt_below_os` — WT2 still oversold (filter atom for ANDs; not a standalone universe name).
+- `wt_cross_down_ob` — parsed for tests (WT1 crosses below WT2 while WT2 ≥ +60). **Not** a standalone long. No short-side longs.
+
+**Universe** (still inside `UNIVERSE_TARGET_MIN` / `UNIVERSE_TARGET_MAX`, ~40–120): `wt_cross_up_os`, `wt_cross_up_os&sma_abv_50`, `wt_cross_up_os&sma_stack_20_50_100`, `wt_cross_up_os&don_lo_24`. Handful of ANDs, not a cartesian product. No MFI / CMF / VWAP money-flow atoms (live cycle still treats volume as not-honest for the universe; PROTOCOL/universe refuse MFI). No VuManChu Sommi flag/diamond, gold-dot kitchen sink, or divergence zoo in v1.
+
+**Superseded on this date** (prior text kept above for history):
+
+- 2026-09-03 universe list insofar as it froze that handful — a few WaveTrend names are added, still inside the 40–120 band.
+
 

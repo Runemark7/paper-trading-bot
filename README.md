@@ -14,7 +14,8 @@ bars; the decision cycle runs every 5 minutes. Amendment 2026-09-03:
 Donchian / fractal-swing structure atoms exist; they use high/low from
 the same 5m klines. Double bottom (`dbl_bot_k`) is the new pattern;
 trend / breakout / momentum already map to `sma_stack`/`sma_abv`,
-`don_hi_*`, `mom_*`. Still paper.
+`don_hi_*`, `mom_*`. Amendment 2026-09-05: LazyBear WaveTrend green-dot
+(`wt_cross_up_os`) on closed 5m HLC3 — not Market Cipher. Still paper.
 
 Built on **[ai-hedge-fund](https://github.com/virattt/ai-hedge-fund)** (MIT, © Virat Singh)
 for Signal models, sim broker, risk limits, portfolio, backtesting, and the LLM layer.
