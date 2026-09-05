@@ -94,7 +94,9 @@ class DiscoverySummaryBucketTests(unittest.TestCase):
             (root / "champions.json").write_text(json.dumps({"champions": [], "synced_until": ""}))
             with patch.dict(os.environ, {"PAPER_STATE": str(root)}):
                 write_in_flight(["flying"])
-                idle = build_discovery_summary()
+                with patch("hedge_fund.web.discovery.generate_universe", return_value=universe):
+                    with patch("hedge_fund.trading.universe.generate_universe", return_value=universe):
+                        idle = build_discovery_summary()
                 self.assertFalse(idle["in_flight"]["active"])
                 self.assertEqual(idle["in_flight"]["names"], [])
                 self.assertIn("flying", idle["queued"])
