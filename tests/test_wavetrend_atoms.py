@@ -278,7 +278,7 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertIn("10", text)
         self.assertIn("21", text)
         self.assertIn("−60", text)
-        self.assertIn("not Market Cipher", text.lower())
+        self.assertIn("not market cipher", text.lower())
         self.assertIn("not affiliated", text.lower())
         self.assertIn("VuManChu", text)
         self.assertIn("green-dot", text)

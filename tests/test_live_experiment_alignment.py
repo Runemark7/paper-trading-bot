@@ -150,7 +150,7 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertIn("LazyBear", text)
         self.assertIn("wt_cross_up_os", text)
         self.assertIn("HLC3", text)
-        self.assertIn("not Market Cipher", text.lower())
+        self.assertIn("not market cipher", text.lower())
         self.assertEqual(QUAL_TIMEFRAME, "5m")
         self.assertEqual(RISK_POLICY, "rm_v1")
         self.assertEqual(TRADE_EVALUATION_LIMIT, 80)
