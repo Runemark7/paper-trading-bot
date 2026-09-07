@@ -10,7 +10,10 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
-from hedge_fund.trading.constants import DISCOVER_CYCLE_MAX_NAMES
+from hedge_fund.trading.constants import (
+    DISCOVER_CYCLE_MAX_NAMES,
+    DISCOVER_CYCLE_TIME_BUDGET_SECONDS,
+)
 from hedge_fund.trading.discovery import (
     clear_in_flight,
     latest_eval_per_strategy,
@@ -314,7 +317,6 @@ class DiscoverySummaryBucketTests(unittest.TestCase):
                 with _tournament_patches(leftovers, lambda *_a, **_k: _dummy_windows()):
                     first = replenish_and_evaluate(max_names=2, cooldown_seconds=0)
                 self.assertEqual(first["total_tested_in_batch"], 2)
-                self.assertLessEqual(first["total_tested_in_batch"], DISCOVER_CYCLE_MAX_NAMES)
                 log1 = load_discovery_log()
                 self.assertEqual([r["strategy"] for r in log1], [leftovers[1], leftovers[0]])
                 self.assertEqual(load_cursor().get("next_name"), leftovers[2])
@@ -326,6 +328,13 @@ class DiscoverySummaryBucketTests(unittest.TestCase):
                 self.assertEqual(len(log2), 4)
                 self.assertEqual({r["strategy"] for r in log2[:2]}, {leftovers[2], leftovers[3]})
                 self.assertEqual(load_cursor().get("next_name"), leftovers[4])
+
+                with _tournament_patches(leftovers, lambda *_a, **_k: _dummy_windows()):
+                    third = replenish_and_evaluate(cooldown_seconds=0)
+                self.assertEqual(DISCOVER_CYCLE_MAX_NAMES, 1)
+                self.assertEqual(third["total_tested_in_batch"], DISCOVER_CYCLE_MAX_NAMES)
+                self.assertEqual(load_discovery_log()[0]["strategy"], leftovers[4])
+                self.assertEqual(load_cursor().get("next_name"), leftovers[5])
 
     def test_time_budget_stops_after_elapsed_names(self):
         from scripts.tournament_engine import replenish_and_evaluate
@@ -342,7 +351,7 @@ class DiscoverySummaryBucketTests(unittest.TestCase):
         clock = Clock()
 
         def _on_eval(*_a, **_k):
-            clock.t += 100
+            clock.t += 60
             return _dummy_windows()
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -352,7 +361,7 @@ class DiscoverySummaryBucketTests(unittest.TestCase):
                     with patch("scripts.tournament_engine.time.monotonic", clock.monotonic):
                         res = replenish_and_evaluate(
                             max_names=10,
-                            time_budget_seconds=150,
+                            time_budget_seconds=DISCOVER_CYCLE_TIME_BUDGET_SECONDS,
                             cooldown_seconds=0,
                         )
                 self.assertEqual(res["total_tested_in_batch"], 2)
