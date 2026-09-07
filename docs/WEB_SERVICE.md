@@ -21,7 +21,7 @@ forward. To restrict, pass `--host 127.0.0.1`.
 | GET    | `/api/summary` | Equity, closed trades, win rate, total P&L, last update |
 | GET    | `/api/learning`| Per-condition learning state: trials, calibrated probability, level |
 | GET    | `/api/regime`  | Current crypto regime zone / score / allowed flag  |
-| GET    | `/api/discovery/summary` | Last-known tested / in-flight / leftover-untested buckets |
+| GET    | `/api/discovery/summary` | Last-known unique-tested / in-flight (cycle budget) / leftover-untested; newest last_tested_at; stuck/stale copy |
 | GET    | `/api/trades`  | Recent closed trades                              |
 | POST   | `/run`         | Trigger one live paper cycle, then regenerate      |
 | GET    | `/health`      | Liveness probe                                     |

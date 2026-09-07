@@ -8,6 +8,9 @@
 3. No live-slot cap: every 5m-qualified name not already pooled or
    graduated is admitted. Universe size (~40–120) is the combinatorial bound.
 4. Graduation: TRADE_EVALUATION_LIMIT (80) closed paper trades vs B&H.
+5. Each live_cycle invocation evaluates a leftover *slice* (max names +
+   wall-clock budget, rotating cursor, 24h retest cooldown) and appends
+   discovery_log.json after each name — not after the full leftover list.
 
 Qualification uses hedge_fund.backtest.strategies with rm_v1 stops/fees,
 not fast_quant or fee-free SimBroker.
@@ -15,6 +18,7 @@ not fast_quant or fee-free SimBroker.
 from __future__ import annotations
 
 import json
+import time
 from datetime import datetime, timezone
 
 import hedge_fund.backtest.strategies as bs
@@ -23,8 +27,19 @@ from hedge_fund.paths import state_root
 from hedge_fund.signals.dynamic import parse_strategy
 from hedge_fund.trading.buy_and_hold import buy_and_hold_window_pnl
 from hedge_fund.trading.champions import load_graduated, load_pool, save_pool
-from hedge_fund.trading.discovery import clear_in_flight, write_in_flight
+from hedge_fund.trading.discovery import (
+    append_discovery_evaluation,
+    clear_in_flight,
+    load_cursor,
+    load_discovery_log,
+    save_cursor,
+    select_cycle_batch,
+    write_in_flight,
+)
 from hedge_fund.trading.constants import (
+    DISCOVER_CYCLE_MAX_NAMES,
+    DISCOVER_CYCLE_TIME_BUDGET_SECONDS,
+    DISCOVER_RETEST_COOLDOWN_SECONDS,
     MIN_BACKTEST_SHARPE,
     MIN_BACKTEST_TRADES,
     PAPER_START_CASH,
@@ -45,27 +60,16 @@ def _hist_qual():
     return state_root() / f"crypto_history_{QUAL_TIMEFRAME}.json"
 
 
-def _discovery_log_file():
-    return state_root() / "discovery_log.json"
-
-
 def generate_candidate_pool() -> list[str]:
     """Explicit 5m universe (no daily()/h1()/m5() or MFI). Structure ANDs ok."""
     return generate_universe()
 
 
 def log_discovery_evaluations(eval_records: list[dict]):
-    """Persist a log of all tested candidate evaluations for visibility."""
-    path = _discovery_log_file()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    log = []
-    if path.exists():
-        try:
-            log = json.loads(path.read_text())
-        except Exception:
-            pass
-    log = (eval_records + log)[:300]
-    path.write_text(json.dumps(log, indent=2))
+    """Append finished evaluations immediately (newest-first, capped)."""
+    from hedge_fund.trading.discovery import append_discovery_evaluations
+
+    append_discovery_evaluations(eval_records)
 
 
 def oos_admission_score(tot_test_pnl: float, avg_sharpe: float) -> float:
@@ -257,8 +261,9 @@ def _leftover_batch(
 ) -> list[str]:
     """All remaining untested names, still skipping near-duplicates of blocked.
 
-    Default is no sample: drain leftovers. ``batch_size`` is a test hook only
-    (prefix of leftovers). There is no product-rule random sample of 30.
+    Default is no sample: the leftover list is the drain queue. ``batch_size``
+    is a test hook only (prefix of leftovers). There is no product-rule random
+    sample of 30. Production still budgets how many of these run per cycle.
     """
     leftovers = untested_candidates(blocked_names, universe)
     if batch_size is None:
@@ -271,11 +276,19 @@ def discover_and_qualify(
     window_size: int = QUAL_WINDOW_BARS,
     n_windows: int = QUAL_N_WINDOWS,
     stride: int = QUAL_STRIDE,
+    *,
+    max_names: int | None = None,
+    time_budget_seconds: float | None = None,
+    cooldown_seconds: int | None = None,
+    now: datetime | None = None,
 ) -> tuple[list[dict], list[dict]]:
     """Walk-forward qualification on 5m BTC/ETH. 4h-only history does not admit.
 
-    Default evaluates every leftover untested universe name. ``batch_size``
-    is optional (tests); production drains leftovers.
+    Each invocation evaluates a leftover slice: never-tested first, then oldest
+    tested past the retest cooldown, rotating from the persisted cursor. Stops
+    after ``max_names`` or ``time_budget_seconds`` so live_cycle can still run
+    ``run_isolated`` in the same 300s tick. ``batch_size`` is a leftover-prefix
+    test hook, not a random sample of 30.
     """
     data = _load_qual_history()
     if not data:
@@ -290,17 +303,61 @@ def discover_and_qualify(
     blocked = {c["name"] for c in st.get("champions", [])}.union({g["name"] for g in grad})
 
     universe = generate_candidate_pool()
-    leftover_batch = _leftover_batch(universe, blocked, batch_size)
-    write_in_flight(leftover_batch)
+    leftovers = _leftover_batch(universe, blocked, batch_size)
+    cap = DISCOVER_CYCLE_MAX_NAMES if max_names is None else max_names
+    if batch_size is not None:
+        cap = min(cap, batch_size)
+    budget = (
+        DISCOVER_CYCLE_TIME_BUDGET_SECONDS
+        if time_budget_seconds is None
+        else time_budget_seconds
+    )
+    cool = (
+        DISCOVER_RETEST_COOLDOWN_SECONDS
+        if cooldown_seconds is None
+        else cooldown_seconds
+    )
+    cursor = load_cursor()
+    planned, rotated = select_cycle_batch(
+        leftovers,
+        load_discovery_log(),
+        max_names=cap,
+        cooldown_seconds=cool,
+        now=now,
+        cursor_name=cursor.get("next_name"),
+    )
+
     qualified = []
     all_evaluated = []
+    completed: list[str] = []
+    remaining = list(planned)
+    started_mono = time.monotonic()
+    if planned:
+        write_in_flight(
+            remaining,
+            current=None,
+            remaining=remaining,
+            completed=completed,
+            batch_size=len(planned),
+        )
     try:
-        bh_oos, sma_oos = _benchmark_oos(window_slices)
+        bh_oos, sma_oos = _benchmark_oos(window_slices) if planned else (None, None)
 
-        for name in leftover_batch:
+        for i, name in enumerate(planned):
+            if i > 0 and (time.monotonic() - started_mono) >= budget:
+                break
+            remaining = planned[i + 1 :]
+            write_in_flight(
+                [name] + remaining,
+                current=name,
+                remaining=remaining,
+                completed=completed,
+                batch_size=len(planned),
+            )
             try:
                 pred = parse_strategy(name)
             except Exception:
+                completed.append(name)
                 continue
 
             window_scores = evaluate_windows(pred, window_slices)
@@ -330,24 +387,46 @@ def discover_and_qualify(
                 "sma_stack_oos_pnl": None if sma_oos is None else round(sma_oos, 2),
                 "fail_reasons": decision["reasons"],
             }
-            all_evaluated.append(record)
-
             if decision["passed"]:
                 record["score"] = round(decision["score"], 2)
                 qualified.append(record)
+            append_discovery_evaluation(record)
+            all_evaluated.append(record)
+            completed.append(name)
+            write_in_flight(
+                remaining,
+                current=None,
+                remaining=remaining,
+                completed=completed,
+                batch_size=len(planned),
+            )
 
-        log_discovery_evaluations(all_evaluated)
         qualified.sort(key=lambda x: x["score"], reverse=True)
         return qualified, all_evaluated
     finally:
+        done = set(completed)
+        next_name = None
+        for n in rotated:
+            if n not in done:
+                next_name = n
+                break
+        if planned:
+            save_cursor(
+                next_name,
+                last_evaluated=completed,
+                last_count=len(completed),
+            )
         clear_in_flight()
 
 
-def replenish_and_evaluate(batch_size: int | None = None) -> dict:
+def replenish_and_evaluate(
+    batch_size: int | None = None,
+    **discover_kwargs,
+) -> dict:
     """Qualify leftover untested names; admit every new name not already pooled or graduated.
 
-    Default drains the leftover universe (no 30-name sample). ``batch_size``
-    is a test hook only.
+    Default takes one cycle budget of leftovers (not a 30-name sample and not
+    the entire leftover list). ``batch_size`` is a leftover-prefix test hook.
     """
     st = load_pool()
     grad_list = load_graduated()
@@ -355,7 +434,7 @@ def replenish_and_evaluate(batch_size: int | None = None) -> dict:
         {g["name"] for g in grad_list}
     )
 
-    qualified, all_eval = discover_and_qualify(batch_size=batch_size)
+    qualified, all_eval = discover_and_qualify(batch_size=batch_size, **discover_kwargs)
     admitted = []
     for q in qualified:
         name = q["strategy"]

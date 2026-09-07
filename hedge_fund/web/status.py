@@ -206,34 +206,38 @@ def _heartbeat_block(now: datetime) -> dict:
 
 
 def _discovery_block(root: Path) -> dict:
+    from hedge_fund.trading.discovery import latest_eval_per_strategy, load_discovery_log, newest_eval
+
     path = root / "discovery_log.json"
     last_tested_at = None
     last_strategy = None
     last_qualified = None
     count = 0
+    unique = 0
     if path.exists():
         try:
-            import json
-            log = json.loads(path.read_text())
-            if isinstance(log, list):
-                count = len(log)
-                if log:
-                    row = log[0]
-                    last_tested_at = row.get("tested_at")
-                    last_strategy = row.get("strategy")
-                    last_qualified = row.get("qualified")
+            log = load_discovery_log()
+            count = len(log)
+            unique = len(latest_eval_per_strategy(log))
+            row = newest_eval(log)
+            if row:
+                last_tested_at = row.get("tested_at")
+                last_strategy = row.get("strategy")
+                last_qualified = row.get("qualified")
         except (OSError, ValueError):
             pass
     return {
         "certainty": "last_known" if path.exists() else "no_signal",
         "running": False,
         "log_count": count,
+        "unique_tested": unique,
         "last_tested_at": last_tested_at,
         "last_strategy": last_strategy,
         "last_qualified": last_qualified,
         "file": _file_mtime_note(path),
         "note": (
-            "Discovery writes discovery_log.json after a tournament batch. "
+            "Discovery appends discovery_log.json after each name. "
+            "log_count is raw rows; unique_tested is latest-eval-per-name. "
             "GET /api/discovery/summary has tested / in-flight / leftover buckets. "
             "A quiet log is silence, not a running job."
         ),

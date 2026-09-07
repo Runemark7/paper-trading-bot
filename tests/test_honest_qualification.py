@@ -241,7 +241,7 @@ class LeftoverDrainTests(unittest.TestCase):
         capped = _leftover_batch(leftovers, set(), batch_size=5)
         self.assertEqual(len(capped), 5)
 
-    def test_replenish_evaluates_more_than_thirty_leftovers_when_mocked(self):
+    def test_replenish_one_cycle_stays_within_budget_and_later_cycles_drain(self):
         leftovers = [f"cand_{i}" for i in range(40)]
         dummy_windows = [
             {
@@ -286,11 +286,24 @@ class LeftoverDrainTests(unittest.TestCase):
                         return_value=dummy_windows,
                     ) as ev,
                 ):
-                    res = replenish_and_evaluate()
-        self.assertEqual(res["total_tested_in_batch"], 40)
-        self.assertGreater(res["total_tested_in_batch"], 30)
-        self.assertEqual(ev.call_count, 40)
-        self.assertEqual(res["admitted_new_count"], 0)
+                    from hedge_fund.trading.constants import DISCOVER_CYCLE_MAX_NAMES
+                    from hedge_fund.trading.discovery import load_cursor, load_discovery_log
+
+                    res = replenish_and_evaluate(cooldown_seconds=0)
+                    self.assertLessEqual(res["total_tested_in_batch"], DISCOVER_CYCLE_MAX_NAMES)
+                    self.assertGreater(res["total_tested_in_batch"], 0)
+                    self.assertEqual(ev.call_count, res["total_tested_in_batch"])
+                    self.assertEqual(res["admitted_new_count"], 0)
+                    first_names = {r["strategy"] for r in load_discovery_log()}
+                    self.assertEqual(len(first_names), res["total_tested_in_batch"])
+                    self.assertTrue(load_cursor().get("next_name"))
+
+                    res2 = replenish_and_evaluate(cooldown_seconds=0)
+                    self.assertEqual(res2["total_tested_in_batch"], DISCOVER_CYCLE_MAX_NAMES)
+                    log = load_discovery_log()
+                    unique = {r["strategy"] for r in log}
+                    self.assertEqual(len(unique), DISCOVER_CYCLE_MAX_NAMES * 2)
+                    self.assertTrue(first_names.isdisjoint({r["strategy"] for r in log[: res2["total_tested_in_batch"]]}))
         self.assertEqual(res["active_champions_count"], 0)
 
 

@@ -220,6 +220,9 @@ class GraduatedPaperTokenTests(unittest.TestCase):
         self.assertFalse(hasattr(constants, "MAX_ACTIVE_CHAMPIONS"))
         self.assertFalse(hasattr(constants, "DISCOVER_BATCH_SIZE"))
         self.assertFalse(hasattr(constants, "MIN_BACKTEST_WIN_RATE"))
+        self.assertEqual(constants.DISCOVER_CYCLE_MAX_NAMES, 4)
+        self.assertEqual(constants.DISCOVER_CYCLE_TIME_BUDGET_SECONDS, 150)
+        self.assertLess(constants.DISCOVER_CYCLE_TIME_BUDGET_SECONDS, constants.CYCLE_INTERVAL_SECONDS)
 
     def test_tournament_imports_champions_not_sys_path_opt(self):
         src = (REPO / "scripts" / "tournament_engine.py").read_text()

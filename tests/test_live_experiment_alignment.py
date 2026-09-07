@@ -188,6 +188,46 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertIn("sidecar still skips outside 07–21 Europe/Stockholm", text)
         self.assertIn("07–21 Europe/Stockholm; that night window is unchanged", text)
 
+    def test_amendment_2026_09_07_budgeted_discovery(self):
+        import hedge_fund.trading.constants as constants
+        from hedge_fund.trading.constants import (
+            CYCLE_INTERVAL_SECONDS,
+            DISCOVER_CYCLE_MAX_NAMES,
+            DISCOVER_CYCLE_TIME_BUDGET_SECONDS,
+            DISCOVER_RETEST_COOLDOWN_SECONDS,
+            DISCOVERY_LOG_CAP,
+            MIN_BACKTEST_SHARPE,
+            MIN_BACKTEST_TRADES,
+            QUAL_TIMEFRAME,
+            RISK_POLICY,
+        )
+
+        text = (REPO / "PROTOCOL.md").read_text()
+        self.assertIn("Amendment 2026-09-07", text)
+        self.assertIn("budgeted discovery", text.lower())
+        self.assertIn("incremental discovery log", text.lower())
+        self.assertIn("DISCOVER_CYCLE_MAX_NAMES", text)
+        self.assertIn("DISCOVER_CYCLE_TIME_BUDGET_SECONDS", text)
+        self.assertIn("discovery_cursor.json", text)
+        self.assertIn("24h", text)
+        self.assertIn("shuffle 30 and ignore the rest", text)
+        self.assertIn("Paper only", text)
+        self.assertIn("Do not cull existing champions", text)
+        self.assertIn("last_tested_at", text)
+        self.assertEqual(CYCLE_INTERVAL_SECONDS, 300)
+        self.assertEqual(QUAL_TIMEFRAME, "5m")
+        self.assertEqual(RISK_POLICY, "rm_v1")
+        self.assertEqual(MIN_BACKTEST_TRADES, 30)
+        self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
+        self.assertEqual(DISCOVER_CYCLE_MAX_NAMES, 4)
+        self.assertEqual(DISCOVER_CYCLE_TIME_BUDGET_SECONDS, 150)
+        self.assertEqual(DISCOVER_RETEST_COOLDOWN_SECONDS, 24 * 3600)
+        self.assertEqual(DISCOVERY_LOG_CAP, 1000)
+        self.assertLess(DISCOVER_CYCLE_MAX_NAMES, 30)
+        self.assertLess(DISCOVER_CYCLE_TIME_BUDGET_SECONDS, CYCLE_INTERVAL_SECONDS)
+        self.assertFalse(hasattr(constants, "DISCOVER_BATCH_SIZE"))
+        self.assertFalse(hasattr(constants, "MAX_ACTIVE_CHAMPIONS"))
+
 class IsolatedRunnerTests(unittest.TestCase):
     def test_no_second_hardcoded_book(self):
         src = (REPO / "hedge_fund" / "trading" / "run_isolated.py").read_text()
