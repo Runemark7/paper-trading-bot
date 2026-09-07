@@ -219,14 +219,20 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertEqual(RISK_POLICY, "rm_v1")
         self.assertEqual(MIN_BACKTEST_TRADES, 30)
         self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
-        self.assertEqual(DISCOVER_CYCLE_MAX_NAMES, 4)
-        self.assertEqual(DISCOVER_CYCLE_TIME_BUDGET_SECONDS, 150)
+        self.assertEqual(DISCOVER_CYCLE_MAX_NAMES, 1)
+        self.assertEqual(DISCOVER_CYCLE_TIME_BUDGET_SECONDS, 90)
         self.assertEqual(DISCOVER_RETEST_COOLDOWN_SECONDS, 24 * 3600)
         self.assertEqual(DISCOVERY_LOG_CAP, 1000)
         self.assertLess(DISCOVER_CYCLE_MAX_NAMES, 30)
         self.assertLess(DISCOVER_CYCLE_TIME_BUDGET_SECONDS, CYCLE_INTERVAL_SECONDS)
         self.assertFalse(hasattr(constants, "DISCOVER_BATCH_SIZE"))
         self.assertFalse(hasattr(constants, "MAX_ACTIVE_CHAMPIONS"))
+        self.assertIn("lighter per-cycle discovery slice", text)
+        self.assertIn("DISCOVER_CYCLE_MAX_NAMES` (1)", text)
+        self.assertIn("DISCOVER_CYCLE_TIME_BUDGET_SECONDS` (90s)", text)
+        self.assertGreater(
+            CYCLE_INTERVAL_SECONDS - DISCOVER_CYCLE_TIME_BUDGET_SECONDS, 150
+        )
 
 class IsolatedRunnerTests(unittest.TestCase):
     def test_no_second_hardcoded_book(self):

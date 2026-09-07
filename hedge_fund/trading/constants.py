@@ -41,10 +41,13 @@ TRADE_EVALUATION_LIMIT = 80
 # No DISCOVER_BATCH_SIZE. The old random sample of 30 (shuffle 30 and
 # ignore the rest) stays deleted. Leftovers still drain 24/7, but each
 # live_cycle tournament invocation takes a time-shared slice so a 60-name
-# 5m walk-forward cannot wedge the 300s cycle. MIN_BACKTEST_TRADES = 30
-# remains the OOS trade floor, not a discovery sample size.
-DISCOVER_CYCLE_MAX_NAMES = 4
-DISCOVER_CYCLE_TIME_BUDGET_SECONDS = 150  # ~2.5 min; leave room for run_isolated
+# 5m walk-forward cannot wedge the 300s cycle. After #26 (4 names / 150s)
+# still timed out the pod, the live default is 1 name / ~90s so
+# run_isolated and the web/API keep the rest of the tick. Prefer one
+# eval over raising names if a single 5m walk-forward is already heavy.
+# MIN_BACKTEST_TRADES = 30 remains the OOS trade floor, not a sample size.
+DISCOVER_CYCLE_MAX_NAMES = 1
+DISCOVER_CYCLE_TIME_BUDGET_SECONDS = 90  # one eval; leave most of 300s for live + API
 DISCOVER_RETEST_COOLDOWN_SECONDS = 24 * 3600  # skip recent rejects; prefer never-tested
 DISCOVERY_LOG_CAP = 1000  # newest-first rows; unique names are a separate count
 # No new evals for this long, with leftover work remaining → stuck/overdue copy.

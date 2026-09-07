@@ -88,6 +88,7 @@ over a meaningful sample, AND calibration is demonstrated independently of P&L.
 | 2026-09-05 | Cipher-shaped paper atoms from public LazyBear WaveTrend / VuManChu-inspired green-dot rule (`wt_cross_up_os`). Not Market Cipher; not affiliated. Closed-bar 5m HLC3, LazyBear 10/21/4, OS=−60. No MFI. `rm_v1` / OOS gates unchanged. |
 | 2026-09-05 | Night window revoked. Decision cycle runs every 5 minutes around the clock. Discovery drains remaining untested universe names each sweep (no 30-name sample). `GET /api/discovery/summary` is last-known tested / in-flight / leftover-untested (not a live job). OOS gates unchanged. Paper only. No cull of champions. No new strategies. |
 | 2026-09-07 | Discovery is budgeted per 5m cycle (time + max names, rotating cursor, 24h retest cooldown) so a leftover drain cannot wedge `run_isolated`. Each finished name is appended to `discovery_log.json` immediately. Summary `last_tested_at` is the newest eval; unique tested ≠ log rows; stale tournament stamp is stuck, not idle. OOS gates unchanged. Paper only. No cull of champions. |
+| 2026-09-07 | Addendum: per-cycle discovery slice scaled down after prod timeout. Live default is `DISCOVER_CYCLE_MAX_NAMES = 1` and `DISCOVER_CYCLE_TIME_BUDGET_SECONDS = 90` so `run_isolated` and the web/API stay healthy inside the 300s cycle. Leftover drain still 24/7 across cycles. OOS gates unchanged. Paper only. No cull of champions. |
 
 ### Amendment 2026-08-30 — what actually runs
 
@@ -299,5 +300,22 @@ The leftover universe still drains 24/7 across cycles. `MIN_BACKTEST_TRADES = 30
 
 - 2026-09-05 "Discovery drains leftovers" insofar as it required each tournament/replenish sweep to evaluate **all** remaining untested universe names in one blocking invocation, and "the cycle waits on tournament" as a full leftover drain.
 - 2026-09-05 discovery buckets insofar as `discovery_in_flight.json` was the full leftover list written only at batch start and the log was appended only after the full batch.
+
+### Amendment 2026-09-07 addendum — lighter per-cycle discovery slice
+
+This addendum does not rewrite original §§ 1–8 or prior amendments. Qual/live remain 5m, risk policy remains `rm_v1`, OOS gates are unchanged (30 OOS trades, all windows ≥ 0, beat B&H + `sma_stack`, Sharpe ≥ 0.30, paper 80 vs B&H). Cycle remains 24/7 (`CYCLE_INTERVAL_SECONDS = 300`); there is no 07–21 window. No live-slot cap. **Still paper.** `GRADUATED_PAPER` meaning is unchanged. Do not cull existing champions. No new strategies. The homemade `DISCOVER_BATCH_SIZE = 30` random sample stays deleted — this is not "shuffle 30 and ignore the rest." Incremental log, rotating cursor, 24h retest cooldown, and stuck/overdue UX from the 2026-09-07 amendment stay.
+
+**Why.** After PR #26 (`f13a0e4`) rolled, prod (`trading.runevibe.se`) crashed / timed out. Four names × full 5m walk-forward OOS (3×~90d windows, `rm_v1`) inside `DISCOVER_CYCLE_TIME_BUDGET_SECONDS = 150` was still too heavy for the pod (CPU/RAM) and could wedge or OOM the process before `run_isolated` and the dashboard finished the 300s tick.
+
+**Live slice.** Each `live_cycle` tournament invocation still takes a leftover slice, then returns:
+
+- At most `DISCOVER_CYCLE_MAX_NAMES` (1) name.
+- Wall-clock `DISCOVER_CYCLE_TIME_BUDGET_SECONDS` (90s). Enough for one eval; most of the 300s stays for `run_isolated` and the web/API. If one name alone commonly exceeds ~90s, keep max names at 1 with this modest budget rather than raising names.
+
+The leftover universe still drains 24/7 across cycles. `MIN_BACKTEST_TRADES = 30` remains the OOS trade floor, not a discovery sample size.
+
+**Superseded on this date** (prior text kept above for history):
+
+- 2026-09-07 "Per-cycle budget" insofar as it set `DISCOVER_CYCLE_MAX_NAMES` (4) and `DISCOVER_CYCLE_TIME_BUDGET_SECONDS` (150s, ~2.5 minutes).
 
 
