@@ -2,11 +2,11 @@
 
 Imported by champions, tournament, and dashboard. PROTOCOL amendments
 cite these values (5m live/admit, 300s 24/7 decision cycle, no live-slot
-cap, leftover-universe discovery).
+cap, budgeted leftover-universe discovery).
 Do not document a 4h live book, hourly-only decisions, Sharpe 0.10,
 WR 38%, 4-trade minimum, 25-trade graduation, arena capacity 1000,
 a homemade 20-slot live-arena cap, a 07–21 night skip, or a 30-name
-discovery sample.
+discovery sample (shuffle 30 and ignore the rest).
 """
 
 from __future__ import annotations
@@ -38,11 +38,17 @@ TRADE_EVALUATION_LIMIT = 80
 # No MAX_ACTIVE_CHAMPIONS. The 2026-09-01 20-slot arena starved prod's 31
 # grandfathered names (needed = 20 - 31 <= 0). Admission is OOS 5m / rm_v1
 # only. Universe size (~40–120) is the combinatorial bound, not a live cap.
-# No DISCOVER_BATCH_SIZE. Each tournament/replenish sweep drains every
-# leftover untested name (not in champions.json / graduated.json), still
-# skipping near-duplicates of blocked names. The old random sample of 30
-# was a homemade throttle, not an OOS-quality rule. MIN_BACKTEST_TRADES
-# = 30 remains the OOS trade floor.
+# No DISCOVER_BATCH_SIZE. The old random sample of 30 (shuffle 30 and
+# ignore the rest) stays deleted. Leftovers still drain 24/7, but each
+# live_cycle tournament invocation takes a time-shared slice so a 60-name
+# 5m walk-forward cannot wedge the 300s cycle. MIN_BACKTEST_TRADES = 30
+# remains the OOS trade floor, not a discovery sample size.
+DISCOVER_CYCLE_MAX_NAMES = 4
+DISCOVER_CYCLE_TIME_BUDGET_SECONDS = 150  # ~2.5 min; leave room for run_isolated
+DISCOVER_RETEST_COOLDOWN_SECONDS = 24 * 3600  # skip recent rejects; prefer never-tested
+DISCOVERY_LOG_CAP = 1000  # newest-first rows; unique names are a separate count
+# No new evals for this long, with leftover work remaining → stuck/overdue copy.
+DISCOVERY_QUIET_SECONDS = 2 * 3600
 
 PAPER_START_CASH = 10_000.0
 

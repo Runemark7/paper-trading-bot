@@ -210,11 +210,23 @@ export default function Overview() {
               />
               <PipelineRow
                 title="Discovery / tournament qualification"
-                chip={prog.discovery.last_tested_at ? `last ${fmtWhen(prog.discovery.last_tested_at)}` : "no log"}
-                tone="neutral"
+                chip={
+                  prog.pipeline.stale && prog.pipeline.phase === "tournament"
+                    ? "discovery stuck / cycle overdue"
+                    : prog.discovery.last_tested_at
+                      ? `last ${fmtWhen(prog.discovery.last_tested_at)}`
+                      : "no log"
+                }
+                tone={
+                  prog.pipeline.stale && prog.pipeline.phase === "tournament"
+                    ? "warn"
+                    : "neutral"
+                }
                 body={
-                  prog.discovery.last_strategy
-                    ? `${prog.discovery.last_strategy} · ${prog.discovery.last_qualified ? "qualified" : "rejected"} · ${prog.discovery.log_count} logged. ${prog.discovery.note ?? ""}`
+                  prog.pipeline.stale && prog.pipeline.phase === "tournament"
+                    ? `Tournament stamp started with no finish. ${prog.discovery.note ?? ""}`
+                    : prog.discovery.last_strategy
+                    ? `${prog.discovery.last_strategy} · ${prog.discovery.last_qualified ? "qualified" : "rejected"} · ${prog.discovery.unique_tested ?? "?"} unique / ${prog.discovery.log_count} log rows. ${prog.discovery.note ?? ""}`
                     : (prog.discovery.note ?? "No discovery log yet.")
                 }
               />

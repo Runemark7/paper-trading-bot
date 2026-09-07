@@ -54,7 +54,9 @@ export default function StatusBar() {
           <Badge tone="wait">In progress</Badge>
           {pipe ? (
             <span className="text-white/70 min-w-0 break-words">
-              {pipe.pipeline.stamp_says_in_progress
+              {pipe.pipeline.stale
+                ? `discovery stuck / cycle overdue — stamp ${pipe.pipeline.phase} stale since ${fmtWhen(pipe.pipeline.started_at)}`
+                : pipe.pipeline.stamp_says_in_progress
                 ? `stamp: ${pipe.pipeline.phase} since ${fmtWhen(pipe.pipeline.started_at)} — liveness not verified`
                 : pipe.discovery.last_tested_at
                   ? `last discovery ${fmtWhen(pipe.discovery.last_tested_at)}`

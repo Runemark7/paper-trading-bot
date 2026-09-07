@@ -87,6 +87,7 @@ over a meaningful sample, AND calibration is demonstrated independently of P&L.
 | 2026-09-03 | Pattern atoms: `dbl_bot_k` (long). `dbl_top_k` is parsed but not a standalone long. Trend / breakout / momentum already exist as `sma_stack`/`sma_abv`, `don_hi_*`, `mom_*` — not duplicated. Hold band: 1.0% or 1× ATR. Paper only; gates unchanged. |
 | 2026-09-05 | Cipher-shaped paper atoms from public LazyBear WaveTrend / VuManChu-inspired green-dot rule (`wt_cross_up_os`). Not Market Cipher; not affiliated. Closed-bar 5m HLC3, LazyBear 10/21/4, OS=−60. No MFI. `rm_v1` / OOS gates unchanged. |
 | 2026-09-05 | Night window revoked. Decision cycle runs every 5 minutes around the clock. Discovery drains remaining untested universe names each sweep (no 30-name sample). `GET /api/discovery/summary` is last-known tested / in-flight / leftover-untested (not a live job). OOS gates unchanged. Paper only. No cull of champions. No new strategies. |
+| 2026-09-07 | Discovery is budgeted per 5m cycle (time + max names, rotating cursor, 24h retest cooldown) so a leftover drain cannot wedge `run_isolated`. Each finished name is appended to `discovery_log.json` immediately. Summary `last_tested_at` is the newest eval; unique tested ≠ log rows; stale tournament stamp is stuck, not idle. OOS gates unchanged. Paper only. No cull of champions. |
 
 ### Amendment 2026-08-30 — what actually runs
 
@@ -271,5 +272,32 @@ This amendment does not rewrite original §§ 1–8 or prior amendments. Qual/li
 
 - 2026-09-02 "The sidecar still skips outside 07–21 Europe/Stockholm; that night window is unchanged."
 - 2026-09-01 / 2026-09-03 `DISCOVER_BATCH_SIZE = 30` as a sweep batch size.
+
+### Amendment 2026-09-07 — budgeted discovery, incremental log, honest last eval
+
+This amendment does not rewrite original §§ 1–8 or prior amendments. Qual/live remain 5m, risk policy remains `rm_v1`, OOS gates are unchanged (30 OOS trades, all windows ≥ 0, beat B&H + `sma_stack`, Sharpe ≥ 0.30, paper 80 vs B&H). Cycle remains 24/7 (`CYCLE_INTERVAL_SECONDS = 300`); there is no 07–21 window. No live-slot cap. **Still paper.** `GRADUATED_PAPER` meaning is unchanged. Do not cull existing champions. No new strategies. The homemade `DISCOVER_BATCH_SIZE = 30` random sample stays deleted — this is not "shuffle 30 and ignore the rest."
+
+**Why.** Evaluating every leftover untested name in one `live_cycle` tournament blocked `run_isolated` for hours. Mid-batch hang/kill wrote no log rows (`log_discovery_evaluations` ran only after the full leftover list). `/api/discovery/summary` `tested` is latest-eval-per-name, so a unique count of ~60 can look frozen while the same names retest. `last_tested_at` used the first latest-per-name row (oldest/alpha of a batch append), not the newest `tested_at`.
+
+**Per-cycle budget.** Each tournament invocation from `live_cycle` evaluates a leftover slice, then returns so `run_isolated` can run in the same 300s cycle:
+
+- At most `DISCOVER_CYCLE_MAX_NAMES` (4) names.
+- Wall-clock `DISCOVER_CYCLE_TIME_BUDGET_SECONDS` (150s, ~2.5 minutes).
+- Rotating cursor in `discovery_cursor.json` continues where the last cycle left off (fair drain over time).
+- Still skip champions, graduated names, and near-duplicates (`near_duplicate_key` / `untested_candidates`).
+- Prefer never-tested leftovers, then oldest tested. Names evaluated in the last `DISCOVER_RETEST_COOLDOWN_SECONDS` (24h) are skipped so we do not only thrash the same rejects.
+
+The leftover universe still drains 24/7 across cycles. `MIN_BACKTEST_TRADES = 30` remains the OOS trade floor, not a discovery sample size.
+
+**Incremental discovery log.** After **each** name finishes `evaluate_windows` + `qualification_decision`, append that one record to `discovery_log.json` immediately (newest-first, cap `DISCOVERY_LOG_CAP` = 1000). Do not wait for the leftover list. A mid-batch crash must still leave partial progress visible.
+
+**In-flight honesty.** `discovery_in_flight.json` lists names **for this cycle's budget**, with `current` / `remaining` / `completed`, and shrinks as names complete. Cleared when the invocation finishes. If the pipeline tournament stamp is stale (started, no finish), the UI says discovery stuck / cycle overdue — not idle with a wrong last sweep.
+
+**Summary / UX.** `GET /api/discovery/summary` `last_tested_at` / `last_strategy` are the **newest** `tested_at` across the log, not alphabetical/min among latest-per-name. Counts include universe size, champions, tested pass/fail (unique names), queued/untested, log rows, evals today, and last-eval age. `counts.tested` is unique strategies (latest eval per name), not "only N log rows ever." Champions DiscoveryBuckets banners a stale stamp or quiet leftover drain.
+
+**Superseded on this date** (prior text kept above for history):
+
+- 2026-09-05 "Discovery drains leftovers" insofar as it required each tournament/replenish sweep to evaluate **all** remaining untested universe names in one blocking invocation, and "the cycle waits on tournament" as a full leftover drain.
+- 2026-09-05 discovery buckets insofar as `discovery_in_flight.json` was the full leftover list written only at batch start and the log was appended only after the full batch.
 
 

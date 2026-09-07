@@ -47,20 +47,24 @@ export default function DiscoveryBuckets() {
   const flight = data?.in_flight;
   const queued = data?.queued ?? data?.untested ?? [];
   const counts = data?.counts;
+  const uniqueTested = counts?.unique_tested ?? counts?.tested;
+  const logRows = counts?.log_rows;
+  const stuck = Boolean(data?.stuck || flight?.stale);
 
   return (
     <Card
       title="Discovery"
       aside={
         counts
-          ? `${counts.tested_pass} qualified · ${counts.tested_fail} rejected · ${counts.untested} not tested`
+          ? `${uniqueTested ?? 0} unique tested · ${counts.tested_pass} qualified · ${counts.tested_fail} rejected · ${counts.untested} not tested`
           : "last-known buckets"
       }
     >
       <p className="text-sm text-white/60 mb-4">
         Last-known backtest evaluations (5m history, same tape as live). Not a live
         job. Champions and graduated names stay in their sections above — they are
-        not leftover untested. Stamp in-flight is not process liveness.
+        not leftover untested. Stamp in-flight is not process liveness. Unique
+        tested is latest-eval-per-name, not how many log rows were ever written.
       </p>
 
       {q.isError && (
@@ -69,24 +73,63 @@ export default function DiscoveryBuckets() {
         </div>
       )}
 
+      {stuck && (
+        <div className="mb-4 rounded-md border border-amber-400/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
+          {data?.stuck_reason || flight?.note || "discovery stuck / cycle overdue"}
+        </div>
+      )}
+
       <div className="flex flex-wrap gap-2 text-xs text-white/50 mb-4">
+        <Badge tone="neutral">universe {counts?.universe ?? "…"}</Badge>
         <Badge tone="neutral">champions {counts?.champions ?? "…"}</Badge>
         <Badge tone="neutral">graduated {counts?.graduated ?? "…"}</Badge>
         <Badge tone="pos">qualified {counts?.tested_pass ?? "…"}</Badge>
         <Badge tone="neg">rejected {counts?.tested_fail ?? "…"}</Badge>
         <Badge tone="wait">not tested {counts?.untested ?? "…"}</Badge>
+        <Badge tone="neutral">
+          unique {uniqueTested ?? "…"}
+          {logRows != null ? ` · ${logRows} log rows` : ""}
+        </Badge>
+        <Badge tone="neutral">evals today {counts?.evals_today ?? "…"}</Badge>
+        {(counts?.retest_queue ?? 0) > 0 ? (
+          <Badge tone="wait">retest queue {counts?.retest_queue}</Badge>
+        ) : null}
       </div>
 
       <section className="mb-5 min-w-0">
         <h3 className="text-xs uppercase tracking-wider text-white/40 mb-2">Being tested</h3>
-        {flight?.active ? (
+        {stuck && !flight?.active ? (
+          <p className="text-sm text-amber-100">
+            {data?.stuck_reason || "discovery stuck / cycle overdue"}
+            {data?.last_tested_at ? (
+              <>
+                {" "}
+                · last eval {fmtWhen(data.last_tested_at)}
+                {data.last_strategy ? (
+                  <>
+                    {" "}
+                    · <MonoName className="text-xs">{data.last_strategy}</MonoName>
+                  </>
+                ) : null}
+              </>
+            ) : null}
+          </p>
+        ) : flight?.active ? (
           <div className="space-y-2">
             <div className="flex flex-wrap items-center gap-2">
-              <Badge tone="wait">stamp: tournament</Badge>
+              <Badge tone={flight.stale || stuck ? "warn" : "wait"}>
+                {flight.stale || stuck ? "discovery stuck / cycle overdue" : "stamp: tournament"}
+              </Badge>
               <span className="text-xs text-white/50">
                 since {fmtWhen(flight.stamp_started_at ?? flight.started_at)} · liveness not verified
               </span>
             </div>
+            {flight.current ? (
+              <p className="text-xs text-white/60">
+                current <MonoName className="text-xs">{flight.current}</MonoName>
+                {flight.remaining?.length ? ` · ${flight.remaining.length} remaining this cycle` : ""}
+              </p>
+            ) : null}
             {flight.names.length ? (
               <div className="flex flex-wrap gap-1.5 min-w-0">
                 {flight.names.map((name) => (
@@ -109,7 +152,7 @@ export default function DiscoveryBuckets() {
           </div>
         ) : (
           <p className="text-sm text-white/55">
-            idle — last sweep {data?.last_tested_at ? fmtWhen(data.last_tested_at) : "never recorded"}
+            idle — last eval {data?.last_tested_at ? fmtWhen(data.last_tested_at) : "never recorded"}
             {data?.last_strategy ? (
               <>
                 {" "}
@@ -152,8 +195,9 @@ export default function DiscoveryBuckets() {
             <Empty>Could not load /api/discovery/summary: {String(q.error)}</Empty>
           ) : (
             <Empty>
-              No discovery_log.json yet. Tournament writes it after a qualification
-              batch. Empty means nothing has been recorded — not that discovery is running.
+              No discovery_log.json yet. Tournament appends a row after each
+              name finishes. Empty means nothing has been recorded — not that
+              discovery is running.
             </Empty>
           )
         ) : (
@@ -223,8 +267,12 @@ export default function DiscoveryBuckets() {
         </h3>
         {!queued.length ? (
           <Empty>
-            No leftover universe names. Everything not already a champion or graduated
-            has a row in already tested — or the universe is empty.
+            No never-tested leftover names. Unique tested ({uniqueTested ?? tested.length})
+            is latest-eval-per-name
+            {logRows != null ? ` (${logRows} log rows, including retests)` : ""}
+            {(counts?.retest_queue ?? 0) > 0
+              ? `. ${counts?.retest_queue} already-tested leftovers wait for the 24h retest cooldown, then drain oldest-first across cycles.`
+              : ". Everything not already a champion or graduated has a row in already tested — or the universe is empty."}
           </Empty>
         ) : (
           <div className="flex flex-wrap gap-1.5 min-w-0">

@@ -163,7 +163,11 @@ export interface DiscoveryEvaluation {
 export interface DiscoveryInFlight {
   active: boolean;
   running: boolean;
+  stale?: boolean;
   names: string[];
+  current?: string | null;
+  remaining?: string[];
+  completed?: string[];
   batch_size: number | null;
   started_at: string | null;
   stamp_started_at?: string | null;
@@ -171,13 +175,20 @@ export interface DiscoveryInFlight {
 }
 
 export interface DiscoveryCounts {
+  universe?: number;
   tested_pass: number;
   tested_fail: number;
   tested: number;
+  unique_tested?: number;
+  log_rows?: number;
   untested: number;
+  leftovers?: number;
+  retest_queue?: number;
+  eligible?: number;
   champions: number;
   graduated: number;
   in_flight: number;
+  evals_today?: number;
 }
 
 export interface DiscoverySummary {
@@ -186,6 +197,9 @@ export interface DiscoverySummary {
   certainty: string;
   running: boolean;
   stamp_says_in_progress: boolean;
+  stale?: boolean;
+  stuck?: boolean;
+  stuck_reason?: string | null;
   tested: DiscoveryEvaluation[];
   in_flight: DiscoveryInFlight;
   queued: string[];
@@ -193,6 +207,8 @@ export interface DiscoverySummary {
   counts: DiscoveryCounts;
   last_tested_at: string | null;
   last_strategy: string | null;
+  last_eval_age_seconds?: number | null;
+  retest_cooldown_seconds?: number;
   note: string;
 }
 
@@ -273,9 +289,11 @@ export interface StatusSnapshot {
     };
     discovery: CertaintyNote & {
       log_count: number;
+      unique_tested?: number;
       last_tested_at: string | null;
       last_strategy: string | null;
       last_qualified: boolean | null;
+      stuck?: boolean;
       file: { path: string; mtime: string | null; exists: boolean };
     };
     tournament: CertaintyNote & {

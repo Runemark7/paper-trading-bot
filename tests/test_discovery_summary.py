@@ -1,16 +1,22 @@
 """Discovery summary buckets: tested / in-flight / leftover-untested."""
 from __future__ import annotations
 
+from contextlib import contextmanager
 import json
 import os
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
+from hedge_fund.trading.constants import DISCOVER_CYCLE_MAX_NAMES
 from hedge_fund.trading.discovery import (
     clear_in_flight,
     latest_eval_per_strategy,
+    load_cursor,
+    load_discovery_log,
+    newest_eval,
     read_in_flight,
     write_in_flight,
 )
@@ -31,6 +37,38 @@ def _eval(name, *, qualified, tested_at, sharpe=0.4, trades=40, test_pnl=12.0):
     }
 
 
+def _dummy_windows():
+    return [
+        {
+            "train_pnl": 0.0,
+            "test_pnl": -1.0,
+            "test_trades": 1,
+            "trades": 1,
+            "wins": 0,
+            "sharpe": 0.0,
+            "skipped": False,
+            "failed": False,
+        }
+        for _ in range(3)
+    ]
+
+
+@contextmanager
+def _tournament_patches(leftovers, evaluate_side_effect):
+    with (
+        patch("scripts.tournament_engine.generate_candidate_pool", return_value=leftovers),
+        patch(
+            "scripts.tournament_engine._load_qual_history",
+            return_value={"BTC/USDT": [[0] * 5] * 10, "ETH/USDT": [[0] * 5] * 10},
+        ),
+        patch("scripts.tournament_engine._window_slices", return_value=[{}, {}, {}]),
+        patch("scripts.tournament_engine._benchmark_oos", return_value=(0.0, 0.0)),
+        patch("scripts.tournament_engine.parse_strategy", return_value=lambda *a, **k: True),
+        patch("scripts.tournament_engine.evaluate_windows", side_effect=evaluate_side_effect),
+    ):
+        yield
+
+
 class LatestEvalTests(unittest.TestCase):
     def test_keeps_newest_row_per_name(self):
         log = [
@@ -45,6 +83,15 @@ class LatestEvalTests(unittest.TestCase):
         self.assertEqual(by_name["dup"]["sharpe"], 0.8)
         self.assertFalse(by_name["other"]["qualified"])
 
+    def test_newest_eval_is_max_tested_at_not_list_order(self):
+        log = [
+            _eval("bb_lower_20_2", qualified=False, tested_at="2026-09-06T20:04:34+00:00"),
+            _eval("wt_cross_up_os&sma_stack_20_50_100", qualified=False, tested_at="2026-09-07T03:58:24+00:00"),
+        ]
+        row = newest_eval(log)
+        self.assertEqual(row["strategy"], "wt_cross_up_os&sma_stack_20_50_100")
+        self.assertEqual(row["tested_at"], "2026-09-07T03:58:24+00:00")
+
 
 class DiscoverySummaryBucketTests(unittest.TestCase):
     def test_buckets_and_counts_exclude_champs_and_grads(self):
@@ -58,9 +105,13 @@ class DiscoverySummaryBucketTests(unittest.TestCase):
             (root / "graduated.json").write_text(json.dumps([
                 {"name": "grad_b", "status": "GRADUATED_PAPER", "graduated_at": "2026-09-01T00:00:00+00:00"},
             ]))
+            recent = (datetime.now(timezone.utc) - timedelta(minutes=15)).isoformat()
+            older = (datetime.now(timezone.utc) - timedelta(minutes=40)).isoformat()
+            even_older = (datetime.now(timezone.utc) - timedelta(hours=5)).isoformat()
             (root / "discovery_log.json").write_text(json.dumps([
-                _eval("tested_pass", qualified=True, tested_at="2026-09-05T12:00:00+00:00"),
-                _eval("tested_fail", qualified=False, tested_at="2026-09-05T11:00:00+00:00"),
+                _eval("tested_pass", qualified=True, tested_at=recent),
+                _eval("tested_fail", qualified=False, tested_at=older),
+                _eval("tested_fail", qualified=False, tested_at=even_older),
             ]))
             with patch.dict(os.environ, {"PAPER_STATE": str(root)}):
                 with patch("hedge_fund.web.discovery.generate_universe", return_value=universe):
@@ -78,14 +129,94 @@ class DiscoverySummaryBucketTests(unittest.TestCase):
         self.assertEqual(s["queued"], s["untested"])
         self.assertEqual(s["counts"]["tested_pass"], 1)
         self.assertEqual(s["counts"]["tested_fail"], 1)
+        self.assertEqual(s["counts"]["tested"], 2)
+        self.assertEqual(s["counts"]["unique_tested"], 2)
+        self.assertEqual(s["counts"]["log_rows"], 3)
+        self.assertEqual(s["counts"]["universe"], 5)
         self.assertEqual(s["counts"]["untested"], 1)
         self.assertEqual(s["counts"]["champions"], 1)
         self.assertEqual(s["counts"]["graduated"], 1)
         self.assertFalse(s["running"])
+        self.assertFalse(s["stuck"])
         self.assertFalse(s["in_flight"]["active"])
         self.assertEqual(s["in_flight"]["names"], [])
-        self.assertIn("idle — last sweep", s["in_flight"]["note"])
+        self.assertIn("idle — last eval", s["in_flight"]["note"])
+        self.assertEqual(s["last_strategy"], "tested_pass")
         self.assertTrue(s["paper_only"])
+        self.assertIn("unique strategy names", s["note"])
+
+    def test_last_tested_at_is_newest_not_alpha_min(self):
+        universe = ["bb_lower_20_2", "wt_cross_up_os&sma_stack_20_50_100"]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "champions.json").write_text(json.dumps({"champions": [], "synced_until": ""}))
+            (root / "discovery_log.json").write_text(json.dumps([
+                _eval("bb_lower_20_2", qualified=False, tested_at="2026-09-06T20:04:34+00:00"),
+                _eval("wt_cross_up_os&sma_stack_20_50_100", qualified=False, tested_at="2026-09-07T03:58:24+00:00"),
+            ]))
+            with patch.dict(os.environ, {"PAPER_STATE": str(root)}):
+                with patch("hedge_fund.web.discovery.generate_universe", return_value=universe):
+                    with patch("hedge_fund.trading.universe.generate_universe", return_value=universe):
+                        s = build_discovery_summary()
+        self.assertEqual(s["last_tested_at"], "2026-09-07T03:58:24+00:00")
+        self.assertEqual(s["last_strategy"], "wt_cross_up_os&sma_stack_20_50_100")
+        self.assertEqual(s["tested"][0]["strategy"], "wt_cross_up_os&sma_stack_20_50_100")
+        self.assertEqual(s["counts"]["unique_tested"], 2)
+
+    def test_stale_tournament_stamp_is_stuck_not_idle_last_sweep(self):
+        universe = ["keep_me"]
+        old = (datetime.now(timezone.utc) - timedelta(hours=12)).isoformat(timespec="seconds")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "champions.json").write_text(json.dumps({"champions": [], "synced_until": ""}))
+            (root / "discovery_log.json").write_text(json.dumps([
+                _eval("bb_lower_20_2", qualified=False, tested_at="2026-09-06T20:04:34+00:00"),
+                _eval("keep_me", qualified=False, tested_at="2026-09-07T03:58:24+00:00"),
+            ]))
+            with patch.dict(os.environ, {"PAPER_STATE": str(root)}):
+                from hedge_fund.trading.stamps import PIPELINE_STAMP, write_json_stamp
+                write_json_stamp(PIPELINE_STAMP, {
+                    "phase": "tournament",
+                    "status": "started",
+                    "at": old,
+                    "started_at": old,
+                    "source": "live_cycle.py",
+                })
+                write_in_flight(["keep_me"], current="keep_me", remaining=[], batch_size=1)
+                with patch("hedge_fund.web.discovery.generate_universe", return_value=universe):
+                    with patch("hedge_fund.trading.universe.generate_universe", return_value=universe):
+                        s = build_discovery_summary()
+        self.assertTrue(s["stale"])
+        self.assertTrue(s["stuck"])
+        self.assertTrue(s["in_flight"]["stale"])
+        self.assertTrue(s["in_flight"]["active"])
+        self.assertIn("stuck", s["in_flight"]["note"].lower())
+        self.assertIn("stale", s["in_flight"]["note"].lower())
+        self.assertNotIn("idle — last eval", s["in_flight"]["note"])
+        self.assertNotIn("idle — last sweep", s["in_flight"]["note"])
+        self.assertEqual(s["last_tested_at"], "2026-09-07T03:58:24+00:00")
+        self.assertEqual(s["stuck_reason"], s["in_flight"]["note"])
+
+    def test_quiet_evals_with_leftovers_are_cycle_overdue(self):
+        universe = ["keep_me"]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "champions.json").write_text(json.dumps({"champions": [], "synced_until": ""}))
+            (root / "discovery_log.json").write_text(json.dumps([
+                _eval("keep_me", qualified=False, tested_at="2026-09-06T04:00:00+00:00"),
+            ]))
+            with patch.dict(os.environ, {"PAPER_STATE": str(root)}):
+                with patch("hedge_fund.web.discovery.generate_universe", return_value=universe):
+                    with patch("hedge_fund.trading.universe.generate_universe", return_value=universe):
+                        with patch(
+                            "hedge_fund.web.discovery.DISCOVER_RETEST_COOLDOWN_SECONDS",
+                            0,
+                        ):
+                            s = build_discovery_summary()
+        self.assertTrue(s["stuck"])
+        self.assertIn("cycle overdue", s["stuck_reason"])
+        self.assertIn("cycle overdue", s["in_flight"]["note"])
+        self.assertNotIn("idle — last sweep", s["in_flight"]["note"])
 
     def test_in_flight_names_only_when_tournament_stamp_in_progress(self):
         universe = ["keep_me", "flying"]
@@ -123,48 +254,109 @@ class DiscoverySummaryBucketTests(unittest.TestCase):
                 self.assertEqual(no_list["in_flight"]["names"], [])
                 self.assertIn("Name list was not persisted", no_list["in_flight"]["note"])
 
-    def test_tournament_writes_then_clears_in_flight(self):
+    def test_tournament_writes_cycle_budget_then_clears_in_flight(self):
         from scripts.tournament_engine import replenish_and_evaluate
 
         leftovers = [f"cand_{i}" for i in range(5)]
-        dummy_windows = [
-            {
-                "train_pnl": 0.0,
-                "test_pnl": -1.0,
-                "test_trades": 1,
-                "trades": 1,
-                "wins": 0,
-                "sharpe": 0.0,
-                "skipped": False,
-                "failed": False,
-            }
-            for _ in range(3)
-        ]
         seen = []
 
-        def _eval(*_a, **_k):
+        def _on_eval(*_a, **_k):
             seen.append(read_in_flight())
-            return dummy_windows
+            return _dummy_windows()
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with patch.dict(os.environ, {"PAPER_STATE": str(root)}):
-                with (
-                    patch("scripts.tournament_engine.generate_candidate_pool", return_value=leftovers),
-                    patch(
-                        "scripts.tournament_engine._load_qual_history",
-                        return_value={"BTC/USDT": [[0] * 5] * 10, "ETH/USDT": [[0] * 5] * 10},
-                    ),
-                    patch("scripts.tournament_engine._window_slices", return_value=[{}, {}, {}]),
-                    patch("scripts.tournament_engine._benchmark_oos", return_value=(0.0, 0.0)),
-                    patch("scripts.tournament_engine.parse_strategy", return_value=lambda *a, **k: True),
-                    patch("scripts.tournament_engine.evaluate_windows", side_effect=_eval),
-                ):
-                    replenish_and_evaluate()
+                with _tournament_patches(leftovers, _on_eval):
+                    replenish_and_evaluate(max_names=3, cooldown_seconds=0)
                 self.assertIsNone(read_in_flight())
-        self.assertEqual(len(seen), 5)
-        self.assertEqual(seen[0]["names"], leftovers)
-        self.assertEqual(seen[0]["batch_size"], 5)
+        self.assertEqual(len(seen), 3)
+        self.assertEqual(seen[0]["names"], leftovers[:3])
+        self.assertEqual(seen[0]["batch_size"], 3)
+        self.assertEqual(seen[0]["current"], leftovers[0])
+        self.assertEqual(seen[1]["completed"], leftovers[:1])
+        self.assertEqual(seen[1]["remaining"], leftovers[2:3])
+
+    def test_mid_batch_append_visible_before_full_finish(self):
+        from scripts.tournament_engine import replenish_and_evaluate
+
+        leftovers = [f"cand_{i}" for i in range(4)]
+        logs_during = []
+
+        def _on_eval(*_a, **_k):
+            logs_during.append(list(load_discovery_log()))
+            if len(logs_during) >= 3:
+                raise RuntimeError("mid-batch")
+            return _dummy_windows()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch.dict(os.environ, {"PAPER_STATE": str(root)}):
+                with _tournament_patches(leftovers, _on_eval):
+                    with self.assertRaises(RuntimeError):
+                        replenish_and_evaluate(max_names=4, cooldown_seconds=0)
+                log = load_discovery_log()
+                self.assertIsNone(read_in_flight())
+        self.assertEqual(logs_during[0], [])
+        self.assertEqual(len(logs_during[1]), 1)
+        self.assertEqual(logs_during[1][0]["strategy"], leftovers[0])
+        self.assertEqual(len(logs_during[2]), 2)
+        self.assertEqual(len(log), 2)
+        self.assertEqual({r["strategy"] for r in log}, {leftovers[0], leftovers[1]})
+
+    def test_one_cycle_respects_name_budget_and_advances_cursor(self):
+        from scripts.tournament_engine import replenish_and_evaluate
+
+        leftovers = [f"cand_{i}" for i in range(8)]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch.dict(os.environ, {"PAPER_STATE": str(root)}):
+                with _tournament_patches(leftovers, lambda *_a, **_k: _dummy_windows()):
+                    first = replenish_and_evaluate(max_names=2, cooldown_seconds=0)
+                self.assertEqual(first["total_tested_in_batch"], 2)
+                self.assertLessEqual(first["total_tested_in_batch"], DISCOVER_CYCLE_MAX_NAMES)
+                log1 = load_discovery_log()
+                self.assertEqual([r["strategy"] for r in log1], [leftovers[1], leftovers[0]])
+                self.assertEqual(load_cursor().get("next_name"), leftovers[2])
+
+                with _tournament_patches(leftovers, lambda *_a, **_k: _dummy_windows()):
+                    second = replenish_and_evaluate(max_names=2, cooldown_seconds=0)
+                self.assertEqual(second["total_tested_in_batch"], 2)
+                log2 = load_discovery_log()
+                self.assertEqual(len(log2), 4)
+                self.assertEqual({r["strategy"] for r in log2[:2]}, {leftovers[2], leftovers[3]})
+                self.assertEqual(load_cursor().get("next_name"), leftovers[4])
+
+    def test_time_budget_stops_after_elapsed_names(self):
+        from scripts.tournament_engine import replenish_and_evaluate
+
+        leftovers = [f"cand_{i}" for i in range(6)]
+
+        class Clock:
+            def __init__(self):
+                self.t = 0.0
+
+            def monotonic(self):
+                return self.t
+
+        clock = Clock()
+
+        def _on_eval(*_a, **_k):
+            clock.t += 100
+            return _dummy_windows()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch.dict(os.environ, {"PAPER_STATE": str(root)}):
+                with _tournament_patches(leftovers, _on_eval):
+                    with patch("scripts.tournament_engine.time.monotonic", clock.monotonic):
+                        res = replenish_and_evaluate(
+                            max_names=10,
+                            time_budget_seconds=150,
+                            cooldown_seconds=0,
+                        )
+                self.assertEqual(res["total_tested_in_batch"], 2)
+                self.assertEqual(len(load_discovery_log()), 2)
 
 
 class DiscoveryRouteTests(unittest.TestCase):
