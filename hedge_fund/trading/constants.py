@@ -46,9 +46,11 @@ TRADE_EVALUATION_LIMIT = 80
 # run_isolated and the web/API keep the rest of the tick. Prefer one
 # eval over raising names if a single 5m walk-forward is already heavy.
 # MIN_BACKTEST_TRADES = 30 remains the OOS trade floor, not a sample size.
+# A non-qualified discovery_log eval parks that name forever — there is
+# no DISCOVER_RETEST_COOLDOWN re-eligibility timer. Never-tested leftovers
+# still drain 24/7 under the cycle budget.
 DISCOVER_CYCLE_MAX_NAMES = 1
 DISCOVER_CYCLE_TIME_BUDGET_SECONDS = 90  # one eval; leave most of 300s for live + API
-DISCOVER_RETEST_COOLDOWN_SECONDS = 24 * 3600  # skip recent rejects; prefer never-tested
 DISCOVERY_LOG_CAP = 1000  # newest-first rows; unique names are a separate count
 # No new evals for this long, with leftover work remaining → stuck/overdue copy.
 DISCOVERY_QUIET_SECONDS = 2 * 3600

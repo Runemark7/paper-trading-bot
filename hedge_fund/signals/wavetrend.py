@@ -146,17 +146,41 @@ def wavetrend_series(
     return wt1, wt2
 
 
+_WT_CACHE_MAX = 32
+_wt_series_cache: dict[tuple[int, int, int, int], tuple[list[float], list[float]]] = {}
+
+
+def clear_wavetrend_cache() -> None:
+    _wt_series_cache.clear()
+
+
+def _cached_wavetrend_series(
+    highs: list[float],
+    lows: list[float],
+    closes: list[float],
+) -> tuple[list[float], list[float]]:
+    """Causal WT1/WT2 for the whole series. Bar i ignores i+1… (prefix-stable)."""
+    key = (id(highs), id(lows), id(closes), len(closes))
+    hit = _wt_series_cache.get(key)
+    if hit is None:
+        if len(_wt_series_cache) >= _WT_CACHE_MAX:
+            _wt_series_cache.clear()
+        hit = wavetrend_series(highs, lows, closes)
+        _wt_series_cache[key] = hit
+    return hit
+
+
 def wavetrend_at(
     highs: list[float],
     lows: list[float],
     closes: list[float],
     i: int | None = None,
 ) -> tuple[float, float]:
-    """(WT1, WT2) at closed bar i. Uses only bars ``[:i+1]``."""
+    """(WT1, WT2) at closed bar i. Causal: bar i ignores i+1…"""
     i = _idx(closes, i)
     if i < 0:
         return float("nan"), float("nan")
-    wt1, wt2 = wavetrend_series(highs[: i + 1], lows[: i + 1], closes[: i + 1])
+    wt1, wt2 = _cached_wavetrend_series(highs, lows, closes)
     return wt1[i], wt2[i]
 
 
@@ -189,7 +213,7 @@ def wt_cross_up_os(
     """Green-dot long: WT1 crosses above WT2 on bar close while WT2 is oversold."""
     highs, lows = require_hlc(closes, highs, lows)
     i = _idx(closes, i)
-    wt1, wt2 = wavetrend_series(highs[: i + 1], lows[: i + 1], closes[: i + 1])
+    wt1, wt2 = _cached_wavetrend_series(highs, lows, closes)
     if not _cross_up(wt1, wt2, i):
         return False
     return not math.isnan(wt2[i]) and wt2[i] <= OS_LEVEL
@@ -204,7 +228,7 @@ def wt_below_os(
     """Filter: WT2 is still oversold (no cross required)."""
     highs, lows = require_hlc(closes, highs, lows)
     i = _idx(closes, i)
-    _wt1, wt2 = wavetrend_series(highs[: i + 1], lows[: i + 1], closes[: i + 1])
+    _wt1, wt2 = _cached_wavetrend_series(highs, lows, closes)
     return not math.isnan(wt2[i]) and wt2[i] <= OS_LEVEL
 
 
@@ -217,7 +241,7 @@ def wt_cross_down_ob(
     """Short-side red-dot family. Parsed for tests; not a universe long."""
     highs, lows = require_hlc(closes, highs, lows)
     i = _idx(closes, i)
-    wt1, wt2 = wavetrend_series(highs[: i + 1], lows[: i + 1], closes[: i + 1])
+    wt1, wt2 = _cached_wavetrend_series(highs, lows, closes)
     if not _cross_down(wt1, wt2, i):
         return False
     return not math.isnan(wt2[i]) and wt2[i] >= OB_LEVEL

@@ -21,6 +21,10 @@ remaining untested names across 5m cycles under a per-cycle time/name
 budget (no 30-name sample). Amendment 2026-09-07: incremental discovery
 log, rotating leftover cursor, honest newest `last_tested_at`. Same-date
 addendum: 1 name / ~90s per cycle after a prod timeout (not 4 / 150s).
+Amendment 2026-09-10: a discovery fail parks that name forever (no 24h
+retest cooldown). Never-tested leftovers still drain 24/7. Same date:
+one discovery eval is cheaper (EMA/WaveTrend series cache, trim 5m
+history to the window span) without changing OOS gates or windows.
 Still paper.
 
 Built on **[ai-hedge-fund](https://github.com/virattt/ai-hedge-fund)** (MIT, © Virat Singh)

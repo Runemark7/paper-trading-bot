@@ -2,6 +2,7 @@
 
 Last-known files, not a job runner. Tournament appends one evaluation to
 ``discovery_log.json`` as soon as that name finishes (newest-first, capped).
+A non-qualified eval parks that name forever — no cooldown retest.
 ``discovery_in_flight.json`` lists this cycle's budget names and shrinks as
 they complete. ``discovery_cursor.json`` remembers where the leftover drain
 left off so the next live_cycle continues fairly.
@@ -15,7 +16,6 @@ from pathlib import Path
 from hedge_fund.paths import state_root
 from hedge_fund.trading.constants import (
     DISCOVER_CYCLE_MAX_NAMES,
-    DISCOVER_RETEST_COOLDOWN_SECONDS,
     DISCOVERY_LOG_CAP,
 )
 
@@ -57,7 +57,8 @@ def load_discovery_log() -> list[dict]:
     if not path.exists():
         return []
     try:
-        data = json.loads(path.read_text())
+        with path.open() as fh:
+            data = json.load(fh)
     except (OSError, ValueError):
         return []
     return data if isinstance(data, list) else []
@@ -123,7 +124,7 @@ def append_discovery_evaluations(eval_records: list[dict], *, cap: int = DISCOVE
     log = load_discovery_log()
     log = list(eval_records) + log
     log = log[:cap]
-    path.write_text(json.dumps(log, indent=2))
+    path.write_text(json.dumps(log, separators=(",", ":")))
     return log
 
 
@@ -213,38 +214,57 @@ def save_cursor(next_name: str | None, **extra) -> Path:
     return path
 
 
+def failed_discovery_names(log: list[dict] | None = None) -> set[str]:
+    """Names with any non-qualified discovery evaluation.
+
+    Fail once: these names are permanently ineligible for another
+    evaluate_windows / discovery run. Existing discovery_log fails count.
+    """
+    if log is None:
+        log = load_discovery_log()
+    failed: set[str] = set()
+    for row in log:
+        if not isinstance(row, dict):
+            continue
+        name = row.get("strategy")
+        if name and not row.get("qualified"):
+            failed.add(name)
+    return failed
+
+
+def tested_discovery_names(log: list[dict] | None = None) -> set[str]:
+    """Strategy names that already appear in discovery_log (any outcome)."""
+    if log is None:
+        log = load_discovery_log()
+    names: set[str] = set()
+    for row in log:
+        if not isinstance(row, dict):
+            continue
+        name = row.get("strategy")
+        if name:
+            names.add(name)
+    return names
+
+
 def prioritize_leftovers(
     leftovers: list[str],
     log: list[dict] | None = None,
     *,
     now: datetime | None = None,
-    cooldown_seconds: int = DISCOVER_RETEST_COOLDOWN_SECONDS,
+    cooldown_seconds: int | None = None,
 ) -> list[str]:
-    """Never-tested first (stable leftover order), then oldest tested past cooldown.
+    """Never-tested leftovers only (stable leftover order).
 
-    Names tested inside the cooldown are skipped so we do not thrash the same
-    rejects. This is not a random sample and does not drop the rest forever.
+    A name with any non-qualified discovery_log row is parked forever.
+    Already-tested names are not re-queued. ``cooldown_seconds`` is ignored:
+    fails are not re-eligible after a timer. ``now`` is unused (call-site
+    compat). This is not a random sample.
     """
+    _ = (now, cooldown_seconds)
     if log is None:
         log = load_discovery_log()
-    if now is None:
-        now = datetime.now(timezone.utc)
-    latest = {r["strategy"]: r for r in latest_eval_per_strategy(log) if r.get("strategy")}
-    never: list[str] = []
-    cooled: list[tuple[datetime, str]] = []
-    for name in leftovers:
-        row = latest.get(name)
-        if not row:
-            never.append(name)
-            continue
-        ts = parse_tested_at(row.get("tested_at") if isinstance(row.get("tested_at"), str) else None)
-        if ts is None:
-            never.append(name)
-            continue
-        if (now - ts).total_seconds() >= cooldown_seconds:
-            cooled.append((ts, name))
-    cooled.sort(key=lambda item: item[0])
-    return never + [name for _, name in cooled]
+    blocked = tested_discovery_names(log) | failed_discovery_names(log)
+    return [name for name in leftovers if name not in blocked]
 
 
 def rotate_from_cursor(names: list[str], cursor_name: str | None) -> list[str]:
@@ -262,7 +282,7 @@ def select_cycle_batch(
     log: list[dict] | None = None,
     *,
     max_names: int = DISCOVER_CYCLE_MAX_NAMES,
-    cooldown_seconds: int = DISCOVER_RETEST_COOLDOWN_SECONDS,
+    cooldown_seconds: int | None = None,
     now: datetime | None = None,
     cursor_name: str | None = None,
 ) -> tuple[list[str], list[str]]:

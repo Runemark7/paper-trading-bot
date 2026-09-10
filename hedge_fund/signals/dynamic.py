@@ -23,6 +23,31 @@ Predicate = Callable[..., bool]
 # Indicator calculations on a closes array up to index i
 # ---------------------------------------------------------------------------
 
+# Per-bar EMA used to recompute 0..i from the SMA seed every call (O(i)).
+# Qualification walks thousands of bars; cache the causal series (O(n) once).
+_EMA_CACHE_MAX = 48
+_ema_series_cache: dict[tuple[int, int, int], list[float]] = {}
+
+
+def clear_ema_cache() -> None:
+    _ema_series_cache.clear()
+
+
+def _ema_series(closes: list[float], period: int) -> list[float]:
+    """SMA-seeded EMA for every bar. Same recurrence as ``ema`` at each i."""
+    n = len(closes)
+    out = [float("nan")] * n
+    if period <= 0 or n < period:
+        return out
+    k = 2.0 / (period + 1)
+    val = sum(closes[:period]) / period
+    out[period - 1] = val
+    for idx in range(period, n):
+        val = closes[idx] * k + val * (1.0 - k)
+        out[idx] = val
+    return out
+
+
 def sma(closes: list[float], period: int, i: int | None = None) -> float:
     i = len(closes) - 1 if i is None else i
     if i < period - 1 or period <= 0:
@@ -34,11 +59,15 @@ def ema(closes: list[float], period: int, i: int | None = None) -> float:
     i = len(closes) - 1 if i is None else i
     if i < period - 1 or period <= 0:
         return float("nan")
-    k = 2.0 / (period + 1)
-    val = sum(closes[:period]) / period
-    for idx in range(period, i + 1):
-        val = closes[idx] * k + val * (1.0 - k)
-    return val
+    n = len(closes)
+    key = (id(closes), period, n)
+    series = _ema_series_cache.get(key)
+    if series is None or len(series) != n:
+        if len(_ema_series_cache) >= _EMA_CACHE_MAX:
+            _ema_series_cache.clear()
+        series = _ema_series(closes, period)
+        _ema_series_cache[key] = series
+    return series[i]
 
 
 def rsi(closes: list[float], period: int = 14, i: int | None = None) -> float:

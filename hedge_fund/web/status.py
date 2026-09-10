@@ -239,6 +239,7 @@ def _discovery_block(root: Path) -> dict:
             "Discovery appends discovery_log.json after each name. "
             "log_count is raw rows; unique_tested is latest-eval-per-name. "
             "GET /api/discovery/summary has tested / in-flight / leftover buckets. "
+            "Rejected names are parked forever. "
             "A quiet log is silence, not a running job."
         ),
     }

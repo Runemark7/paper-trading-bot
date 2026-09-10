@@ -9,8 +9,9 @@
    graduated is admitted. Universe size (~40–120) is the combinatorial bound.
 4. Graduation: TRADE_EVALUATION_LIMIT (80) closed paper trades vs B&H.
 5. Each live_cycle invocation evaluates a leftover *slice* (max names +
-   wall-clock budget, rotating cursor, 24h retest cooldown) and appends
-   discovery_log.json after each name — not after the full leftover list.
+   wall-clock budget, rotating cursor) and appends discovery_log.json
+   after each name — not after the full leftover list. A non-qualified
+   eval parks that name forever (no 24h retest cooldown).
 
 Qualification uses hedge_fund.backtest.strategies with rm_v1 stops/fees,
 not fast_quant or fee-free SimBroker.
@@ -39,7 +40,6 @@ from hedge_fund.trading.discovery import (
 from hedge_fund.trading.constants import (
     DISCOVER_CYCLE_MAX_NAMES,
     DISCOVER_CYCLE_TIME_BUDGET_SECONDS,
-    DISCOVER_RETEST_COOLDOWN_SECONDS,
     MIN_BACKTEST_SHARPE,
     MIN_BACKTEST_TRADES,
     PAPER_START_CASH,
@@ -136,21 +136,44 @@ def qualification_decision(
     }
 
 
-def _load_qual_history() -> dict | None:
-    """5m tape only. A 4h-only state dir must not admit anyone."""
+def _load_qual_history(keep_bars: int | None = None) -> dict | None:
+    """5m tape only. A 4h-only state dir must not admit anyone.
+
+    Qualification windows only need the last ``window_size * n_windows`` bars
+    (default 3×25920). Extra history and unused symbols (SOL/XRP) are dropped
+    immediately after parse so peak RSS is not the full fetch file.
+    """
     path = _hist_qual()
     if not path.exists():
         return None
+    keep = QUAL_WINDOW_BARS * QUAL_N_WINDOWS if keep_bars is None else keep_bars
     try:
-        data = json.loads(path.read_text())
+        with path.open() as fh:
+            data = json.load(fh)
     except Exception:
+        return None
+    if not isinstance(data, dict):
         return None
     out = {}
     for sym in QUAL_SYMBOLS:
-        rows = data.get(sym)
-        if rows:
-            out[sym] = rows
+        rows = data.pop(sym, None)
+        if not rows:
+            continue
+        if keep > 0 and len(rows) > keep:
+            rows = rows[-keep:]
+        out[sym] = rows
+    data.clear()
     return out or None
+
+
+def _prepare_sample(w_sample: dict) -> dict:
+    """Extract OHLC once per window; train/test share the arrays + a cut index."""
+    prepared = {}
+    for s, rows in w_sample.items():
+        closes, highs, lows = _ohlc(rows)
+        cut = int(len(rows) * 0.70)
+        prepared[s] = (closes, highs, lows, cut)
+    return prepared
 
 
 def _window_slices(data: dict, window_size: int, n_windows: int, stride: int) -> list[dict]:
@@ -165,7 +188,7 @@ def _window_slices(data: dict, window_size: int, n_windows: int, stride: int) ->
         for s, rows in data.items():
             chunk = rows[start_idx:end_idx]
             w_sample[s] = downsample(chunk, stride) if stride > 1 else chunk
-        slices.append(w_sample)
+        slices.append(_prepare_sample(w_sample))
     return slices
 
 
@@ -173,14 +196,27 @@ def _ohlc(rows: list) -> tuple[list[float], list[float], list[float]]:
     return [r[4] for r in rows], [r[2] for r in rows], [r[3] for r in rows]
 
 
+def _split_tape(tape, train: bool) -> tuple[list[float], list[float], list[float]] | None:
+    """Train or test OHLC from a prepared tape or raw row list."""
+    if isinstance(tape, tuple) and len(tape) == 4:
+        closes, highs, lows, cut = tape
+    elif isinstance(tape, list):
+        if not tape:
+            return None
+        closes, highs, lows = _ohlc(tape)
+        cut = int(len(tape) * 0.70)
+    else:
+        return None
+    if train:
+        return closes[:cut], highs[:cut], lows[:cut]
+    return closes[cut:], highs[cut:], lows[cut:]
+
+
 def _eval_slice(pred, sample: dict, train: bool) -> list:
     results = []
-    for _sym, rows in sample.items():
-        closes, highs, lows = _ohlc(rows)
-        n = len(rows)
-        cut = int(n * 0.70)
-        series = (closes[:cut], highs[:cut], lows[:cut]) if train else (closes[cut:], highs[cut:], lows[cut:])
-        if len(series[0]) < 30:
+    for _sym, tape in sample.items():
+        series = _split_tape(tape, train)
+        if series is None or len(series[0]) < 30:
             continue
         try:
             results.append(bs.backtest(series[0], series[1], series[2], pred))
@@ -191,9 +227,11 @@ def _eval_slice(pred, sample: dict, train: bool) -> list:
 
 def _test_closes_by_symbol(sample: dict) -> dict[str, list[float]]:
     out = {}
-    for sym, rows in sample.items():
-        cut = int(len(rows) * 0.70)
-        out[sym] = [r[4] for r in rows[cut:]]
+    for sym, tape in sample.items():
+        series = _split_tape(tape, train=False)
+        if series is None:
+            continue
+        out[sym] = series[0]
     return out
 
 
@@ -284,17 +322,19 @@ def discover_and_qualify(
 ) -> tuple[list[dict], list[dict]]:
     """Walk-forward qualification on 5m BTC/ETH. 4h-only history does not admit.
 
-    Each invocation evaluates a leftover slice: never-tested first, then oldest
-    tested past the retest cooldown, rotating from the persisted cursor. Stops
-    after ``max_names`` or ``time_budget_seconds`` so live_cycle can still run
+    Each invocation evaluates a leftover slice of never-tested names, rotating
+    from the persisted cursor. Names with any non-qualified discovery_log row
+    are parked forever (``cooldown_seconds`` is ignored). Stops after
+    ``max_names`` or ``time_budget_seconds`` so live_cycle can still run
     ``run_isolated`` in the same 300s tick. ``batch_size`` is a leftover-prefix
     test hook, not a random sample of 30.
     """
-    data = _load_qual_history()
+    data = _load_qual_history(keep_bars=window_size * n_windows)
     if not data:
         return [], []
 
     window_slices = _window_slices(data, window_size, n_windows, stride)
+    del data
     if len(window_slices) != n_windows:
         return [], []
 
@@ -312,17 +352,12 @@ def discover_and_qualify(
         if time_budget_seconds is None
         else time_budget_seconds
     )
-    cool = (
-        DISCOVER_RETEST_COOLDOWN_SECONDS
-        if cooldown_seconds is None
-        else cooldown_seconds
-    )
     cursor = load_cursor()
     planned, rotated = select_cycle_batch(
         leftovers,
         load_discovery_log(),
         max_names=cap,
-        cooldown_seconds=cool,
+        cooldown_seconds=cooldown_seconds,
         now=now,
         cursor_name=cursor.get("next_name"),
     )
