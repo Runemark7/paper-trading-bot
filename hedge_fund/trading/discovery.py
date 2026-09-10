@@ -57,7 +57,8 @@ def load_discovery_log() -> list[dict]:
     if not path.exists():
         return []
     try:
-        data = json.loads(path.read_text())
+        with path.open() as fh:
+            data = json.load(fh)
     except (OSError, ValueError):
         return []
     return data if isinstance(data, list) else []
@@ -123,7 +124,7 @@ def append_discovery_evaluations(eval_records: list[dict], *, cap: int = DISCOVE
     log = load_discovery_log()
     log = list(eval_records) + log
     log = log[:cap]
-    path.write_text(json.dumps(log, indent=2))
+    path.write_text(json.dumps(log, separators=(",", ":")))
     return log
 
 

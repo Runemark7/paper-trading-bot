@@ -26,6 +26,19 @@ import math
 import statistics
 from dataclasses import dataclass, field
 
+from hedge_fund.risk.managed import RiskManager
+from hedge_fund.risk.rm_v1 import (
+    ATR_PERIOD,
+    FEE_SLIPPAGE,
+    FEE_TAKER,
+    MAX_LOTS_PER_SYMBOL,
+    RISK_FRAC,
+    TAKE_PROFIT_RR,
+    atr_stop_price,
+)
+from hedge_fund.signals.dynamic import clear_ema_cache, eval_predicate, parse_strategy
+from hedge_fund.signals.wavetrend import clear_wavetrend_cache
+
 
 # ---------------------------------------------------------------------------
 # indicator helpers
@@ -205,18 +218,6 @@ def backtest(closes, highs, lows, strategy, start_cash=10_000.0,
     and 5% open-risk cap. ``atr_mult`` is ignored: qualification must not
     run a second engine. Confidence is 1.0 (no live posterior on history).
     """
-    from hedge_fund.risk.managed import RiskManager
-    from hedge_fund.risk.rm_v1 import (
-        ATR_PERIOD,
-        FEE_SLIPPAGE,
-        FEE_TAKER,
-        MAX_LOTS_PER_SYMBOL,
-        RISK_FRAC,
-        TAKE_PROFIT_RR,
-        atr_stop_price,
-    )
-    from hedge_fund.signals.dynamic import eval_predicate, parse_strategy
-
     taker_fee = FEE_TAKER if taker_fee is None else taker_fee
     slippage = FEE_SLIPPAGE if slippage is None else slippage
     risk_frac = RISK_FRAC if risk_frac is None else risk_frac
@@ -231,8 +232,9 @@ def backtest(closes, highs, lows, strategy, start_cash=10_000.0,
     fees = 0.0
     pnl_pcts = []
     lots: list[dict] = []  # {qty, entry, stop}
-    pred = parse_strategy(strategy)
+    pred = strategy if callable(strategy) and not isinstance(strategy, str) else parse_strategy(strategy)
     risk = RiskManager(risk_frac=risk_frac, initial_equity=start_cash)
+    atr_vals = [atr(highs, lows, closes, ATR_PERIOD, i) for i in range(n)]
 
     warmup = max(long_stack[2], momentum_lookback, 14, 20) + 2
 
@@ -256,83 +258,87 @@ def backtest(closes, highs, lows, strategy, start_cash=10_000.0,
         dd = (peak - eq) / peak if peak > 0 else 0.0
         max_dd = max(max_dd, dd)
 
-    for i in range(warmup, n):
-        cur = closes[i]
-        take = eval_predicate(pred, closes, i, highs=highs, lows=lows)
-        high_i = highs[i] if i < len(highs) else cur
-        low_i = lows[i] if i < len(lows) else cur
+    try:
+        for i in range(warmup, n):
+            cur = closes[i]
+            take = eval_predicate(pred, closes, i, highs=highs, lows=lows)
+            high_i = highs[i] if i < len(highs) else cur
+            low_i = lows[i] if i < len(lows) else cur
 
-        still_open = []
-        exited_this_bar = False
-        for lot in lots:
-            risk_px = lot["entry"] - lot["stop"]
-            tp = lot["entry"] + rr * risk_px
-            exit_px = None
-            hit = ""
-            if low_i <= lot["stop"] and high_i >= tp:
-                exit_px = lot["stop"] * (1 - slippage)
-                hit = "stop"
-            elif low_i <= lot["stop"]:
-                exit_px = lot["stop"] * (1 - slippage)
-                hit = "stop"
-            elif high_i >= tp:
-                exit_px = tp * (1 - slippage)
-                hit = "tp"
-            elif not take:
-                exit_px = cur * (1 - slippage)
-                hit = "signal_exit"
-            if exit_px is not None:
-                close_lot(lot, exit_px, hit)
-                exited_this_bar = True
-            else:
-                still_open.append(lot)
-        lots = still_open
+            still_open = []
+            exited_this_bar = False
+            for lot in lots:
+                risk_px = lot["entry"] - lot["stop"]
+                tp = lot["entry"] + rr * risk_px
+                exit_px = None
+                hit = ""
+                if low_i <= lot["stop"] and high_i >= tp:
+                    exit_px = lot["stop"] * (1 - slippage)
+                    hit = "stop"
+                elif low_i <= lot["stop"]:
+                    exit_px = lot["stop"] * (1 - slippage)
+                    hit = "stop"
+                elif high_i >= tp:
+                    exit_px = tp * (1 - slippage)
+                    hit = "tp"
+                elif not take:
+                    exit_px = cur * (1 - slippage)
+                    hit = "signal_exit"
+                if exit_px is not None:
+                    close_lot(lot, exit_px, hit)
+                    exited_this_bar = True
+                else:
+                    still_open.append(lot)
+            lots = still_open
 
-        eq = mark_equity(cur)
-        risk.update_equity(eq)
-        if eq > peak:
-            peak = eq
-        dd = (peak - eq) / peak if peak > 0 else 0.0
-        max_dd = max(max_dd, dd)
+            eq = mark_equity(cur)
+            risk.update_equity(eq)
+            if eq > peak:
+                peak = eq
+            dd = (peak - eq) / peak if peak > 0 else 0.0
+            max_dd = max(max_dd, dd)
 
-        if exited_this_bar and not lots:
-            continue  # just flattened; no re-entry this bar (same as prior engine)
-        if not take or risk.is_halted():
-            continue
-        if len(lots) >= MAX_LOTS_PER_SYMBOL:
-            continue
+            if exited_this_bar and not lots:
+                continue  # just flattened; no re-entry this bar (same as prior engine)
+            if not take or risk.is_halted():
+                continue
+            if len(lots) >= MAX_LOTS_PER_SYMBOL:
+                continue
+            if lots:
+                if any((cur - lot["entry"]) * lot["qty"] <= 0 for lot in lots):
+                    continue  # pyramid only if existing lots are in profit
+
+            a = atr_vals[i]
+            stop = atr_stop_price(cur, a)
+            if cur <= stop:
+                continue
+            open_pos = [(lot["entry"], lot["stop"], lot["qty"]) for lot in lots]
+            rd = risk.size_position(eq, cur, stop, open_pos, confidence=1.0)
+            if not rd.approved or rd.size <= 0:
+                continue
+            qty = rd.size
+            entry_px = cur * (1 + slippage)
+            fee = entry_px * qty * taker_fee
+            cash -= entry_px * qty + fee
+            fees += fee
+            lots.append({"qty": qty, "entry": entry_px, "stop": stop})
+
         if lots:
-            if any((cur - lot["entry"]) * lot["qty"] <= 0 for lot in lots):
-                continue  # pyramid only if existing lots are in profit
+            exit_px = closes[-1] * (1 - slippage)
+            for lot in list(lots):
+                close_lot(lot, exit_px, "eod")
+            lots = []
 
-        a = atr(highs, lows, closes, ATR_PERIOD, i)
-        stop = atr_stop_price(cur, a)
-        if cur <= stop:
-            continue
-        open_pos = [(lot["entry"], lot["stop"], lot["qty"]) for lot in lots]
-        rd = risk.size_position(eq, cur, stop, open_pos, confidence=1.0)
-        if not rd.approved or rd.size <= 0:
-            continue
-        qty = rd.size
-        entry_px = cur * (1 + slippage)
-        fee = entry_px * qty * taker_fee
-        cash -= entry_px * qty + fee
-        fees += fee
-        lots.append({"qty": qty, "entry": entry_px, "stop": stop})
-
-    if lots:
-        exit_px = closes[-1] * (1 - slippage)
-        for lot in list(lots):
-            close_lot(lot, exit_px, "eod")
-        lots = []
-
-    return BacktestResult(
-        strategy=strategy if isinstance(strategy, str) else getattr(strategy, "__name__", ""),
-        trades=trades, wins=wins,
-        win_rate=(wins / trades) if trades else 0.0,
-        total_pnl=cash - start_cash, final_equity=cash,
-        sharpe=_sharpe(pnl_pcts), max_drawdown=max_dd, fees_paid=fees,
-    )
+        return BacktestResult(
+            strategy=strategy if isinstance(strategy, str) else getattr(strategy, "__name__", ""),
+            trades=trades, wins=wins,
+            win_rate=(wins / trades) if trades else 0.0,
+            total_pnl=cash - start_cash, final_equity=cash,
+            sharpe=_sharpe(pnl_pcts), max_drawdown=max_dd, fees_paid=fees,
+        )
+    finally:
+        clear_ema_cache()
+        clear_wavetrend_cache()
 
 
 # mean reversion helper (buy low vol, dip relative to long vol)
