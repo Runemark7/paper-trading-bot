@@ -11,11 +11,11 @@ from datetime import datetime, timezone
 
 from hedge_fund.trading.champions import load_graduated, load_pool
 from hedge_fund.trading.constants import (
-    DISCOVER_RETEST_COOLDOWN_SECONDS,
     DISCOVERY_QUIET_SECONDS,
 )
 from hedge_fund.trading.discovery import (
     evals_on_utc_date,
+    failed_discovery_names,
     latest_eval_per_strategy,
     load_discovery_log,
     newest_eval,
@@ -77,8 +77,9 @@ def build_discovery_summary() -> dict:
     tested_fail = len(tested) - tested_pass
 
     leftovers = untested_candidates(blocked, universe)
-    queued = [n for n in leftovers if n not in tested_names]
-    retest_queue = [n for n in leftovers if n in tested_names]
+    failed_names = failed_discovery_names(log)
+    queued = [n for n in leftovers if n not in tested_names and n not in failed_names]
+    rejected_parked = [n for n in leftovers if n in failed_names]
     eligible = prioritize_leftovers(leftovers, log, now=now)
 
     newest = newest_eval(log) or newest_eval(tested)
@@ -104,7 +105,7 @@ def build_discovery_summary() -> dict:
         age_h = None if last_eval_age_seconds is None else int(last_eval_age_seconds // 3600)
         stuck_reason = (
             "discovery stuck / cycle overdue — "
-            f"no new evaluations for {age_h}h while leftover names remain."
+            f"no new evaluations for {age_h}h while never-tested leftover names remain."
         )
     else:
         stuck_reason = None
@@ -197,7 +198,7 @@ def build_discovery_summary() -> dict:
             "log_rows": len(log),
             "untested": len(queued),
             "leftovers": len(leftovers),
-            "retest_queue": len(retest_queue),
+            "rejected_parked": len(rejected_parked),
             "eligible": len(eligible),
             "champions": len(champs),
             "graduated": len(grads),
@@ -207,12 +208,12 @@ def build_discovery_summary() -> dict:
         "last_tested_at": last_tested_at,
         "last_strategy": last_strategy,
         "last_eval_age_seconds": last_eval_age_seconds,
-        "retest_cooldown_seconds": DISCOVER_RETEST_COOLDOWN_SECONDS,
         "note": (
             "Last-known buckets from discovery_log.json, champions.json, "
             "graduated.json, and (when the tournament stamp is started) "
             "discovery_in_flight.json. counts.tested is unique strategy names "
             "(latest eval per name), not the number of log rows. "
-            "A stamp is not process liveness."
+            "Already tested · rejected is parked forever — not a cooldown "
+            "retest queue. A stamp is not process liveness."
         ),
     }

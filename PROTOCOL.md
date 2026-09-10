@@ -89,6 +89,7 @@ over a meaningful sample, AND calibration is demonstrated independently of P&L.
 | 2026-09-05 | Night window revoked. Decision cycle runs every 5 minutes around the clock. Discovery drains remaining untested universe names each sweep (no 30-name sample). `GET /api/discovery/summary` is last-known tested / in-flight / leftover-untested (not a live job). OOS gates unchanged. Paper only. No cull of champions. No new strategies. |
 | 2026-09-07 | Discovery is budgeted per 5m cycle (time + max names, rotating cursor, 24h retest cooldown) so a leftover drain cannot wedge `run_isolated`. Each finished name is appended to `discovery_log.json` immediately. Summary `last_tested_at` is the newest eval; unique tested ≠ log rows; stale tournament stamp is stuck, not idle. OOS gates unchanged. Paper only. No cull of champions. |
 | 2026-09-07 | Addendum: per-cycle discovery slice scaled down after prod timeout. Live default is `DISCOVER_CYCLE_MAX_NAMES = 1` and `DISCOVER_CYCLE_TIME_BUDGET_SECONDS = 90` so `run_isolated` and the web/API stay healthy inside the 300s cycle. Leftover drain still 24/7 across cycles. OOS gates unchanged. Paper only. No cull of champions. |
+| 2026-09-10 | A discovery evaluation that does not qualify parks that name forever. No 24h retest cooldown re-walk of rejects. Never-tested leftovers still drain 24/7 under the 1 name / ~90s cycle budget. Existing `discovery_log.json` fails are permanent. OOS gates unchanged. Paper only. No cull of champions. |
 
 ### Amendment 2026-08-30 — what actually runs
 
@@ -317,5 +318,20 @@ The leftover universe still drains 24/7 across cycles. `MIN_BACKTEST_TRADES = 30
 **Superseded on this date** (prior text kept above for history):
 
 - 2026-09-07 "Per-cycle budget" insofar as it set `DISCOVER_CYCLE_MAX_NAMES` (4) and `DISCOVER_CYCLE_TIME_BUDGET_SECONDS` (150s, ~2.5 minutes).
+
+### Amendment 2026-09-10 — fail once, never retest
+
+This amendment does not rewrite original §§ 1–8 or prior amendments. Qual/live remain 5m, risk policy remains `rm_v1`, OOS gates are unchanged (30 OOS trades, all windows ≥ 0, beat B&H + `sma_stack`, Sharpe ≥ 0.30, paper 80 vs B&H). Cycle remains 24/7 (`CYCLE_INTERVAL_SECONDS = 300`); there is no 07–21 window. No live-slot cap. **Still paper.** `GRADUATED_PAPER` meaning is unchanged. Do not cull existing champions. No new strategies. The homemade `DISCOVER_BATCH_SIZE = 30` random sample stays deleted — this is not "shuffle 30 and ignore the rest." Per-cycle budget (1 name / ~90s), incremental log, rotating cursor, and stuck/overdue UX from the 2026-09-07 amendment stay. Passes still admit to champions.
+
+**Why.** After the 2026-09-07 24h retest cooldown, a leftover reject stayed a leftover. `prioritize_leftovers` put it back in the drain queue once `DISCOVER_RETEST_COOLDOWN_SECONDS` (24h) elapsed. Prod wrote ~481 `discovery_log.json` rows for ~60 unique names. Discovery reads `crypto_history_5m.json` (does not fetch Binance per eval). Per-cycle budget remains 1 name / ~90s. OOS gates unchanged. Retesting rejects wasted the 24/7 drain.
+
+**Fail once.** A name whose latest or any prior discovery evaluation did not qualify is permanently ineligible for another `evaluate_windows` / discovery run. Cycle-batch selection excludes any strategy that already has a non-qualified row in `discovery_log.json`. Existing prod fails are parked. `DISCOVER_RETEST_COOLDOWN_SECONDS` is deleted — it is not a re-eligibility timer.
+
+**Never-tested leftovers still drain** 24/7 under the existing cycle budget (`DISCOVER_CYCLE_MAX_NAMES` = 1, `DISCOVER_CYCLE_TIME_BUDGET_SECONDS` = 90, rotating cursor, incremental log). Champions, graduated names, and near-duplicates of blocked names are still skipped. Already tested · rejected on `GET /api/discovery/summary` means parked forever, not "will come back after cooldown." There is no retest-queue / cooldown-as-re-eligibility semantic for fails.
+
+**Superseded on this date** (prior text kept above for history):
+
+- 2026-09-07 "Prefer never-tested leftovers, then oldest tested. Names evaluated in the last `DISCOVER_RETEST_COOLDOWN_SECONDS` (24h) are skipped so we do not only thrash the same rejects." insofar as cooled rejects re-entered the drain.
+- 2026-09-07 addendum insofar as "24h retest cooldown … stay" kept cooldown as re-eligibility for fails.
 
 

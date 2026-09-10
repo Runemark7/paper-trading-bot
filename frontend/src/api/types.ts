@@ -183,7 +183,7 @@ export interface DiscoveryCounts {
   log_rows?: number;
   untested: number;
   leftovers?: number;
-  retest_queue?: number;
+  rejected_parked?: number;
   eligible?: number;
   champions: number;
   graduated: number;
@@ -208,7 +208,6 @@ export interface DiscoverySummary {
   last_tested_at: string | null;
   last_strategy: string | null;
   last_eval_age_seconds?: number | null;
-  retest_cooldown_seconds?: number;
   note: string;
 }
 

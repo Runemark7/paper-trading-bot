@@ -65,6 +65,7 @@ export default function DiscoveryBuckets() {
         job. Champions and graduated names stay in their sections above — they are
         not leftover untested. Stamp in-flight is not process liveness. Unique
         tested is latest-eval-per-name, not how many log rows were ever written.
+        Already tested · rejected is parked forever — fail once, never retested.
       </p>
 
       {q.isError && (
@@ -91,8 +92,8 @@ export default function DiscoveryBuckets() {
           {logRows != null ? ` · ${logRows} log rows` : ""}
         </Badge>
         <Badge tone="neutral">evals today {counts?.evals_today ?? "…"}</Badge>
-        {(counts?.retest_queue ?? 0) > 0 ? (
-          <Badge tone="wait">retest queue {counts?.retest_queue}</Badge>
+        {(counts?.rejected_parked ?? counts?.tested_fail ?? 0) > 0 ? (
+          <Badge tone="neg">parked forever {counts?.rejected_parked ?? counts?.tested_fail}</Badge>
         ) : null}
       </div>
 
@@ -189,6 +190,10 @@ export default function DiscoveryBuckets() {
             ))}
           </div>
         </div>
+        <p className="text-xs text-white/45 mb-2">
+          Already tested · rejected means parked forever (fail once). Those names
+          are not retested and do not return after a cooldown.
+        </p>
 
         {!tested.length ? (
           q.isError ? (
@@ -269,9 +274,11 @@ export default function DiscoveryBuckets() {
           <Empty>
             No never-tested leftover names. Unique tested ({uniqueTested ?? tested.length})
             is latest-eval-per-name
-            {logRows != null ? ` (${logRows} log rows, including retests)` : ""}
-            {(counts?.retest_queue ?? 0) > 0
-              ? `. ${counts?.retest_queue} already-tested leftovers wait for the 24h retest cooldown, then drain oldest-first across cycles.`
+            {logRows != null ? ` (${logRows} log rows)` : ""}
+            {(counts?.rejected_parked ?? counts?.tested_fail ?? 0) > 0
+              ? `. ${counts?.rejected_parked ?? counts?.tested_fail} already tested · rejected ${
+                  (counts?.rejected_parked ?? counts?.tested_fail) === 1 ? "is" : "are"
+                } parked forever — not a 24h retest queue.`
               : ". Everything not already a champion or graduated has a row in already tested — or the universe is empty."}
           </Empty>
         ) : (

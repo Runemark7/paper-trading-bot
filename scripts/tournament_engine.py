@@ -9,8 +9,9 @@
    graduated is admitted. Universe size (~40–120) is the combinatorial bound.
 4. Graduation: TRADE_EVALUATION_LIMIT (80) closed paper trades vs B&H.
 5. Each live_cycle invocation evaluates a leftover *slice* (max names +
-   wall-clock budget, rotating cursor, 24h retest cooldown) and appends
-   discovery_log.json after each name — not after the full leftover list.
+   wall-clock budget, rotating cursor) and appends discovery_log.json
+   after each name — not after the full leftover list. A non-qualified
+   eval parks that name forever (no 24h retest cooldown).
 
 Qualification uses hedge_fund.backtest.strategies with rm_v1 stops/fees,
 not fast_quant or fee-free SimBroker.
@@ -39,7 +40,6 @@ from hedge_fund.trading.discovery import (
 from hedge_fund.trading.constants import (
     DISCOVER_CYCLE_MAX_NAMES,
     DISCOVER_CYCLE_TIME_BUDGET_SECONDS,
-    DISCOVER_RETEST_COOLDOWN_SECONDS,
     MIN_BACKTEST_SHARPE,
     MIN_BACKTEST_TRADES,
     PAPER_START_CASH,
@@ -284,9 +284,10 @@ def discover_and_qualify(
 ) -> tuple[list[dict], list[dict]]:
     """Walk-forward qualification on 5m BTC/ETH. 4h-only history does not admit.
 
-    Each invocation evaluates a leftover slice: never-tested first, then oldest
-    tested past the retest cooldown, rotating from the persisted cursor. Stops
-    after ``max_names`` or ``time_budget_seconds`` so live_cycle can still run
+    Each invocation evaluates a leftover slice of never-tested names, rotating
+    from the persisted cursor. Names with any non-qualified discovery_log row
+    are parked forever (``cooldown_seconds`` is ignored). Stops after
+    ``max_names`` or ``time_budget_seconds`` so live_cycle can still run
     ``run_isolated`` in the same 300s tick. ``batch_size`` is a leftover-prefix
     test hook, not a random sample of 30.
     """
@@ -312,17 +313,12 @@ def discover_and_qualify(
         if time_budget_seconds is None
         else time_budget_seconds
     )
-    cool = (
-        DISCOVER_RETEST_COOLDOWN_SECONDS
-        if cooldown_seconds is None
-        else cooldown_seconds
-    )
     cursor = load_cursor()
     planned, rotated = select_cycle_batch(
         leftovers,
         load_discovery_log(),
         max_names=cap,
-        cooldown_seconds=cool,
+        cooldown_seconds=cooldown_seconds,
         now=now,
         cursor_name=cursor.get("next_name"),
     )

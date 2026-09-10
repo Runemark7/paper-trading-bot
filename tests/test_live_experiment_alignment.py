@@ -194,7 +194,6 @@ class ProtocolAmendmentTests(unittest.TestCase):
             CYCLE_INTERVAL_SECONDS,
             DISCOVER_CYCLE_MAX_NAMES,
             DISCOVER_CYCLE_TIME_BUDGET_SECONDS,
-            DISCOVER_RETEST_COOLDOWN_SECONDS,
             DISCOVERY_LOG_CAP,
             MIN_BACKTEST_SHARPE,
             MIN_BACKTEST_TRADES,
@@ -210,6 +209,7 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertIn("DISCOVER_CYCLE_TIME_BUDGET_SECONDS", text)
         self.assertIn("discovery_cursor.json", text)
         self.assertIn("24h", text)
+        self.assertIn("DISCOVER_RETEST_COOLDOWN_SECONDS", text)
         self.assertIn("shuffle 30 and ignore the rest", text)
         self.assertIn("Paper only", text)
         self.assertIn("Do not cull existing champions", text)
@@ -221,7 +221,6 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
         self.assertEqual(DISCOVER_CYCLE_MAX_NAMES, 1)
         self.assertEqual(DISCOVER_CYCLE_TIME_BUDGET_SECONDS, 90)
-        self.assertEqual(DISCOVER_RETEST_COOLDOWN_SECONDS, 24 * 3600)
         self.assertEqual(DISCOVERY_LOG_CAP, 1000)
         self.assertLess(DISCOVER_CYCLE_MAX_NAMES, 30)
         self.assertLess(DISCOVER_CYCLE_TIME_BUDGET_SECONDS, CYCLE_INTERVAL_SECONDS)
@@ -233,6 +232,47 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertGreater(
             CYCLE_INTERVAL_SECONDS - DISCOVER_CYCLE_TIME_BUDGET_SECONDS, 150
         )
+
+    def test_amendment_2026_09_10_fail_once_never_retest(self):
+        import hedge_fund.trading.constants as constants
+        from hedge_fund.trading.constants import (
+            CYCLE_INTERVAL_SECONDS,
+            DISCOVER_CYCLE_MAX_NAMES,
+            DISCOVER_CYCLE_TIME_BUDGET_SECONDS,
+            MIN_BACKTEST_SHARPE,
+            MIN_BACKTEST_TRADES,
+            QUAL_TIMEFRAME,
+            RISK_POLICY,
+            TRADE_EVALUATION_LIMIT,
+        )
+
+        text = (REPO / "PROTOCOL.md").read_text()
+        self.assertIn("Amendment 2026-09-10", text)
+        self.assertIn("fail once, never retest", text.lower())
+        self.assertIn("parked forever", text.lower())
+        self.assertIn("DISCOVER_RETEST_COOLDOWN_SECONDS` is deleted", text)
+        self.assertIn("Never-tested leftovers still drain", text)
+        self.assertIn("Existing prod fails are parked", text)
+        self.assertIn("Paper only", text)
+        self.assertIn("Do not cull existing champions", text)
+        self.assertIn("OOS gates are unchanged", text)
+        self.assertFalse(hasattr(constants, "DISCOVER_RETEST_COOLDOWN_SECONDS"))
+        self.assertFalse(hasattr(constants, "DISCOVER_BATCH_SIZE"))
+        self.assertFalse(hasattr(constants, "MAX_ACTIVE_CHAMPIONS"))
+        self.assertEqual(CYCLE_INTERVAL_SECONDS, 300)
+        self.assertEqual(QUAL_TIMEFRAME, "5m")
+        self.assertEqual(RISK_POLICY, "rm_v1")
+        self.assertEqual(MIN_BACKTEST_TRADES, 30)
+        self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
+        self.assertEqual(TRADE_EVALUATION_LIMIT, 80)
+        self.assertEqual(DISCOVER_CYCLE_MAX_NAMES, 1)
+        self.assertEqual(DISCOVER_CYCLE_TIME_BUDGET_SECONDS, 90)
+        readme = (REPO / "README.md").read_text()
+        self.assertIn("2026-09-10", readme)
+        self.assertIn("no 24h", readme.lower())
+        web = (REPO / "docs" / "WEB_SERVICE.md").read_text()
+        self.assertIn("rejected parked forever", web.lower())
+
 
 class IsolatedRunnerTests(unittest.TestCase):
     def test_no_second_hardcoded_book(self):

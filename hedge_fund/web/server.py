@@ -8,7 +8,7 @@ A small, dependency-free HTTP server (stdlib only) that exposes:
   GET /api/regime       -> JSON: current regime zone/score
   GET /api/trades       -> JSON: recent closed trades
   GET /api/status       -> running-now vs in-progress (last-known stamps)
-  GET /api/discovery/summary -> tested / in-flight / leftover-untested buckets
+  GET /api/discovery/summary -> tested / in-flight / leftover-untested; rejected parked forever
   POST /run             -> trigger a live decision cycle, then regenerate
   GET /health           -> liveness probe
 
