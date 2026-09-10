@@ -278,7 +278,7 @@ export default function DiscoveryBuckets() {
             {(counts?.rejected_parked ?? counts?.tested_fail ?? 0) > 0
               ? `. ${counts?.rejected_parked ?? counts?.tested_fail} already tested · rejected ${
                   (counts?.rejected_parked ?? counts?.tested_fail) === 1 ? "is" : "are"
-                } parked forever — not a 24h retest queue.`
+                } parked forever — not coming back after a cooldown.`
               : ". Everything not already a champion or graduated has a row in already tested — or the universe is empty."}
           </Empty>
         ) : (
