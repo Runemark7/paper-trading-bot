@@ -3,9 +3,9 @@
 Does not emit daily()/h1()/m5() or MFI: the live cycle is a single 5m
 series without a volume-aware MFI path. Structure names (Donchian / swing /
 double bottom) and WaveTrend (HLC3 green-dot) are OHLC on that same series.
-Universe is an explicit list (not thousands of combinatorial clones),
-inside UNIVERSE_TARGET_MAX. 2026-09-11 leftover batch: unused structure
-windows ANDed with existing dip/mom (`NEW_STRUCTURE_ANDS`).
+Static universe is an explicit list (not thousands of combinatorial clones),
+inside UNIVERSE_TARGET_MAX. When leftovers run dry, tournament auto-refills
+discovery_extended.json from a bounded structure-AND recipe — not this CLI.
 """
 from __future__ import annotations
 

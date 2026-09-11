@@ -92,6 +92,7 @@ over a meaningful sample, AND calibration is demonstrated independently of P&L.
 | 2026-09-10 | A discovery evaluation that does not qualify parks that name forever. No 24h retest cooldown re-walk of rejects. Never-tested leftovers still drain 24/7 under the 1 name / ~90s cycle budget. Existing `discovery_log.json` fails are permanent. Same date: per-name `evaluate_windows` is cheaper (causal EMA / WaveTrend series cache, trim `crypto_history_5m.json` to the 3×90d span, compact discovery log). OOS gates and window lengths unchanged. Paper only. No cull of champions. |
 | 2026-09-11 | Addendum: per-cycle discovery slice bumped one cautious notch after cheaper per-name evals (#28). Live default is `DISCOVER_CYCLE_MAX_NAMES = 2` and `DISCOVER_CYCLE_TIME_BUDGET_SECONDS = 120` so more never-tested names can run without returning to the 4 / 150s crash settings. Fail-once, OOS gates, and window lengths unchanged. Paper only. No cull of champions. |
 | 2026-09-11 | Leftover universe batch: existing 5m dip/mom ANDed with unused Donchian / swing / `dbl_bot` lookbacks (`NEW_STRUCTURE_ANDS`). Fail-once stays — new names get one shot. No WaveTrend clones, no MFI, no chart-pattern zoo. Champions and the parked 60 untouched. Paper only; OOS gates unchanged. |
+| 2026-09-11 | Auto-refill: when never-tested leftovers are empty (or fewer than the 2-name cycle slice), tournament appends the next handful of parseable, non-near-duplicate structure-AND names to `discovery_extended.json`. No human PR per batch. Fail-once stays. Static `generate_universe()` remains inside `UNIVERSE_TARGET_MAX`. Paper only; OOS gates unchanged. |
 
 ### Amendment 2026-08-30 — what actually runs
 
@@ -390,5 +391,25 @@ This amendment does not rewrite original §§ 1–8 or prior amendments. Qual/li
 **Superseded on this date** (prior text kept above for history):
 
 - 2026-09-05 / 2026-09-07 / 2026-09-10 / same-date cycle-bump text insofar as "No new strategies" froze the universe list. Cycle budget, fail-once, and OOS gates are not superseded.
+
+### Amendment 2026-09-11 — auto-refill never-tested names (no PR per batch)
+
+This amendment does not rewrite original §§ 1–8 or prior amendments. Qual/live remain 5m, risk policy remains `rm_v1`, OOS gates are unchanged (30 OOS trades, all windows ≥ 0, beat B&H + `sma_stack`, Sharpe ≥ 0.30, paper 80 vs B&H). Windows remain 3 × ~90 calendar days of native 5m (`QUAL_WINDOW_BARS` = 25920, `QUAL_STRIDE` = 1). Fail-once never-retest from the 2026-09-10 amendment stays — a fail parks that name forever; each auto-refilled name gets **one shot**. Cycle budget stays 2 names / ~120s. Cycle remains 24/7. No live-slot cap. **Still paper.** `GRADUATED_PAPER` meaning is unchanged. Do not cull existing champions. Do not retest parked fails.
+
+**Why.** After `NEW_STRUCTURE_ANDS` (#30) the 21 new names all failed in one morning. Prod: universe=88, rejected_parked=81, eligible=0, untested=0. The 300s live cycle still ran but tournament had nothing to evaluate, so `last_tested_at` froze. Opening another leftover-list PR each time eligible hits 0 is not the drain.
+
+**Pending queue sidecar, not a bigger static list.** `generate_universe()` stays inside `UNIVERSE_TARGET_MIN` / `UNIVERSE_TARGET_MAX` (~40–120). Raising that cap and dumping the recipe into the compiled list would re-create a combinatorial clone dump and bloat leftover scans. Instead `hedge_fund.trading.refill` walks a **bounded** recipe of allowed atoms and appends the next `DISCOVERY_REFILL_BATCH_SIZE` (16) parseable, non-near-duplicate names to `discovery_extended.json` on the paper-state PVC. After a refill, never-tested extras are one handful — the 2 / 120s eval budget is unchanged, so the 1 CPU / 1.5GiB cycle sidecar does not OOM. Recipe generation is string-only (no history load).
+
+**When.** Each `discover_and_qualify` invocation: if the never-tested eligible slice is empty or smaller than this cycle's name cap (`DISCOVER_CYCLE_MAX_NAMES` = 2 — "about to be" empty), append the next batch and include those names in the leftover drain. GET `/api/discovery/summary` is still last-known (it does not write the sidecar).
+
+**Recipe (allowed atoms only).** Small OHLC structure atoms (`don_hi_N` / `don_lo_N` / `near_swing_hi_N` / `near_swing_lo_N` / `dbl_bot_N`) with N in `{6,12,18,24,30,36,42,48,54,60,66,72}` (multiples of 6 so `near_duplicate_key` is the identity) **AND** existing 5m dip/mom/sma/ema/rsi filters (`dip_6b_lt2pc`, `dip_12b_lt3pc`, `dip_24b_lt5pc`, `mom_6b_gt2pc`, `mom_12b_gt3pc`, `mom_24b_gt5pc`, `sma_abv_50`/`100`/`200`, `ema_abv_50`, `sma_stack_20_50_100`, `rsi_14_>50`). Dip tags support; mom tags breakout. A few 3-atom ANDs (structure + dip/mom + `sma_abv_50`) exist so more than one batch can be produced over time. The stream is finite and well under a thousand names before near-dup collapse — not a cartesian of every atom.
+
+**Skipped.** Exact names and `near_duplicate_key` collisions against champions, graduated, the static universe, already-emitted extended names, and any `discovery_log.json` row (pass or fail). Refused families stay out: no H&S / flags / triangles / candlestick encyclopedia / chart_patterns zoo; no Market Cipher scrape; no new `wt_*` WaveTrend spam; no MFI until honest 5m volume; no `dbl_top` longs; no `daily()`/`h1()`/`m5()` wrappers.
+
+**When the recipe is exhausted.** Refill returns nothing. Discovery idles honestly (eligible=0) until the recipe is amended. That is not a silent retest of parked fails.
+
+**Superseded on this date** (prior text kept above for history):
+
+- Same-date structure-window leftovers insofar as a new never-tested batch required a human PR / a frozen `NEW_STRUCTURE_ANDS` list. Fail-once, cycle budget, OOS gates, and the static 40–120 compiled-list band are not superseded.
 
 

@@ -51,10 +51,15 @@ TRADE_EVALUATION_LIMIT = 80
 # back to 4/150. MIN_BACKTEST_TRADES = 30 remains the OOS trade floor, not
 # a sample size. A non-qualified discovery_log eval parks that name forever
 # — there is no DISCOVER_RETEST_COOLDOWN re-eligibility timer. Never-tested
-# leftovers still drain 24/7 under the cycle budget.
+# leftovers still drain 24/7 under the cycle budget. When never-tested
+# leftovers are empty (or fewer than this slice), tournament auto-refills
+# the next handful from a bounded structure-AND recipe into
+# discovery_extended.json — not a human PR per batch, not thousands of
+# clones. Static generate_universe() stays inside UNIVERSE_TARGET_MAX.
 DISCOVER_CYCLE_MAX_NAMES = 2
 DISCOVER_CYCLE_TIME_BUDGET_SECONDS = 120  # two evals; leave most of 300s for live + API
 DISCOVERY_LOG_CAP = 1000  # newest-first rows; unique names are a separate count
+DISCOVERY_REFILL_BATCH_SIZE = 16  # one handful per dry drain; sidecar pending queue
 # No new evals for this long, with leftover work remaining → stuck/overdue copy.
 DISCOVERY_QUIET_SECONDS = 2 * 3600
 

@@ -240,6 +240,7 @@ def _discovery_block(root: Path) -> dict:
             "log_count is raw rows; unique_tested is latest-eval-per-name. "
             "GET /api/discovery/summary has tested / in-flight / leftover buckets. "
             "Rejected names are parked forever. "
+            "Empty leftover eligible auto-refills discovery_extended.json. "
             "A quiet log is silence, not a running job."
         ),
     }

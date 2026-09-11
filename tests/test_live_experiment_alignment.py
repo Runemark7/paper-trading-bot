@@ -369,6 +369,48 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertIn("NEW_STRUCTURE_ANDS", readme)
         self.assertIn("parked 60", readme)
 
+    def test_amendment_2026_09_11_auto_refill(self):
+        from hedge_fund.trading.constants import (
+            CYCLE_INTERVAL_SECONDS,
+            DISCOVER_CYCLE_MAX_NAMES,
+            DISCOVER_CYCLE_TIME_BUDGET_SECONDS,
+            DISCOVERY_REFILL_BATCH_SIZE,
+            MIN_BACKTEST_SHARPE,
+            MIN_BACKTEST_TRADES,
+            QUAL_TIMEFRAME,
+            RISK_POLICY,
+        )
+        from hedge_fund.trading.universe import UNIVERSE_TARGET_MAX, generate_universe
+
+        text = (REPO / "PROTOCOL.md").read_text()
+        self.assertIn("auto-refill never-tested names", text.lower())
+        self.assertIn("discovery_extended.json", text)
+        self.assertIn("DISCOVERY_REFILL_BATCH_SIZE", text)
+        self.assertIn("no pr per batch", text.lower())
+        self.assertIn("Pending queue sidecar", text)
+        self.assertIn("near_duplicate_key", text)
+        self.assertIn("No WaveTrend", text)
+        self.assertIn("No MFI", text)
+        self.assertIn("Do not cull existing champions", text)
+        self.assertIn("Do not retest parked fails", text)
+        self.assertIn("OOS gates are unchanged", text)
+        self.assertIn("Paper only", text)
+        self.assertIn("one shot", text.lower())
+        self.assertEqual(QUAL_TIMEFRAME, "5m")
+        self.assertEqual(RISK_POLICY, "rm_v1")
+        self.assertEqual(MIN_BACKTEST_TRADES, 30)
+        self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
+        self.assertEqual(CYCLE_INTERVAL_SECONDS, 300)
+        self.assertEqual(DISCOVER_CYCLE_MAX_NAMES, 2)
+        self.assertEqual(DISCOVER_CYCLE_TIME_BUDGET_SECONDS, 120)
+        self.assertEqual(DISCOVERY_REFILL_BATCH_SIZE, 16)
+        self.assertLessEqual(len(generate_universe()), UNIVERSE_TARGET_MAX)
+        readme = (REPO / "README.md").read_text()
+        self.assertIn("discovery_extended.json", readme)
+        self.assertIn("no human PR per batch", readme)
+        web = (REPO / "docs" / "WEB_SERVICE.md").read_text()
+        self.assertIn("discovery_extended.json", web)
+
 
 class IsolatedRunnerTests(unittest.TestCase):
     def test_no_second_hardcoded_book(self):
