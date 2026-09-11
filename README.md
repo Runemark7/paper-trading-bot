@@ -32,8 +32,7 @@ only one name per cycle. Same date: leftover discovery names — unused
 Donchian / swing / `dbl_bot` lookbacks ANDed with existing 5m dip/mom
 (`NEW_STRUCTURE_ANDS`). Fail-once stays; the parked 60 are not retested.
 Same date: when never-tested leftovers run dry, tournament auto-refills
-`discovery_extended.json` from a bounded structure-AND recipe (no human
-PR per batch). Still paper.
+`discovery_extended.json` from a bounded structure-AND recipe (no human PR per batch). Still paper.
 
 Built on **[ai-hedge-fund](https://github.com/virattt/ai-hedge-fund)** (MIT, © Virat Singh)
 for Signal models, sim broker, risk limits, portfolio, backtesting, and the LLM layer.
