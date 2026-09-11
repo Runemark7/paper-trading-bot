@@ -6,12 +6,15 @@
    every window's test PnL >= 0, >= 30 OOS trades, OOS Sharpe >= 0.30,
    OOS beats buy-and-hold and sma_stack after fees. Risk policy: rm_v1.
 3. No live-slot cap: every 5m-qualified name not already pooled or
-   graduated is admitted. Universe size (~40–120) is the combinatorial bound.
+   graduated is admitted. Static universe size (~40–120) is the compiled
+   list bound; auto-refill appends a handful of never-tested names to
+   discovery_extended.json when leftovers run dry (pending queue sidecar).
 4. Graduation: TRADE_EVALUATION_LIMIT (80) closed paper trades vs B&H.
 5. Each live_cycle invocation evaluates a leftover *slice* (max names +
    wall-clock budget, rotating cursor) and appends discovery_log.json
    after each name — not after the full leftover list. A non-qualified
-   eval parks that name forever (no 24h retest cooldown).
+   eval parks that name forever (no 24h retest cooldown). Empty eligible
+   triggers one refill batch so the 2 / 120s drain keeps moving.
 
 Qualification uses hedge_fund.backtest.strategies with rm_v1 stops/fees,
 not fast_quant or fee-free SimBroker.
@@ -31,10 +34,12 @@ from hedge_fund.trading.champions import load_graduated, load_pool, save_pool
 from hedge_fund.trading.discovery import (
     append_discovery_evaluation,
     clear_in_flight,
+    failed_discovery_names,
     load_cursor,
     load_discovery_log,
     save_cursor,
     select_cycle_batch,
+    tested_discovery_names,
     write_in_flight,
 )
 from hedge_fund.trading.constants import (
@@ -51,7 +56,8 @@ from hedge_fund.trading.constants import (
     RISK_POLICY,
     TRADE_EVALUATION_LIMIT,
 )
-from hedge_fund.trading.universe import generate_universe, untested_candidates
+from hedge_fund.trading.refill import discovery_universe, maybe_refill_discovery
+from hedge_fund.trading.universe import untested_candidates
 
 FALLBACK_BENCHMARK = "sma_stack"
 
@@ -61,8 +67,8 @@ def _hist_qual():
 
 
 def generate_candidate_pool() -> list[str]:
-    """Explicit 5m universe (no daily()/h1()/m5() or MFI). Structure ANDs ok."""
-    return generate_universe()
+    """Static 5m universe plus persisted refill names (no MTF/MFI)."""
+    return discovery_universe()
 
 
 def log_discovery_evaluations(eval_records: list[dict]):
@@ -324,10 +330,12 @@ def discover_and_qualify(
 
     Each invocation evaluates a leftover slice of never-tested names, rotating
     from the persisted cursor. Names with any non-qualified discovery_log row
-    are parked forever (``cooldown_seconds`` is ignored). Stops after
-    ``max_names`` or ``time_budget_seconds`` so live_cycle can still run
-    ``run_isolated`` in the same 300s tick. ``batch_size`` is a leftover-prefix
-    test hook, not a random sample of 30.
+    are parked forever (``cooldown_seconds`` is ignored). When eligible is
+    empty (or fewer than this cycle's cap), auto-refill appends the next
+    recipe handful to ``discovery_extended.json`` so the drain keeps moving.
+    Stops after ``max_names`` or ``time_budget_seconds`` so live_cycle can
+    still run ``run_isolated`` in the same 300s tick. ``batch_size`` is a
+    leftover-prefix test hook, not a random sample of 30.
     """
     data = _load_qual_history(keep_bars=window_size * n_windows)
     if not data:
@@ -353,14 +361,42 @@ def discover_and_qualify(
         else time_budget_seconds
     )
     cursor = load_cursor()
+    log = load_discovery_log()
     planned, rotated = select_cycle_batch(
         leftovers,
-        load_discovery_log(),
+        log,
         max_names=cap,
         cooldown_seconds=cooldown_seconds,
         now=now,
         cursor_name=cursor.get("next_name"),
     )
+    added: list[str] = []
+    # Refill vs the live slice (2), not this invocation's test-hook cap.
+    # eligible=1 is "about to be" empty: persist the next handful now so
+    # the following 2/120s cycles stay fed. This cycle still evals ``cap``.
+    if len(rotated) < DISCOVER_CYCLE_MAX_NAMES:
+        taken = (
+            set(universe)
+            | set(leftovers)
+            | set(blocked)
+            | tested_discovery_names(log)
+            | failed_discovery_names(log)
+        )
+        added = maybe_refill_discovery(
+            eligible_count=len(rotated),
+            cap=DISCOVER_CYCLE_MAX_NAMES,
+            taken_names=taken,
+        )
+        if added:
+            leftovers = list(leftovers) + [n for n in added if n not in leftovers]
+            planned, rotated = select_cycle_batch(
+                leftovers,
+                log,
+                max_names=cap,
+                cooldown_seconds=cooldown_seconds,
+                now=now,
+                cursor_name=cursor.get("next_name"),
+            )
 
     qualified = []
     all_evaluated = []
@@ -445,11 +481,12 @@ def discover_and_qualify(
             if n not in done:
                 next_name = n
                 break
-        if planned:
+        if planned or added:
             save_cursor(
                 next_name,
                 last_evaluated=completed,
                 last_count=len(completed),
+                last_refill=added,
             )
         clear_in_flight()
 

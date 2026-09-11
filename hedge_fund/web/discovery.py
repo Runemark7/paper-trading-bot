@@ -23,6 +23,7 @@ from hedge_fund.trading.discovery import (
     prioritize_leftovers,
     read_in_flight,
 )
+from hedge_fund.trading.refill import load_extended_names
 from hedge_fund.trading.universe import generate_universe, untested_candidates
 from hedge_fund.web.status import _iso, _pipeline_block
 
@@ -69,7 +70,9 @@ def build_discovery_summary() -> dict:
     grads = [g.get("name") for g in load_graduated() if g.get("name")]
     blocked = set(champs) | set(grads)
 
-    universe = generate_universe()
+    universe_static = generate_universe()
+    extended = load_extended_names()
+    universe = sorted(set(universe_static) | set(extended))
     log = load_discovery_log()
     tested = _sort_tested_newest_first([_eval_row(r) for r in latest_eval_per_strategy(log)])
     tested_names = {r["strategy"] for r in tested if r.get("strategy")}
@@ -200,6 +203,7 @@ def build_discovery_summary() -> dict:
             "leftovers": len(leftovers),
             "rejected_parked": len(rejected_parked),
             "eligible": len(eligible),
+            "extended": len(extended),
             "champions": len(champs),
             "graduated": len(grads),
             "in_flight": len(flight_names) if show_flight else 0,
@@ -214,6 +218,8 @@ def build_discovery_summary() -> dict:
             "discovery_in_flight.json. counts.tested is unique strategy names "
             "(latest eval per name), not the number of log rows. "
             "Already tested · rejected is parked forever — not a cooldown "
-            "retest queue. A stamp is not process liveness."
+            "retest queue. Empty eligible auto-refills discovery_extended.json "
+            "from a bounded structure-AND recipe (no human PR per batch). "
+            "A stamp is not process liveness."
         ),
     }

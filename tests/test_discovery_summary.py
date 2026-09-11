@@ -141,9 +141,11 @@ class DiscoverySummaryBucketTests(unittest.TestCase):
         self.assertEqual(s["counts"]["universe"], 5)
         self.assertEqual(s["counts"]["untested"], 1)
         self.assertEqual(s["counts"]["rejected_parked"], 1)
+        self.assertEqual(s["counts"]["extended"], 0)
         self.assertNotIn("retest_queue", s["counts"])
         self.assertNotIn("retest_cooldown_seconds", s)
         self.assertIn("parked forever", s["note"])
+        self.assertIn("discovery_extended.json", s["note"])
         self.assertEqual(s["counts"]["champions"], 1)
         self.assertEqual(s["counts"]["graduated"], 1)
         self.assertFalse(s["running"])
@@ -441,13 +443,22 @@ class FailOnceDiscoveryTests(unittest.TestCase):
 
                 with _tournament_patches(leftovers, lambda *_a, **_k: _dummy_windows()):
                     third = replenish_and_evaluate(max_names=8, cooldown_seconds=0)
-                self.assertEqual(third["total_tested_in_batch"], 1)
-                self.assertEqual(load_discovery_log()[0]["strategy"], "also_fresh")
+                # One leftover left (also_fresh) is "about to be" empty → refill.
+                self.assertGreaterEqual(third["total_tested_in_batch"], 1)
+                log = load_discovery_log()
+                names = {r["strategy"] for r in log}
+                self.assertIn("also_fresh", names)
+                self.assertEqual(sum(1 for r in log if r["strategy"] == "failed_once"), 1)
+                self.assertEqual(sum(1 for r in log if r["strategy"] == "never_tested"), 1)
 
                 with _tournament_patches(leftovers, lambda *_a, **_k: _dummy_windows()):
                     fourth = replenish_and_evaluate(max_names=8, cooldown_seconds=0)
-                self.assertEqual(fourth["total_tested_in_batch"], 0)
-                self.assertEqual(len(load_discovery_log()), 3)
+                self.assertGreater(fourth["total_tested_in_batch"], 0)
+                log = load_discovery_log()
+                original = {"failed_once", "never_tested", "also_fresh"}
+                self.assertTrue({r["strategy"] for r in log} - original)
+                for name in original:
+                    self.assertEqual(sum(1 for r in log if r["strategy"] == name), 1)
 
     def test_existing_discovery_log_fail_is_never_selected(self):
         from scripts.tournament_engine import replenish_and_evaluate
@@ -461,10 +472,13 @@ class FailOnceDiscoveryTests(unittest.TestCase):
             with patch.dict(os.environ, {"PAPER_STATE": str(root)}):
                 with _tournament_patches(leftovers, lambda *_a, **_k: _dummy_windows()):
                     res = replenish_and_evaluate(max_names=4, cooldown_seconds=0)
-                self.assertEqual(res["total_tested_in_batch"], 1)
+                self.assertGreaterEqual(res["total_tested_in_batch"], 1)
                 log = load_discovery_log()
-                self.assertEqual(log[0]["strategy"], "fresh")
+                self.assertIn("fresh", {r["strategy"] for r in log})
                 self.assertEqual(sum(1 for r in log if r["strategy"] == "prod_reject"), 1)
+                # Newest rows are this cycle; parked fail is not re-walked.
+                this_cycle = {r["strategy"] for r in log[: res["total_tested_in_batch"]]}
+                self.assertNotIn("prod_reject", this_cycle)
 
 
 class DiscoveryRouteTests(unittest.TestCase):

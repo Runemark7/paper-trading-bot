@@ -14,10 +14,13 @@ AND-gates, then double-bottom pattern names, still inside UNIVERSE_TARGET_MAX.
 Amendment 2026-09-05: LazyBear WaveTrend green-dot longs (wt_cross_up_os).
 Amendment 2026-09-11: leftover structure-window ANDs after fail-once parked
 the prior list — unused Donchian / swing / dbl_bot lookbacks with existing
-dip/mom, not WaveTrend clones. Trend / breakout / momentum stay as
-sma_stack/sma_abv, don_hi_*, mom_* — not a second stack. Near-duplicate
-keys collapse tiny param tweaks. Lookbacks in names (e.g. dip_24b) are
-bar counts: on 5m, 24 bars = 2 hours.
+dip/mom, not WaveTrend clones. Same date: when never-tested leftovers run
+dry, ``hedge_fund.trading.refill`` appends the next handful to
+``discovery_extended.json`` (pending queue sidecar). Static list here stays
+inside UNIVERSE_TARGET_MAX; the recipe is bounded, fail-once, no WaveTrend
+clones. Trend / breakout / momentum stay as sma_stack/sma_abv, don_hi_*,
+mom_* — not a second stack. Near-duplicate keys collapse tiny param tweaks.
+Lookbacks in names (e.g. dip_24b) are bar counts: on 5m, 24 bars = 2 hours.
 """
 from __future__ import annotations
 
@@ -216,9 +219,15 @@ def generate_universe() -> list[str]:
 
 
 def untested_candidates(blocked_names: set[str], universe: list[str] | None = None) -> list[str]:
-    """Universe names not in the pool/graduated, skipping near-duplicates of blocked."""
+    """Universe names not in the pool/graduated, skipping near-duplicates of blocked.
+
+    Default universe is static generate_universe() plus persisted refill
+    names (``discovery_extended.json``). Pass an explicit list to ignore the sidecar.
+    """
     if universe is None:
-        universe = generate_universe()
+        from hedge_fund.trading.refill import discovery_universe
+
+        universe = discovery_universe()
     taken_keys = {near_duplicate_key(n) for n in blocked_names}
     out: list[str] = []
     for cand in universe:
