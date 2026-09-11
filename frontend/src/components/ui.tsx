@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useState, type MouseEvent, type ReactNode } from "react";
 
 export function Card({
   title,
@@ -83,7 +83,7 @@ export function Badge({ children, tone = "neutral" }: { children: ReactNode; ton
   );
 }
 
-/** Long strategy / account names: wrap on phones, keep the full string in title. */
+/** Long strategy / account names: wrap the full string; native title for hover/long-press. */
 export function MonoName({
   children,
   className = "",
@@ -95,10 +95,66 @@ export function MonoName({
   return (
     <span
       title={title}
-      className={`font-mono min-w-0 overflow-hidden break-all [overflow-wrap:anywhere] ${className}`}
+      className={`font-mono min-w-0 max-w-full break-all [overflow-wrap:anywhere] whitespace-normal select-text ${className}`}
     >
       {children}
     </span>
+  );
+}
+
+/** Queued / in-flight name pills — wrap + title so the full string is reachable. */
+export function NameChip({
+  name,
+  className = "",
+}: {
+  name: string;
+  className?: string;
+}) {
+  return (
+    <span
+      title={name}
+      className={`inline-flex max-w-full min-w-0 items-center rounded-md px-1.5 py-0.5 font-mono text-[11px] break-all [overflow-wrap:anywhere] whitespace-normal select-text ${className}`}
+    >
+      {name}
+    </span>
+  );
+}
+
+/** Copyable full strategy string for expanded / detail surfaces (names inside tap-targets are not selectable). */
+export function CopyableName({
+  name,
+  className = "",
+}: {
+  name: string;
+  className?: string;
+}) {
+  const [copied, setCopied] = useState(false);
+
+  async function copy(e: MouseEvent<HTMLButtonElement>) {
+    e.preventDefault();
+    e.stopPropagation();
+    try {
+      await navigator.clipboard.writeText(name);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* text remains selectable via MonoName */
+    }
+  }
+
+  return (
+    <div className={`flex flex-col gap-1 min-w-0 sm:flex-row sm:items-start sm:gap-2 ${className}`}>
+      <MonoName className="w-full sm:flex-1 text-sm text-white select-all">{name}</MonoName>
+      <button
+        type="button"
+        onClick={copy}
+        className="self-start shrink-0 min-h-11 px-2.5 text-[11px] text-white/55 hover:text-white rounded bg-white/5 hover:bg-white/10"
+        aria-label={`Copy strategy name ${name}`}
+        title="Copy full name"
+      >
+        {copied ? "copied" : "copy"}
+      </button>
+    </div>
   );
 }
 

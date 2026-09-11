@@ -4,7 +4,7 @@ import { fetchChampions, fetchGraduated, api } from "../api/client";
 import DiscoveryBuckets from "../status/DiscoveryBuckets";
 import type { OpenLot } from "../api/types";
 import ChampionTape from "../chart/ChampionTape";
-import { Card, fmt, Badge, Empty, MonoName, Field, FieldGrid, PhoneCards, DesktopTable } from "../components/ui";
+import { Card, fmt, Badge, Empty, MonoName, CopyableName, Field, FieldGrid, PhoneCards, DesktopTable } from "../components/ui";
 import { LotHealthChips, LotHealthSummaryChips } from "../status/LotHealth";
 import {
   accountSlug,
@@ -221,16 +221,14 @@ export default function Champions() {
                     onClick={() => setExpandedChampion(isOpen ? null : c.name)}
                     className="w-full text-left p-3 min-h-11 space-y-2 min-w-0 cursor-pointer hover:bg-white/[0.04] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-indigo-400"
                   >
-                    <div className="flex flex-wrap items-start justify-between gap-2 min-w-0">
-                      <MonoName className="block text-sm font-medium text-white min-w-0">{c.name}</MonoName>
-                      <span className="shrink-0 flex flex-wrap items-center gap-2">
-                        <Badge tone="run">running now</Badge>
-                        <span
-                          aria-hidden
-                          className={`text-white/40 text-sm leading-none transition-transform ${isOpen ? "rotate-90" : ""}`}
-                        >
-                          ▸
-                        </span>
+                    <MonoName className="block w-full text-sm font-medium text-white">{c.name}</MonoName>
+                    <div className="flex items-center justify-between gap-2 min-w-0">
+                      <Badge tone="run">running now</Badge>
+                      <span
+                        aria-hidden
+                        className={`shrink-0 text-white/40 text-sm leading-none transition-transform ${isOpen ? "rotate-90" : ""}`}
+                      >
+                        ▸
                       </span>
                     </div>
                     <div className="flex flex-wrap items-center gap-1 min-w-0">
@@ -256,10 +254,16 @@ export default function Champions() {
                       id={panelId}
                       className="border-t border-white/10 px-3 py-3 bg-white/[0.02] min-w-0 space-y-3"
                     >
-                      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 min-w-0 text-xs text-white/50">
-                        <span className="min-w-0 break-words [overflow-wrap:anywhere]">
-                          Started {fmtChampionSince(c.champion_since)}
-                        </span>
+                      <div className="min-w-0 space-y-2">
+                        <div>
+                          <div className="text-[11px] uppercase tracking-wider text-white/40">Strategy</div>
+                          <CopyableName name={c.name} className="mt-0.5" />
+                        </div>
+                        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 min-w-0 text-xs text-white/50">
+                          <span className="min-w-0 break-words [overflow-wrap:anywhere]">
+                            Started {fmtChampionSince(c.champion_since)}
+                          </span>
+                        </div>
                       </div>
                       <ExpandedChampionLots
                         lots={lots}
@@ -319,7 +323,7 @@ export default function Champions() {
                 <div key={g.name} className="border border-white/10 rounded-lg p-3 sm:p-4 bg-white/[0.02] min-w-0">
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                     <div className="min-w-0">
-                      <MonoName className="text-base font-semibold text-white">{g.name}</MonoName>
+                      <MonoName className="block text-base font-semibold text-white">{g.name}</MonoName>
                       <div className="text-xs text-white/50 mt-1 break-words">
                         {fmtWhen(g.graduated_at)} · {g.closed_trades} trades evaluated
                       </div>

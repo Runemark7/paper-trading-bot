@@ -59,8 +59,12 @@ export default function Overview() {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm mb-4">
           <div>
             <div className="text-white/40 text-xs uppercase tracking-wider mb-1">Active on the book</div>
-            <div className="font-mono text-white break-words [overflow-wrap:anywhere]">
-              {(run?.strategy.active ?? []).join(", ") || "—"}
+            <div className="font-mono text-white min-w-0 space-y-1">
+              {(run?.strategy.active ?? []).length
+                ? (run?.strategy.active ?? []).map((n) => (
+                    <MonoName key={n} className="block text-sm">{n}</MonoName>
+                  ))
+                : "—"}
             </div>
             <div className="text-white/40 text-xs mt-1">
               {run?.accounts.count ?? "…"} {run?.accounts.kind ?? "accounts"} · {run?.strategy.source}
@@ -161,7 +165,9 @@ export default function Overview() {
                       const pnlPct = positionPnlPct(p);
                       return (
                         <tr key={i} className="border-t border-white/5">
-                          <td className="py-2 font-mono text-xs">{accountLabel(p.account)}</td>
+                          <td className="py-2">
+                            <MonoName className="text-xs">{accountLabel(p.account)}</MonoName>
+                          </td>
                           <td className="font-medium">{p.symbol}</td>
                           <td className="text-white/60 font-mono text-xs break-all">{p.condition ?? "—"}</td>
                           <td className="text-right">{fmt(positionEntry(p))}</td>

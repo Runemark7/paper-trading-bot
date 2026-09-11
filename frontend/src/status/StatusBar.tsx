@@ -31,7 +31,7 @@ export default function StatusBar() {
           <Badge tone="run">Running now</Badge>
           {run ? (
             <>
-              <span className="text-white/80 min-w-0 break-words">
+              <span className="text-white/80 min-w-0 break-all [overflow-wrap:anywhere]" title={run.strategy.active.length === 1 ? run.strategy.active[0] : undefined}>
                 {run.accounts.count} paper account{run.accounts.count === 1 ? "" : "s"}
                 {run.strategy.mode === "sma_stack_fallback" ? " · sma_stack fallback" : ""}
                 {run.strategy.active.length === 1 ? ` · ${run.strategy.active[0]}` : ` · ${run.strategy.active.length} champions`}
