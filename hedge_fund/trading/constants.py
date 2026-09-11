@@ -45,19 +45,19 @@ TRADE_EVALUATION_LIMIT = 80
 # still timed out the pod, #27 cut the live default to 1 name / ~90s so
 # run_isolated and the web/API keep the rest of the tick. #28 made one
 # evaluate_windows cheaper (EMA/WT caches, history trim) without raising
-# the budget. Live default is now a cautious notch: 2 names / ~120s —
-# enough to drain more never-tested leftovers, still well under the crash
-# 4/150 settings, and most of the 300s stays for live + API. Do not jump
-# back to 4/150. MIN_BACKTEST_TRADES = 30 remains the OOS trade floor, not
-# a sample size. A non-qualified discovery_log eval parks that name forever
-# — there is no DISCOVER_RETEST_COOLDOWN re-eligibility timer. Never-tested
-# leftovers still drain 24/7 under the cycle budget. When never-tested
-# leftovers are empty (or fewer than this slice), tournament auto-refills
-# the next handful from a bounded structure-AND recipe into
-# discovery_extended.json — not a human PR per batch, not thousands of
-# clones. Static generate_universe() stays inside UNIVERSE_TARGET_MAX.
-DISCOVER_CYCLE_MAX_NAMES = 2
-DISCOVER_CYCLE_TIME_BUDGET_SECONDS = 120  # two evals; leave most of 300s for live + API
+# the budget. #29 bumped a cautious notch to 2 names / ~120s; the server
+# overloaded, so live default is back to a single-name slice: 1 name /
+# ~90s. Most of the 300s stays for live + API. Do not jump back to 4/150.
+# MIN_BACKTEST_TRADES = 30 remains the OOS trade floor, not a sample size.
+# A non-qualified discovery_log eval parks that name forever — there is
+# no DISCOVER_RETEST_COOLDOWN re-eligibility timer. Never-tested leftovers
+# still drain 24/7 under the cycle budget. When never-tested leftovers
+# are empty (or fewer than this slice), tournament auto-refills the next
+# handful from a bounded structure-AND recipe into discovery_extended.json
+# — not a human PR per batch, not thousands of clones. Static
+# generate_universe() stays inside UNIVERSE_TARGET_MAX.
+DISCOVER_CYCLE_MAX_NAMES = 1
+DISCOVER_CYCLE_TIME_BUDGET_SECONDS = 90  # one eval; leave most of 300s for live + API
 DISCOVERY_LOG_CAP = 1000  # newest-first rows; unique names are a separate count
 DISCOVERY_REFILL_BATCH_SIZE = 16  # one handful per dry drain; sidecar pending queue
 # No new evals for this long, with leftover work remaining → stuck/overdue copy.

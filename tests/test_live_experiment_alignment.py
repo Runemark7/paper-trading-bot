@@ -219,8 +219,8 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertEqual(RISK_POLICY, "rm_v1")
         self.assertEqual(MIN_BACKTEST_TRADES, 30)
         self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
-        self.assertEqual(DISCOVER_CYCLE_MAX_NAMES, 2)
-        self.assertEqual(DISCOVER_CYCLE_TIME_BUDGET_SECONDS, 120)
+        self.assertEqual(DISCOVER_CYCLE_MAX_NAMES, 1)
+        self.assertEqual(DISCOVER_CYCLE_TIME_BUDGET_SECONDS, 90)
         self.assertEqual(DISCOVERY_LOG_CAP, 1000)
         self.assertLess(DISCOVER_CYCLE_MAX_NAMES, 30)
         self.assertLess(DISCOVER_CYCLE_MAX_NAMES, 4)
@@ -270,8 +270,8 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertEqual(MIN_BACKTEST_TRADES, 30)
         self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
         self.assertEqual(TRADE_EVALUATION_LIMIT, 80)
-        self.assertEqual(DISCOVER_CYCLE_MAX_NAMES, 2)
-        self.assertEqual(DISCOVER_CYCLE_TIME_BUDGET_SECONDS, 120)
+        self.assertEqual(DISCOVER_CYCLE_MAX_NAMES, 1)
+        self.assertEqual(DISCOVER_CYCLE_TIME_BUDGET_SECONDS, 90)
         readme = (REPO / "README.md").read_text()
         self.assertIn("2026-09-10", readme)
         self.assertIn("no 24h", readme.lower())
@@ -314,8 +314,8 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
         self.assertEqual(TRADE_EVALUATION_LIMIT, 80)
         self.assertEqual(QUAL_WINDOW_BARS, 25920)
-        self.assertEqual(DISCOVER_CYCLE_MAX_NAMES, 2)
-        self.assertEqual(DISCOVER_CYCLE_TIME_BUDGET_SECONDS, 120)
+        self.assertEqual(DISCOVER_CYCLE_MAX_NAMES, 1)
+        self.assertEqual(DISCOVER_CYCLE_TIME_BUDGET_SECONDS, 90)
         self.assertLess(DISCOVER_CYCLE_MAX_NAMES, 4)
         self.assertLess(DISCOVER_CYCLE_TIME_BUDGET_SECONDS, 150)
         self.assertGreater(
@@ -325,8 +325,6 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertIn("2026-09-11", readme)
         self.assertIn("2 names / ~120s", readme)
         self.assertIn("4 / 150s", readme)
-        web = (REPO / "docs" / "WEB_SERVICE.md").read_text()
-        self.assertIn("2 names / ~120s cycle slice", web)
 
     def test_amendment_2026_09_11_structure_window_leftovers(self):
         from hedge_fund.trading.constants import (
@@ -360,8 +358,8 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertEqual(MIN_BACKTEST_TRADES, 30)
         self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
         self.assertEqual(CYCLE_INTERVAL_SECONDS, 300)
-        self.assertEqual(DISCOVER_CYCLE_MAX_NAMES, 2)
-        self.assertEqual(DISCOVER_CYCLE_TIME_BUDGET_SECONDS, 120)
+        self.assertEqual(DISCOVER_CYCLE_MAX_NAMES, 1)
+        self.assertEqual(DISCOVER_CYCLE_TIME_BUDGET_SECONDS, 90)
         uni = generate_universe()
         for name in NEW_STRUCTURE_ANDS:
             self.assertIn(name, uni)
@@ -401,8 +399,8 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertEqual(MIN_BACKTEST_TRADES, 30)
         self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
         self.assertEqual(CYCLE_INTERVAL_SECONDS, 300)
-        self.assertEqual(DISCOVER_CYCLE_MAX_NAMES, 2)
-        self.assertEqual(DISCOVER_CYCLE_TIME_BUDGET_SECONDS, 120)
+        self.assertEqual(DISCOVER_CYCLE_MAX_NAMES, 1)
+        self.assertEqual(DISCOVER_CYCLE_TIME_BUDGET_SECONDS, 90)
         self.assertEqual(DISCOVERY_REFILL_BATCH_SIZE, 16)
         self.assertLessEqual(len(generate_universe()), UNIVERSE_TARGET_MAX)
         readme = (REPO / "README.md").read_text()
@@ -410,6 +408,58 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertIn("no human PR per batch", readme)
         web = (REPO / "docs" / "WEB_SERVICE.md").read_text()
         self.assertIn("discovery_extended.json", web)
+
+    def test_amendment_2026_09_11_single_name_slice(self):
+        import hedge_fund.trading.constants as constants
+        from hedge_fund.trading.constants import (
+            CYCLE_INTERVAL_SECONDS,
+            DISCOVER_CYCLE_MAX_NAMES,
+            DISCOVER_CYCLE_TIME_BUDGET_SECONDS,
+            DISCOVERY_REFILL_BATCH_SIZE,
+            MIN_BACKTEST_SHARPE,
+            MIN_BACKTEST_TRADES,
+            QUAL_TIMEFRAME,
+            QUAL_WINDOW_BARS,
+            RISK_POLICY,
+            TRADE_EVALUATION_LIMIT,
+        )
+
+        text = (REPO / "PROTOCOL.md").read_text()
+        self.assertIn("Amendment 2026-09-11 addendum", text)
+        self.assertIn("single-name discovery slice", text.lower())
+        self.assertIn("DISCOVER_CYCLE_MAX_NAMES` (1)", text)
+        self.assertIn("DISCOVER_CYCLE_TIME_BUDGET_SECONDS` (90s)", text)
+        self.assertIn("only one name at a time", text)
+        self.assertIn("Not 2 names. Not 4 names. Not 150s.", text)
+        self.assertIn("Auto-refill still compares eligible to the live name cap", text)
+        self.assertIn("DISCOVERY_REFILL_BATCH_SIZE", text)
+        self.assertIn("Fail-once never-retest", text)
+        self.assertIn("Paper only", text)
+        self.assertIn("Do not cull existing champions", text)
+        self.assertIn("OOS gates are unchanged", text)
+        self.assertFalse(hasattr(constants, "DISCOVER_RETEST_COOLDOWN_SECONDS"))
+        self.assertFalse(hasattr(constants, "DISCOVER_BATCH_SIZE"))
+        self.assertFalse(hasattr(constants, "MAX_ACTIVE_CHAMPIONS"))
+        self.assertEqual(CYCLE_INTERVAL_SECONDS, 300)
+        self.assertEqual(QUAL_TIMEFRAME, "5m")
+        self.assertEqual(RISK_POLICY, "rm_v1")
+        self.assertEqual(MIN_BACKTEST_TRADES, 30)
+        self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
+        self.assertEqual(TRADE_EVALUATION_LIMIT, 80)
+        self.assertEqual(QUAL_WINDOW_BARS, 25920)
+        self.assertEqual(DISCOVER_CYCLE_MAX_NAMES, 1)
+        self.assertEqual(DISCOVER_CYCLE_TIME_BUDGET_SECONDS, 90)
+        self.assertEqual(DISCOVERY_REFILL_BATCH_SIZE, 16)
+        self.assertLess(DISCOVER_CYCLE_MAX_NAMES, 2)
+        self.assertLess(DISCOVER_CYCLE_TIME_BUDGET_SECONDS, 150)
+        self.assertGreater(
+            CYCLE_INTERVAL_SECONDS - DISCOVER_CYCLE_TIME_BUDGET_SECONDS, 150
+        )
+        readme = (REPO / "README.md").read_text()
+        self.assertIn("1 name / ~90s", readme)
+        self.assertIn("only one name per cycle", readme)
+        web = (REPO / "docs" / "WEB_SERVICE.md").read_text()
+        self.assertIn("1 name / ~90s cycle slice", web)
 
 
 class IsolatedRunnerTests(unittest.TestCase):
