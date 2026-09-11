@@ -93,6 +93,7 @@ over a meaningful sample, AND calibration is demonstrated independently of P&L.
 | 2026-09-11 | Addendum: per-cycle discovery slice bumped one cautious notch after cheaper per-name evals (#28). Live default is `DISCOVER_CYCLE_MAX_NAMES = 2` and `DISCOVER_CYCLE_TIME_BUDGET_SECONDS = 120` so more never-tested names can run without returning to the 4 / 150s crash settings. Fail-once, OOS gates, and window lengths unchanged. Paper only. No cull of champions. |
 | 2026-09-11 | Leftover universe batch: existing 5m dip/mom ANDed with unused Donchian / swing / `dbl_bot` lookbacks (`NEW_STRUCTURE_ANDS`). Fail-once stays — new names get one shot. No WaveTrend clones, no MFI, no chart-pattern zoo. Champions and the parked 60 untouched. Paper only; OOS gates unchanged. |
 | 2026-09-11 | Auto-refill: when never-tested leftovers are empty (or fewer than the 2-name cycle slice), tournament appends the next handful of parseable, non-near-duplicate structure-AND names to `discovery_extended.json`. No human PR per batch. Fail-once stays. Static `generate_universe()` remains inside `UNIVERSE_TARGET_MAX`. Paper only; OOS gates unchanged. |
+| 2026-09-11 | Addendum: server overloaded under the 2-name slice. Live default is `DISCOVER_CYCLE_MAX_NAMES = 1` and `DISCOVER_CYCLE_TIME_BUDGET_SECONDS = 90` so discovery evaluates only one name per cycle; most of the 300s stays for `run_isolated` and the web/API. Not a return to 4 / 150s. Fail-once, auto-refill (`DISCOVERY_REFILL_BATCH_SIZE`), OOS gates, and window lengths unchanged. Paper only. No cull of champions. |
 
 ### Amendment 2026-08-30 — what actually runs
 
@@ -411,5 +412,25 @@ This amendment does not rewrite original §§ 1–8 or prior amendments. Qual/li
 **Superseded on this date** (prior text kept above for history):
 
 - Same-date structure-window leftovers insofar as a new never-tested batch required a human PR / a frozen `NEW_STRUCTURE_ANDS` list. Fail-once, cycle budget, OOS gates, and the static 40–120 compiled-list band are not superseded.
+
+### Amendment 2026-09-11 addendum — single-name discovery slice
+
+This addendum does not rewrite original §§ 1–8 or prior amendments. Qual/live remain 5m, risk policy remains `rm_v1`, OOS gates are unchanged (30 OOS trades, all windows ≥ 0, beat B&H + `sma_stack`, Sharpe ≥ 0.30, paper 80 vs B&H). Windows remain 3 × ~90 calendar days of native 5m (`QUAL_WINDOW_BARS` = 25920, `QUAL_STRIDE` = 1). Fail-once never-retest from the 2026-09-10 amendment stays. Auto-refill (`DISCOVERY_REFILL_BATCH_SIZE` = 16, `discovery_extended.json`) from the same-date auto-refill amendment stays. Cycle remains 24/7 (`CYCLE_INTERVAL_SECONDS` = 300); there is no 07–21 window. No live-slot cap. **Still paper.** `GRADUATED_PAPER` meaning is unchanged. Do not cull existing champions. No new strategies. The homemade `DISCOVER_BATCH_SIZE` = 30 random sample stays deleted — this is not "shuffle 30 and ignore the rest." Incremental log, rotating cursor, and stuck/overdue UX from the 2026-09-07 amendment stay.
+
+**Why.** After PR #29 the live slice was 2 names / ~120s. Prod (`trading.runevibe.se`) overloaded: two walk-forward OOS evals in one 300s tick still crowded `run_isolated` and the web/API. Discovery must evaluate **only one name at a time** per cycle. Do not return to the 4 / 150s crash settings.
+
+**Live slice.** Each `live_cycle` tournament invocation still takes a leftover slice, then returns:
+
+- At most `DISCOVER_CYCLE_MAX_NAMES` (1) name.
+- Wall-clock `DISCOVER_CYCLE_TIME_BUDGET_SECONDS` (90s). Enough for one eval; most of the 300s stays for `run_isolated` and the web/API (~210s remaining). Not 2 names. Not 4 names. Not 150s.
+
+The leftover universe still drains 24/7 across cycles. `MIN_BACKTEST_TRADES` = 30 remains the OOS trade floor, not a discovery sample size. A non-qualified eval still parks that name forever.
+
+**Auto-refill still compares eligible to the live name cap.** Each `discover_and_qualify` invocation refills when the never-tested eligible slice is empty or smaller than `DISCOVER_CYCLE_MAX_NAMES` (now 1). Eligible = 0 → append the next `DISCOVERY_REFILL_BATCH_SIZE` handful. Eligible = 1 already feeds this cycle's slice — do not refill. `DISCOVERY_REFILL_BATCH_SIZE` (16) is unchanged.
+
+**Superseded on this date** (prior text kept above for history):
+
+- Same-date "cautious per-cycle discovery bump" "Live slice" insofar as it set `DISCOVER_CYCLE_MAX_NAMES` (2) and `DISCOVER_CYCLE_TIME_BUDGET_SECONDS` (120s).
+- Same-date structure-window leftovers / auto-refill insofar as "Cycle budget stays 2 names / ~120s" and "`DISCOVER_CYCLE_MAX_NAMES` = 2" named the live defaults. Fail-once, auto-refill trigger vs the name cap, OOS gates, and window lengths are not superseded.
 
 

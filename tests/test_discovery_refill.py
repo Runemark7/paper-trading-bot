@@ -206,10 +206,28 @@ class RefillBatchTests(unittest.TestCase):
             self.assertTrue(set(a).isdisjoint(b))
 
     def test_about_to_be_empty_also_refills(self):
+        # eligible < cap is "about to be" empty even when live max is 1.
         with tempfile.TemporaryDirectory() as tmp:
             with patch.dict(os.environ, {"PAPER_STATE": str(tmp)}):
                 added = maybe_refill_discovery(
                     eligible_count=1,
+                    cap=2,
+                    taken_names=generate_universe(),
+                )
+                self.assertEqual(len(added), DISCOVERY_REFILL_BATCH_SIZE)
+
+    def test_max_names_one_refills_only_when_eligible_empty(self):
+        self.assertEqual(DISCOVER_CYCLE_MAX_NAMES, 1)
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.dict(os.environ, {"PAPER_STATE": str(tmp)}):
+                skip = maybe_refill_discovery(
+                    eligible_count=DISCOVER_CYCLE_MAX_NAMES,
+                    cap=DISCOVER_CYCLE_MAX_NAMES,
+                    taken_names=generate_universe(),
+                )
+                self.assertEqual(skip, [])
+                added = maybe_refill_discovery(
+                    eligible_count=0,
                     cap=DISCOVER_CYCLE_MAX_NAMES,
                     taken_names=generate_universe(),
                 )

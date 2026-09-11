@@ -25,13 +25,15 @@ Amendment 2026-09-10: a discovery fail parks that name forever (no 24h
 retest cooldown). Never-tested leftovers still drain 24/7. Same date:
 one discovery eval is cheaper (EMA/WaveTrend series cache, trim 5m
 history to the window span) without changing OOS gates or windows.
-Amendment 2026-09-11: after that cheaper eval, the per-cycle slice is
-2 names / ~120s (not a return to 4 / 150s). Same date: leftover
-discovery names — unused Donchian / swing / `dbl_bot` lookbacks ANDed
-with existing 5m dip/mom (`NEW_STRUCTURE_ANDS`). Fail-once stays; the
-parked 60 are not retested. Same date: when never-tested leftovers run
-dry, tournament auto-refills `discovery_extended.json` from a bounded
-structure-AND recipe (no human PR per batch). Still paper.
+Amendment 2026-09-11: after that cheaper eval, the per-cycle slice was
+bumped to 2 names / ~120s (not a return to 4 / 150s). Same-date addendum:
+server overloaded — live default is 1 name / ~90s so discovery evaluates
+only one name per cycle. Same date: leftover discovery names — unused
+Donchian / swing / `dbl_bot` lookbacks ANDed with existing 5m dip/mom
+(`NEW_STRUCTURE_ANDS`). Fail-once stays; the parked 60 are not retested.
+Same date: when never-tested leftovers run dry, tournament auto-refills
+`discovery_extended.json` from a bounded structure-AND recipe (no human
+PR per batch). Still paper.
 
 Built on **[ai-hedge-fund](https://github.com/virattt/ai-hedge-fund)** (MIT, © Virat Singh)
 for Signal models, sim broker, risk limits, portfolio, backtesting, and the LLM layer.

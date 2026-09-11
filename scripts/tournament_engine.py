@@ -14,7 +14,7 @@
    wall-clock budget, rotating cursor) and appends discovery_log.json
    after each name — not after the full leftover list. A non-qualified
    eval parks that name forever (no 24h retest cooldown). Empty eligible
-   triggers one refill batch so the 2 / 120s drain keeps moving.
+   triggers one refill batch so the 1 / 90s drain keeps moving.
 
 Qualification uses hedge_fund.backtest.strategies with rm_v1 stops/fees,
 not fast_quant or fee-free SimBroker.
@@ -371,9 +371,10 @@ def discover_and_qualify(
         cursor_name=cursor.get("next_name"),
     )
     added: list[str] = []
-    # Refill vs the live slice (2), not this invocation's test-hook cap.
-    # eligible=1 is "about to be" empty: persist the next handful now so
-    # the following 2/120s cycles stay fed. This cycle still evals ``cap``.
+    # Refill vs the live slice (DISCOVER_CYCLE_MAX_NAMES), not this
+    # invocation's test-hook cap. eligible < cap is empty / about-to-be
+    # empty: persist the next handful now so following 1/90s cycles stay
+    # fed. This cycle still evals ``cap``.
     if len(rotated) < DISCOVER_CYCLE_MAX_NAMES:
         taken = (
             set(universe)

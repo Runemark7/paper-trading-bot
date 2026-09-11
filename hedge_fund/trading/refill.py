@@ -6,7 +6,7 @@ recipe of allowed OHLC structure atoms ANDed with existing 5m dip/mom/sma
 filters, skips near-duplicates of champions / graduated / discovery_log
 fails, and appends the next handful to ``discovery_extended.json`` on the
 paper-state PVC. Tournament then drains those names under the existing
-2 / 120s cycle budget. No human PR per batch.
+1 / 90s cycle budget. No human PR per batch.
 
 The static universe stays inside ``UNIVERSE_TARGET_MAX`` (~40–120). The
 sidecar is the pending queue: after a refill, never-tested extras are one
