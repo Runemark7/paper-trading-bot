@@ -90,6 +90,7 @@ over a meaningful sample, AND calibration is demonstrated independently of P&L.
 | 2026-09-07 | Discovery is budgeted per 5m cycle (time + max names, rotating cursor, 24h retest cooldown) so a leftover drain cannot wedge `run_isolated`. Each finished name is appended to `discovery_log.json` immediately. Summary `last_tested_at` is the newest eval; unique tested ≠ log rows; stale tournament stamp is stuck, not idle. OOS gates unchanged. Paper only. No cull of champions. |
 | 2026-09-07 | Addendum: per-cycle discovery slice scaled down after prod timeout. Live default is `DISCOVER_CYCLE_MAX_NAMES = 1` and `DISCOVER_CYCLE_TIME_BUDGET_SECONDS = 90` so `run_isolated` and the web/API stay healthy inside the 300s cycle. Leftover drain still 24/7 across cycles. OOS gates unchanged. Paper only. No cull of champions. |
 | 2026-09-10 | A discovery evaluation that does not qualify parks that name forever. No 24h retest cooldown re-walk of rejects. Never-tested leftovers still drain 24/7 under the 1 name / ~90s cycle budget. Existing `discovery_log.json` fails are permanent. Same date: per-name `evaluate_windows` is cheaper (causal EMA / WaveTrend series cache, trim `crypto_history_5m.json` to the 3×90d span, compact discovery log). OOS gates and window lengths unchanged. Paper only. No cull of champions. |
+| 2026-09-11 | Addendum: per-cycle discovery slice bumped one cautious notch after cheaper per-name evals (#28). Live default is `DISCOVER_CYCLE_MAX_NAMES = 2` and `DISCOVER_CYCLE_TIME_BUDGET_SECONDS = 120` so more never-tested names can run without returning to the 4 / 150s crash settings. Fail-once, OOS gates, and window lengths unchanged. Paper only. No cull of champions. |
 
 ### Amendment 2026-08-30 — what actually runs
 
@@ -351,5 +352,23 @@ This addendum does not rewrite original §§ 1–8 or prior amendments. Qual/liv
 **Deliberately unchanged:** OOS gates, window length, native 5m stride, `rm_v1` fees/stops, train/test 70/30 split (test series does not see train bars), no silent downsample, no champion cull. Structure `dbl_bot` / `confirmed_swings` is still O(n²-ish) per name — not rewritten here because a faster swing scan could change which pivots fire.
 
 **Superseded on this date:** none of the admit math. This addendum only names how one eval is computed, not what it must beat.
+
+### Amendment 2026-09-11 — cautious per-cycle discovery bump
+
+This amendment does not rewrite original §§ 1–8 or prior amendments. Qual/live remain 5m, risk policy remains `rm_v1`, OOS gates are unchanged (30 OOS trades, all windows ≥ 0, beat B&H + `sma_stack`, Sharpe ≥ 0.30, paper 80 vs B&H). Windows remain 3 × ~90 calendar days of native 5m (`QUAL_WINDOW_BARS` = 25920, `QUAL_STRIDE` = 1). Fail-once never-retest from the 2026-09-10 amendment stays. Cycle remains 24/7 (`CYCLE_INTERVAL_SECONDS = 300`); there is no 07–21 window. No live-slot cap. **Still paper.** `GRADUATED_PAPER` meaning is unchanged. Do not cull existing champions. No new strategies. The homemade `DISCOVER_BATCH_SIZE = 30` random sample stays deleted — this is not "shuffle 30 and ignore the rest." Incremental log, rotating cursor, and stuck/overdue UX from the 2026-09-07 amendment stay.
+
+**Why.** PR #26 (`f13a0e4`) rolled 4 names / 150s and prod timed out / crashed. PR #27 cut the live slice to 1 name / ~90s so `run_isolated` and the web/API kept the rest of the 300s tick. PR #28 made one `evaluate_windows` cheaper (causal EMA / WaveTrend series cache, trim `crypto_history_5m.json`, compact discovery log) but left the cycle budget at 1 / 90s. That headroom should drain more never-tested leftovers — not sit unused, and not jump back to the crash settings.
+
+**Live slice.** Each `live_cycle` tournament invocation still takes a leftover slice, then returns:
+
+- At most `DISCOVER_CYCLE_MAX_NAMES` (2) names.
+- Wall-clock `DISCOVER_CYCLE_TIME_BUDGET_SECONDS` (120s). Enough for two cheaper evals; most of the 300s stays for `run_isolated` and the web/API (~180s remaining). Not 4 names. Not 150s.
+
+The leftover universe still drains 24/7 across cycles. `MIN_BACKTEST_TRADES = 30` remains the OOS trade floor, not a discovery sample size. A non-qualified eval still parks that name forever.
+
+**Superseded on this date** (prior text kept above for history):
+
+- 2026-09-07 addendum "Live slice" insofar as it set `DISCOVER_CYCLE_MAX_NAMES` (1) and `DISCOVER_CYCLE_TIME_BUDGET_SECONDS` (90s).
+- 2026-09-10 insofar as "Per-cycle budget (1 name / ~90s)" and "cycle budget stays 1 name / ~90s" named the live defaults.
 
 
