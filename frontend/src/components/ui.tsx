@@ -143,12 +143,12 @@ export function CopyableName({
   }
 
   return (
-    <div className={`flex items-start gap-2 min-w-0 ${className}`}>
-      <MonoName className="flex-1 text-sm text-white select-all">{name}</MonoName>
+    <div className={`flex flex-col gap-1 min-w-0 sm:flex-row sm:items-start sm:gap-2 ${className}`}>
+      <MonoName className="w-full sm:flex-1 text-sm text-white select-all">{name}</MonoName>
       <button
         type="button"
         onClick={copy}
-        className="shrink-0 min-h-11 px-2.5 text-[11px] text-white/55 hover:text-white rounded bg-white/5 hover:bg-white/10"
+        className="self-start shrink-0 min-h-11 px-2.5 text-[11px] text-white/55 hover:text-white rounded bg-white/5 hover:bg-white/10"
         aria-label={`Copy strategy name ${name}`}
         title="Copy full name"
       >
