@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchChampions, api } from "../api/client";
-import { Badge, Card, Empty } from "../components/ui";
+import { Badge, Card, Empty, MonoName } from "../components/ui";
 import ChampionTape from "../chart/ChampionTape";
 import { defaultChampionName } from "../chart/numberTrades";
 import { openLotsByPair } from "../status/format";
@@ -41,6 +41,7 @@ export default function ChartPage() {
         <span className="text-[11px] uppercase tracking-wider text-white/40">Champion</span>
         <select
           aria-label="Champion"
+          title={champion || undefined}
           value={champion}
           onChange={(e) => setChampion(e.target.value)}
           disabled={!champs.length}
@@ -56,17 +57,20 @@ export default function ChartPage() {
                   ? `BTC ${split.btc} · ETH ${split.eth}`
                   : `${c.open_lots ?? 0} open lots`;
               return (
-                <option key={c.name} value={c.name}>
+                <option key={c.name} value={c.name} title={c.name}>
                   {c.name} · {lots}
                 </option>
               );
             })
           )}
         </select>
+        {champion ? (
+          <MonoName className="mt-1.5 block text-xs text-white/70">{champion}</MonoName>
+        ) : null}
       </label>
 
       <Card
-        title={champion ? `${champion} · 5m` : "Champion chart"}
+        title="5m tape"
         aside={
           selected
             ? qLive.data != null

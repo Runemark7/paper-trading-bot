@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchDiscoverySummary } from "../api/client";
 import type { DiscoveryEvaluation } from "../api/types";
-import { Badge, Card, Empty, Field, FieldGrid, MonoName, PhoneCards, DesktopTable, fmt } from "../components/ui";
+import { Badge, Card, Empty, Field, FieldGrid, MonoName, NameChip, PhoneCards, DesktopTable, fmt } from "../components/ui";
 import { fmtWhen } from "./format";
 
 const PAGE = 20;
@@ -134,12 +134,7 @@ export default function DiscoveryBuckets() {
             {flight.names.length ? (
               <div className="flex flex-wrap gap-1.5 min-w-0">
                 {flight.names.map((name) => (
-                  <span
-                    key={name}
-                    className="inline-flex max-w-full items-center rounded-md bg-amber-500/15 px-1.5 py-0.5 font-mono text-[11px] text-amber-100 break-all"
-                  >
-                    {name}
-                  </span>
+                  <NameChip key={name} name={name} className="bg-amber-500/15 text-amber-100" />
                 ))}
               </div>
             ) : (
@@ -210,12 +205,8 @@ export default function DiscoveryBuckets() {
             <PhoneCards>
               {visible.map((d) => (
                 <li key={`${d.strategy}-${d.tested_at}`} className="rounded-lg border border-white/10 p-3 space-y-2 min-w-0 overflow-hidden">
-                  <div className="flex items-start justify-between gap-2 min-w-0">
-                    <MonoName className="block text-xs font-medium text-white min-w-0">{d.strategy}</MonoName>
-                    <span className="shrink-0">
-                      <Badge tone={testedTone(d.qualified)}>{d.qualified ? "QUALIFIED" : "REJECTED"}</Badge>
-                    </span>
-                  </div>
+                  <MonoName className="block w-full text-xs font-medium text-white">{d.strategy}</MonoName>
+                  <Badge tone={testedTone(d.qualified)}>{d.qualified ? "QUALIFIED" : "REJECTED"}</Badge>
                   <TestedRowFields d={d} />
                   {!d.qualified && d.fail_reasons?.length ? (
                     <p className="text-[11px] text-white/40 break-words">{d.fail_reasons.join("; ")}</p>
@@ -238,7 +229,9 @@ export default function DiscoveryBuckets() {
                 <tbody>
                   {visible.map((d) => (
                     <tr key={`${d.strategy}-${d.tested_at}`} className="border-t border-white/5">
-                      <td className="py-1 font-mono font-medium text-white break-all">{d.strategy}</td>
+                      <td className="py-1" title={d.strategy}>
+                        <MonoName className="font-medium text-white">{d.strategy}</MonoName>
+                      </td>
                       <td className="text-white/50">{fmtWhen(d.tested_at)}</td>
                       <td>
                         <Badge tone={testedTone(d.qualified)}>{d.qualified ? "QUALIFIED" : "REJECTED"}</Badge>
@@ -284,12 +277,7 @@ export default function DiscoveryBuckets() {
         ) : (
           <div className="flex flex-wrap gap-1.5 min-w-0">
             {queued.map((name) => (
-              <span
-                key={name}
-                className="inline-flex max-w-full items-center rounded-md bg-white/10 px-1.5 py-0.5 font-mono text-[11px] text-white/80 break-all"
-              >
-                {name}
-              </span>
+              <NameChip key={name} name={name} className="bg-white/10 text-white/80" />
             ))}
           </div>
         )}

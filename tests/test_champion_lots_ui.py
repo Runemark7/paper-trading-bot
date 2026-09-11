@@ -287,6 +287,10 @@ class ChampionsAccordionUiTests(unittest.TestCase):
         expanded = CHAMPS_TSX.split("{isOpen &&", 1)[1]
         self.assertIn("Started {fmtChampionSince(c.champion_since)}", expanded)
         self.assertIn("flex flex-wrap", expanded)
+        self.assertIn("CopyableName", expanded)
+        self.assertIn("name={c.name}", expanded)
+        champion_expand = expanded.split("Graduated paper")[0]
+        self.assertIn('Strategy', champion_expand)
 
     def test_graduated_section_does_not_invent_live_lots(self):
         grad = CHAMPS_TSX[CHAMPS_TSX.index("Graduated paper") :]

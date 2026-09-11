@@ -102,7 +102,9 @@ export default function Positions() {
                         key={`${lot.account ?? ""}-${lot.symbol}-${lot.lot_id}-${i}`}
                         className="border-t border-white/5"
                       >
-                        <td className="py-2 font-mono text-xs">{accountLabel(lot.account)}</td>
+                        <td className="py-2">
+                          <MonoName className="text-xs">{accountLabel(lot.account)}</MonoName>
+                        </td>
                         <td className="font-medium">{lot.symbol}</td>
                         <td className="py-2">
                           <LotHealthChips lot={lot} extra />
@@ -171,7 +173,9 @@ export default function Positions() {
                 <tbody>
                   {trades.data.map((t) => (
                     <tr key={`${t.account ?? ""}-${t.id}`} className="border-t border-white/5">
-                      <td className="py-2 font-mono text-xs">{accountLabel(t.account)}</td>
+                      <td className="py-2">
+                        <MonoName className="text-xs">{accountLabel(t.account)}</MonoName>
+                      </td>
                       <td className="font-medium">{t.symbol}</td>
                       <td className="text-white/60 font-mono text-xs break-all">{t.condition}</td>
                       <td className="text-right">{fmt(t.entry_price)}</td>
