@@ -25,7 +25,8 @@ Amendment 2026-09-10: a discovery fail parks that name forever (no 24h
 retest cooldown). Never-tested leftovers still drain 24/7. Same date:
 one discovery eval is cheaper (EMA/WaveTrend series cache, trim 5m
 history to the window span) without changing OOS gates or windows.
-Still paper.
+Amendment 2026-09-11: after that cheaper eval, the per-cycle slice is
+2 names / ~120s (not a return to 4 / 150s). Still paper.
 
 Built on **[ai-hedge-fund](https://github.com/virattt/ai-hedge-fund)** (MIT, © Virat Singh)
 for Signal models, sim broker, risk limits, portfolio, backtesting, and the LLM layer.

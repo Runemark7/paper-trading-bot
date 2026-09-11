@@ -42,15 +42,18 @@ TRADE_EVALUATION_LIMIT = 80
 # ignore the rest) stays deleted. Leftovers still drain 24/7, but each
 # live_cycle tournament invocation takes a time-shared slice so a 60-name
 # 5m walk-forward cannot wedge the 300s cycle. After #26 (4 names / 150s)
-# still timed out the pod, the live default is 1 name / ~90s so
-# run_isolated and the web/API keep the rest of the tick. Prefer one
-# eval over raising names if a single 5m walk-forward is already heavy.
-# MIN_BACKTEST_TRADES = 30 remains the OOS trade floor, not a sample size.
-# A non-qualified discovery_log eval parks that name forever — there is
-# no DISCOVER_RETEST_COOLDOWN re-eligibility timer. Never-tested leftovers
-# still drain 24/7 under the cycle budget.
-DISCOVER_CYCLE_MAX_NAMES = 1
-DISCOVER_CYCLE_TIME_BUDGET_SECONDS = 90  # one eval; leave most of 300s for live + API
+# still timed out the pod, #27 cut the live default to 1 name / ~90s so
+# run_isolated and the web/API keep the rest of the tick. #28 made one
+# evaluate_windows cheaper (EMA/WT caches, history trim) without raising
+# the budget. Live default is now a cautious notch: 2 names / ~120s —
+# enough to drain more never-tested leftovers, still well under the crash
+# 4/150 settings, and most of the 300s stays for live + API. Do not jump
+# back to 4/150. MIN_BACKTEST_TRADES = 30 remains the OOS trade floor, not
+# a sample size. A non-qualified discovery_log eval parks that name forever
+# — there is no DISCOVER_RETEST_COOLDOWN re-eligibility timer. Never-tested
+# leftovers still drain 24/7 under the cycle budget.
+DISCOVER_CYCLE_MAX_NAMES = 2
+DISCOVER_CYCLE_TIME_BUDGET_SECONDS = 120  # two evals; leave most of 300s for live + API
 DISCOVERY_LOG_CAP = 1000  # newest-first rows; unique names are a separate count
 # No new evals for this long, with leftover work remaining → stuck/overdue copy.
 DISCOVERY_QUIET_SECONDS = 2 * 3600

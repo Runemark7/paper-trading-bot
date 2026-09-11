@@ -358,10 +358,14 @@ class DiscoverySummaryBucketTests(unittest.TestCase):
 
                 with _tournament_patches(leftovers, lambda *_a, **_k: _dummy_windows()):
                     third = replenish_and_evaluate(cooldown_seconds=0)
-                self.assertEqual(DISCOVER_CYCLE_MAX_NAMES, 1)
+                self.assertEqual(DISCOVER_CYCLE_MAX_NAMES, 2)
                 self.assertEqual(third["total_tested_in_batch"], DISCOVER_CYCLE_MAX_NAMES)
-                self.assertEqual(load_discovery_log()[0]["strategy"], leftovers[4])
-                self.assertEqual(load_cursor().get("next_name"), leftovers[5])
+                self.assertEqual(
+                    {r["strategy"] for r in load_discovery_log()[:2]},
+                    {leftovers[4], leftovers[5]},
+                )
+                self.assertEqual(load_discovery_log()[0]["strategy"], leftovers[5])
+                self.assertEqual(load_cursor().get("next_name"), leftovers[6])
 
     def test_time_budget_stops_after_elapsed_names(self):
         from scripts.tournament_engine import replenish_and_evaluate
