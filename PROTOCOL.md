@@ -91,6 +91,7 @@ over a meaningful sample, AND calibration is demonstrated independently of P&L.
 | 2026-09-07 | Addendum: per-cycle discovery slice scaled down after prod timeout. Live default is `DISCOVER_CYCLE_MAX_NAMES = 1` and `DISCOVER_CYCLE_TIME_BUDGET_SECONDS = 90` so `run_isolated` and the web/API stay healthy inside the 300s cycle. Leftover drain still 24/7 across cycles. OOS gates unchanged. Paper only. No cull of champions. |
 | 2026-09-10 | A discovery evaluation that does not qualify parks that name forever. No 24h retest cooldown re-walk of rejects. Never-tested leftovers still drain 24/7 under the 1 name / ~90s cycle budget. Existing `discovery_log.json` fails are permanent. Same date: per-name `evaluate_windows` is cheaper (causal EMA / WaveTrend series cache, trim `crypto_history_5m.json` to the 3×90d span, compact discovery log). OOS gates and window lengths unchanged. Paper only. No cull of champions. |
 | 2026-09-11 | Addendum: per-cycle discovery slice bumped one cautious notch after cheaper per-name evals (#28). Live default is `DISCOVER_CYCLE_MAX_NAMES = 2` and `DISCOVER_CYCLE_TIME_BUDGET_SECONDS = 120` so more never-tested names can run without returning to the 4 / 150s crash settings. Fail-once, OOS gates, and window lengths unchanged. Paper only. No cull of champions. |
+| 2026-09-11 | Leftover universe batch: existing 5m dip/mom ANDed with unused Donchian / swing / `dbl_bot` lookbacks (`NEW_STRUCTURE_ANDS`). Fail-once stays — new names get one shot. No WaveTrend clones, no MFI, no chart-pattern zoo. Champions and the parked 60 untouched. Paper only; OOS gates unchanged. |
 
 ### Amendment 2026-08-30 — what actually runs
 
@@ -370,5 +371,24 @@ The leftover universe still drains 24/7 across cycles. `MIN_BACKTEST_TRADES = 30
 
 - 2026-09-07 addendum "Live slice" insofar as it set `DISCOVER_CYCLE_MAX_NAMES` (1) and `DISCOVER_CYCLE_TIME_BUDGET_SECONDS` (90s).
 - 2026-09-10 insofar as "Per-cycle budget (1 name / ~90s)" and "cycle budget stays 1 name / ~90s" named the live defaults.
+
+### Amendment 2026-09-11 — structure-window leftovers (never-tested names)
+
+This amendment does not rewrite original §§ 1–8 or prior amendments. Qual/live remain 5m, risk policy remains `rm_v1`, OOS gates are unchanged (30 OOS trades, all windows ≥ 0, beat B&H + `sma_stack`, Sharpe ≥ 0.30, paper 80 vs B&H). Windows remain 3 × ~90 calendar days of native 5m (`QUAL_WINDOW_BARS` = 25920, `QUAL_STRIDE` = 1). Fail-once never-retest from the 2026-09-10 amendment stays — a fail parks that name forever; this batch is **new names only**, one shot each. Cycle budget stays 2 names / ~120s from the same-date discovery bump. Cycle remains 24/7. No live-slot cap. **Still paper.** `GRADUATED_PAPER` meaning is unchanged. Do not cull existing champions. Do not re-enable 24h retests of the parked leftover list.
+
+**Why.** After PR #28 fail-once, prod leftover discovery was empty: eligible=0, untested=0, rejected_parked=60, tested_pass=0. Champions and graduated stay. The parked 60 are not retested. Discovery needs never-tested parseable names whose `near_duplicate_key` does not collapse onto those fails.
+
+**What was added** (`NEW_STRUCTURE_ANDS` in `hedge_fund/trading/universe.py`, still inside `UNIVERSE_TARGET_MIN` / `UNIVERSE_TARGET_MAX`, ~40–120). Existing 5m dip/mom atoms ANDed with Donchian / near-swing / double-bottom at lookbacks that do not share `near_duplicate_key` with the parked 24/12 handful. `near_swing_hi` (already parsed) is used as a breakout tag. Handful of ANDs, not a cartesian product:
+
+- Dip at unused support: `dip_6b_lt2pc&don_lo_12`, `dip_12b_lt3pc&don_lo_12`, `dip_24b_lt5pc&don_lo_36`, `dip_6b_lt2pc&near_swing_lo_18`, `dip_12b_lt3pc&near_swing_lo_12`, `dip_24b_lt5pc&near_swing_lo_18`
+- Momentum at unused breakout: `mom_6b_gt2pc&don_hi_12`, `mom_12b_gt3pc&don_hi_12`, `mom_12b_gt3pc&don_hi_36`, `mom_24b_gt5pc&don_hi_36`, `mom_6b_gt2pc&near_swing_hi_12`, `mom_12b_gt3pc&near_swing_hi_18`, `mom_24b_gt5pc&near_swing_hi_12`
+- Double bottom at unused fractal `k`: `dbl_bot_18`, `dbl_bot_18&sma_abv_50`, `dbl_bot_18&don_lo_24`, `dbl_bot_24`, `dbl_bot_24&sma_stack_20_50_100`, `dbl_bot_18&ema_abv_50`
+- Standalone Donchian at unused N (1h / 3h on 5m): `don_hi_12`, `don_hi_36`
+
+**Refused.** No WaveTrend / Market Cipher clones (`wt_*` already failed OOS — do not add more). No MFI until honest 5m volume. No head-and-shoulders, flags, triangles, candlestick encyclopedia, FVGs, or order blocks. No 24h retest of the parked 60.
+
+**Superseded on this date** (prior text kept above for history):
+
+- 2026-09-05 / 2026-09-07 / 2026-09-10 / same-date cycle-bump text insofar as "No new strategies" froze the universe list. Cycle budget, fail-once, and OOS gates are not superseded.
 
 
