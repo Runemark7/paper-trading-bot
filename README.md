@@ -26,7 +26,10 @@ retest cooldown). Never-tested leftovers still drain 24/7. Same date:
 one discovery eval is cheaper (EMA/WaveTrend series cache, trim 5m
 history to the window span) without changing OOS gates or windows.
 Amendment 2026-09-11: after that cheaper eval, the per-cycle slice is
-2 names / ~120s (not a return to 4 / 150s). Still paper.
+2 names / ~120s (not a return to 4 / 150s). Same date: leftover
+discovery names — unused Donchian / swing / `dbl_bot` lookbacks ANDed
+with existing 5m dip/mom (`NEW_STRUCTURE_ANDS`). Fail-once stays; the
+parked 60 are not retested. Still paper.
 
 Built on **[ai-hedge-fund](https://github.com/virattt/ai-hedge-fund)** (MIT, © Virat Singh)
 for Signal models, sim broker, risk limits, portfolio, backtesting, and the LLM layer.

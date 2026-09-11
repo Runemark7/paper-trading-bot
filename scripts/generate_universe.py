@@ -4,7 +4,8 @@ Does not emit daily()/h1()/m5() or MFI: the live cycle is a single 5m
 series without a volume-aware MFI path. Structure names (Donchian / swing /
 double bottom) and WaveTrend (HLC3 green-dot) are OHLC on that same series.
 Universe is an explicit list (not thousands of combinatorial clones),
-inside UNIVERSE_TARGET_MAX.
+inside UNIVERSE_TARGET_MAX. 2026-09-11 leftover batch: unused structure
+windows ANDed with existing dip/mom (`NEW_STRUCTURE_ANDS`).
 """
 from __future__ import annotations
 

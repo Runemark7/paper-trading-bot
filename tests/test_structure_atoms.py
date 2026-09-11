@@ -291,9 +291,18 @@ class UniverseBandTests(unittest.TestCase):
         self.assertNotIn("mfi_", blob)
         # Long-only: no standalone dbl_top longs (combinator has no NOT).
         self.assertFalse(any(p == "dbl_top_12" or p.startswith("dbl_top_") for p in uni))
-        # Did not invent a second momentum / breakout / trend stack.
+        # Spaced mom×don_hi lookbacks only — not a cartesian of every combo.
         mom_don = [p for p in uni if "mom_" in p and "don_hi_" in p]
-        self.assertEqual(mom_don, ["mom_12b_gt3pc&don_hi_24"])
+        self.assertEqual(
+            mom_don,
+            [
+                "mom_12b_gt3pc&don_hi_12",
+                "mom_12b_gt3pc&don_hi_24",
+                "mom_12b_gt3pc&don_hi_36",
+                "mom_24b_gt5pc&don_hi_36",
+                "mom_6b_gt2pc&don_hi_12",
+            ],
+        )
 
     def test_new_universe_names_parse(self):
         closes, highs, lows = _flat(80)

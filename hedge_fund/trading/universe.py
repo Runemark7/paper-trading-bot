@@ -12,9 +12,12 @@ Amendment 2026-09-01: explicit ~50-name universe instead of ~3500
 combinatorial clones. Amendment 2026-09-03: a handful of OHLC structure
 AND-gates, then double-bottom pattern names, still inside UNIVERSE_TARGET_MAX.
 Amendment 2026-09-05: LazyBear WaveTrend green-dot longs (wt_cross_up_os).
-Trend / breakout / momentum stay as sma_stack/sma_abv, don_hi_*, mom_* —
-not a second stack. Near-duplicate keys collapse tiny param tweaks.
-Lookbacks in names (e.g. dip_24b) are bar counts: on 5m, 24 bars = 2 hours.
+Amendment 2026-09-11: leftover structure-window ANDs after fail-once parked
+the prior list — unused Donchian / swing / dbl_bot lookbacks with existing
+dip/mom, not WaveTrend clones. Trend / breakout / momentum stay as
+sma_stack/sma_abv, don_hi_*, mom_* — not a second stack. Near-duplicate
+keys collapse tiny param tweaks. Lookbacks in names (e.g. dip_24b) are
+bar counts: on 5m, 24 bars = 2 hours.
 """
 from __future__ import annotations
 
@@ -23,6 +26,39 @@ import re
 # Documented size (tests lock this band). Was 3546 combinatorial names.
 UNIVERSE_TARGET_MIN = 40
 UNIVERSE_TARGET_MAX = 120
+
+# After fail-once parked the prior leftover list (prod: untested=0).
+# Existing 5m dip/mom ANDed with Donchian / near-swing / dbl_bot at
+# lookbacks that do not share near_duplicate_key with the parked 24/12
+# handful. near_swing_hi was parsed but unused. Not a cartesian product,
+# not WaveTrend clones, not MFI, not a chart-pattern zoo.
+NEW_STRUCTURE_ANDS: tuple[str, ...] = (
+    # Dip at a different support window than parked don_lo_24 / swing_12.
+    "dip_6b_lt2pc&don_lo_12",
+    "dip_12b_lt3pc&don_lo_12",
+    "dip_24b_lt5pc&don_lo_36",
+    "dip_6b_lt2pc&near_swing_lo_18",
+    "dip_12b_lt3pc&near_swing_lo_12",
+    "dip_24b_lt5pc&near_swing_lo_18",
+    # Momentum at a different breakout window than parked don_hi_24.
+    "mom_6b_gt2pc&don_hi_12",
+    "mom_12b_gt3pc&don_hi_12",
+    "mom_12b_gt3pc&don_hi_36",
+    "mom_24b_gt5pc&don_hi_36",
+    "mom_6b_gt2pc&near_swing_hi_12",
+    "mom_12b_gt3pc&near_swing_hi_18",
+    "mom_24b_gt5pc&near_swing_hi_12",
+    # Double bottom at a different fractal k than parked dbl_bot_12.
+    "dbl_bot_18",
+    "dbl_bot_18&sma_abv_50",
+    "dbl_bot_18&don_lo_24",
+    "dbl_bot_24",
+    "dbl_bot_24&sma_stack_20_50_100",
+    "dbl_bot_18&ema_abv_50",
+    # Standalone Donchian breakouts at unused N (1h / 3h on 5m).
+    "don_hi_12",
+    "don_hi_36",
+)
 
 
 def near_duplicate_key(name: str) -> str:
@@ -172,6 +208,9 @@ def generate_universe() -> list[str]:
         "wt_cross_up_os&sma_stack_20_50_100",
         "wt_cross_up_os&don_lo_24",
     })
+
+    # 2026-09-11 leftover batch — unused structure windows × existing dip/mom.
+    universe.update(NEW_STRUCTURE_ANDS)
 
     return sorted(universe)
 

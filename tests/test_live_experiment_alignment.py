@@ -328,6 +328,47 @@ class ProtocolAmendmentTests(unittest.TestCase):
         web = (REPO / "docs" / "WEB_SERVICE.md").read_text()
         self.assertIn("2 names / ~120s cycle slice", web)
 
+    def test_amendment_2026_09_11_structure_window_leftovers(self):
+        from hedge_fund.trading.constants import (
+            CYCLE_INTERVAL_SECONDS,
+            DISCOVER_CYCLE_MAX_NAMES,
+            DISCOVER_CYCLE_TIME_BUDGET_SECONDS,
+            MIN_BACKTEST_SHARPE,
+            MIN_BACKTEST_TRADES,
+            QUAL_TIMEFRAME,
+            RISK_POLICY,
+        )
+        from hedge_fund.trading.universe import NEW_STRUCTURE_ANDS, generate_universe
+
+        text = (REPO / "PROTOCOL.md").read_text()
+        self.assertIn("structure-window leftovers", text.lower())
+        self.assertIn("NEW_STRUCTURE_ANDS", text)
+        self.assertIn("never-tested names", text.lower())
+        self.assertIn("near_duplicate_key", text)
+        self.assertIn("don_hi_12", text)
+        self.assertIn("near_swing_hi_12", text)
+        self.assertIn("dbl_bot_18", text)
+        self.assertIn("No WaveTrend", text)
+        self.assertIn("No MFI", text)
+        self.assertIn("parked 60", text)
+        self.assertIn("Paper only", text)
+        self.assertIn("Do not cull existing champions", text)
+        self.assertIn("OOS gates are unchanged", text)
+        self.assertIn("one shot", text.lower())
+        self.assertEqual(QUAL_TIMEFRAME, "5m")
+        self.assertEqual(RISK_POLICY, "rm_v1")
+        self.assertEqual(MIN_BACKTEST_TRADES, 30)
+        self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
+        self.assertEqual(CYCLE_INTERVAL_SECONDS, 300)
+        self.assertEqual(DISCOVER_CYCLE_MAX_NAMES, 2)
+        self.assertEqual(DISCOVER_CYCLE_TIME_BUDGET_SECONDS, 120)
+        uni = generate_universe()
+        for name in NEW_STRUCTURE_ANDS:
+            self.assertIn(name, uni)
+        readme = (REPO / "README.md").read_text()
+        self.assertIn("NEW_STRUCTURE_ANDS", readme)
+        self.assertIn("parked 60", readme)
+
 
 class IsolatedRunnerTests(unittest.TestCase):
     def test_no_second_hardcoded_book(self):
