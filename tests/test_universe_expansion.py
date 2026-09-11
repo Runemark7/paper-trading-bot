@@ -30,21 +30,26 @@ class NewStructureAndsTests(unittest.TestCase):
         self.assertLessEqual(len(uni), UNIVERSE_TARGET_MAX)
         self.assertGreaterEqual(len(NEW_STRUCTURE_ANDS), 15)
         self.assertLessEqual(len(NEW_STRUCTURE_ANDS), 30)
+        closes = [100.0] * 80
+        highs = [101.0] * 80
+        lows = [99.0] * 80
         for name in NEW_STRUCTURE_ANDS:
             self.assertIn(name, uni)
-            pred = parse_strategy(name)
-            # Every new name carries an OHLC structure atom — silent False
-            # fallback would not raise.
+            tokens = name.split("&")
             self.assertTrue(
-                any(any(tok.startswith(m) for m in _STRUCTURE_MARKERS) for tok in name.split("&"))
+                any(any(tok.startswith(m) for m in _STRUCTURE_MARKERS) for tok in tokens)
             )
-            with self.assertRaises(ValueError) as ctx:
-                pred([100.0] * 80)
-            self.assertIn("high/low", str(ctx.exception).lower())
-            closes = [100.0] * 80
-            highs = [101.0] * 80
-            lows = [99.0] * 80
-            eval_predicate(pred, closes, None, highs=highs, lows=lows)
+            # AND short-circuits on a false close-only atom; check each
+            # structure token itself so a silent False fallback cannot hide.
+            for tok in tokens:
+                atom = parse_strategy(tok)
+                if any(tok.startswith(m) for m in _STRUCTURE_MARKERS):
+                    with self.assertRaises(ValueError) as ctx:
+                        atom(closes)
+                    self.assertIn("high/low", str(ctx.exception).lower())
+                else:
+                    atom(closes)
+            eval_predicate(parse_strategy(name), closes, None, highs=highs, lows=lows)
 
     def test_new_keys_are_not_near_duplicates_of_prior_universe(self):
         uni = generate_universe()
