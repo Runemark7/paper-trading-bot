@@ -328,7 +328,7 @@ class DiscoveryBucketsUiTests(unittest.TestCase):
         self.assertIn("/api/discovery/summary", DISCOVERY_TSX)
         self.assertIn("fetchDiscoverySummary", DISCOVERY_TSX)
         self.assertIn("OOS trades", DISCOVERY_TSX)
-        self.assertIn("filterTestedRows", DISCOVERY_TSX)
+        self.assertIn("applyTestedRows", DISCOVERY_TSX)
         self.assertIn('aria-label={`Filter ${label}`}', DISCOVERY_TSX)
         self.assertIn('aria-label="Filter Result"', DISCOVERY_TSX)
         self.assertIn("Clear filters", DISCOVERY_TSX)

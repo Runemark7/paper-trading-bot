@@ -1,4 +1,4 @@
-"""Discovery page + already-tested column filters (source contract + filter logic)."""
+"""Discovery page + already-tested column filters and sort (source contract + logic)."""
 from __future__ import annotations
 
 import json
@@ -111,13 +111,29 @@ class DiscoveryPageContractTests(unittest.TestCase):
         ):
             self.assertIn(label, DISCOVERY_TSX, label)
         self.assertIn('aria-label={`Filter ${label}`}', DISCOVERY_TSX)
-        self.assertIn("filterTestedRows", DISCOVERY_TSX)
+        self.assertIn("applyTestedRows", DISCOVERY_TSX)
         self.assertIn("PhoneCards", DISCOVERY_TSX)
         self.assertIn("DesktopTable", DISCOVERY_TSX)
         src = FILTERS_TS.read_text()
         self.assertIn("export function filterTestedRows", src)
         self.assertIn("export function matchNumeric", src)
         self.assertIn(">=|<=|>|<|=", src)
+
+    def test_already_tested_has_sort_controls(self):
+        self.assertIn('aria-label="Sort Already tested"', DISCOVERY_TSX)
+        self.assertIn('aria-label="Toggle sort order"', DISCOVERY_TSX)
+        self.assertIn("Reset sort", DISCOVERY_TSX)
+        self.assertIn("cycleTestedSort", DISCOVERY_TSX)
+        self.assertIn("SortTh", DISCOVERY_TSX)
+        self.assertIn("aria-sort", DISCOVERY_TSX)
+        self.assertIn('aria-label={`Sort by ${label}`}', DISCOVERY_TSX)
+        self.assertIn("highest / lowest", DISCOVERY_TSX)
+        src = FILTERS_TS.read_text()
+        self.assertIn("export function sortTestedRows", src)
+        self.assertIn("export function cycleTestedSort", src)
+        self.assertIn("export function applyTestedRows", src)
+        self.assertIn('key: "testPnl"', src)
+        self.assertIn('key: "testedAt"', src)
 
 
 class DiscoveryFilterLogicTests(unittest.TestCase):
@@ -138,6 +154,139 @@ class DiscoveryFilterLogicTests(unittest.TestCase):
         self.assertEqual(_filter_names(_empty_filters(testPnl="<0")), ["mom_48b_sma"])
         self.assertEqual(_filter_names(_empty_filters(failReasons="parked")), ["dip_12b_only"])
         self.assertEqual(_filter_names(_empty_filters(testedAt="2026-09-10")), ["mom_48b_sma"])
+
+
+def _apply_names(filters: dict, sort: dict) -> list[str]:
+    script = f"""
+import {{ applyTestedRows }} from {json.dumps(FILTERS_TS.as_posix())};
+const rows = {json.dumps(SAMPLE)};
+const filters = {json.dumps(filters)};
+const sort = {json.dumps(sort)};
+const out = applyTestedRows(rows, filters, sort, (iso) => iso || "", (n) => n == null ? "—" : String(n));
+console.log(JSON.stringify(out.map((r) => r.strategy)));
+"""
+    proc = subprocess.run(
+        ["node", "--experimental-strip-types", "--input-type=module", "-e", script],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        raise AssertionError(f"sort harness failed:\n{proc.stderr or proc.stdout}")
+    return json.loads(proc.stdout.strip().splitlines()[-1])
+
+
+def _cycle(current: dict, clicked: str) -> dict:
+    script = f"""
+import {{ cycleTestedSort }} from {json.dumps(FILTERS_TS.as_posix())};
+console.log(JSON.stringify(cycleTestedSort({json.dumps(current)}, {json.dumps(clicked)})));
+"""
+    proc = subprocess.run(
+        ["node", "--experimental-strip-types", "--input-type=module", "-e", script],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        raise AssertionError(f"cycle harness failed:\n{proc.stderr or proc.stdout}")
+    return json.loads(proc.stdout.strip().splitlines()[-1])
+
+
+class DiscoverySortLogicTests(unittest.TestCase):
+    def test_numeric_and_date_sort(self):
+        empty = _empty_filters()
+        self.assertEqual(
+            _apply_names(empty, {"key": "testPnl", "dir": "desc"}),
+            ["dip_24b_and_wt_cross", "dip_12b_only", "mom_48b_sma"],
+        )
+        self.assertEqual(
+            _apply_names(empty, {"key": "testPnl", "dir": "asc"}),
+            ["mom_48b_sma", "dip_12b_only", "dip_24b_and_wt_cross"],
+        )
+        self.assertEqual(
+            _apply_names(empty, {"key": "sharpe", "dir": "desc"}),
+            ["dip_24b_and_wt_cross", "dip_12b_only", "mom_48b_sma"],
+        )
+        self.assertEqual(
+            _apply_names(empty, {"key": "trades", "dir": "asc"}),
+            ["mom_48b_sma", "dip_12b_only", "dip_24b_and_wt_cross"],
+        )
+        self.assertEqual(
+            _apply_names(empty, {"key": "testedAt", "dir": "desc"}),
+            ["dip_24b_and_wt_cross", "mom_48b_sma", "dip_12b_only"],
+        )
+        self.assertEqual(
+            _apply_names(empty, {"key": "testedAt", "dir": "asc"}),
+            ["dip_12b_only", "mom_48b_sma", "dip_24b_and_wt_cross"],
+        )
+
+    def test_name_and_result_sort(self):
+        empty = _empty_filters()
+        self.assertEqual(
+            _apply_names(empty, {"key": "strategy", "dir": "asc"}),
+            ["dip_12b_only", "dip_24b_and_wt_cross", "mom_48b_sma"],
+        )
+        self.assertEqual(
+            _apply_names(empty, {"key": "strategy", "dir": "desc"}),
+            ["mom_48b_sma", "dip_24b_and_wt_cross", "dip_12b_only"],
+        )
+        # Qualified first; rejected tie-break newest tested_at.
+        self.assertEqual(
+            _apply_names(empty, {"key": "result", "dir": "desc"}),
+            ["dip_24b_and_wt_cross", "mom_48b_sma", "dip_12b_only"],
+        )
+        self.assertEqual(
+            _apply_names(empty, {"key": "result", "dir": "asc"}),
+            ["mom_48b_sma", "dip_12b_only", "dip_24b_and_wt_cross"],
+        )
+
+    def test_filter_then_sort(self):
+        names = _apply_names(_empty_filters(strategy="dip"), {"key": "testPnl", "dir": "asc"})
+        self.assertEqual(names, ["dip_12b_only", "dip_24b_and_wt_cross"])
+
+    def test_nulls_sort_last(self):
+        rows = SAMPLE + [
+            {
+                "strategy": "gap_nulls",
+                "tested_at": "not-a-date",
+                "test_pnl": None,
+                "sharpe": None,
+                "trades": None,
+                "qualified": False,
+                "fail_reasons": [],
+            }
+        ]
+        script = f"""
+import {{ sortTestedRows }} from {json.dumps(FILTERS_TS.as_posix())};
+const rows = {json.dumps(rows)};
+const out = sortTestedRows(rows, {{ key: "testPnl", dir: "desc" }});
+console.log(JSON.stringify(out.map((r) => r.strategy)));
+"""
+        proc = subprocess.run(
+            ["node", "--experimental-strip-types", "--input-type=module", "-e", script],
+            cwd=REPO,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if proc.returncode != 0:
+            raise AssertionError(f"null sort harness failed:\n{proc.stderr or proc.stdout}")
+        self.assertEqual(
+            json.loads(proc.stdout.strip().splitlines()[-1]),
+            ["dip_24b_and_wt_cross", "dip_12b_only", "mom_48b_sma", "gap_nulls"],
+        )
+
+    def test_header_cycle_none_desc_asc_none(self):
+        default = {"key": "testedAt", "dir": "desc"}
+        self.assertEqual(_cycle(default, "testPnl"), {"key": "testPnl", "dir": "desc"})
+        self.assertEqual(_cycle({"key": "testPnl", "dir": "desc"}, "testPnl"), {"key": "testPnl", "dir": "asc"})
+        self.assertEqual(_cycle({"key": "testPnl", "dir": "asc"}, "testPnl"), default)
+        self.assertEqual(_cycle({"key": "testPnl", "dir": "desc"}, "sharpe"), {"key": "sharpe", "dir": "desc"})
+        self.assertEqual(_cycle(default, "strategy"), {"key": "strategy", "dir": "asc"})
+        self.assertEqual(_cycle({"key": "strategy", "dir": "asc"}, "strategy"), {"key": "strategy", "dir": "desc"})
+        self.assertEqual(_cycle({"key": "strategy", "dir": "desc"}, "strategy"), default)
 
 
 if __name__ == "__main__":
