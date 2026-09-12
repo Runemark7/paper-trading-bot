@@ -359,6 +359,20 @@ class ProtocolStructureAmendmentTests(unittest.TestCase):
         self.assertIn("don_hi_N", text)
         self.assertIn("highs[i-N:i]", text)
 
+    def test_longer_structure_lookbacks_parse(self):
+        closes, highs, lows = _flat(220)
+        for name in (
+            "don_hi_108",
+            "don_lo_120",
+            "near_swing_hi_144",
+            "near_swing_lo_168",
+            "dbl_bot_192",
+            "ema_stack_20_50_100&don_lo_108",
+            "dip_6b_lt2pc&don_lo_192&sma_abv_100",
+        ):
+            pred = parse_strategy(name)
+            eval_predicate(pred, closes, None, highs=highs, lows=lows)
+
     def test_amendment_2026_09_03_doubles_in_protocol(self):
         from pathlib import Path
 

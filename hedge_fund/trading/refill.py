@@ -11,9 +11,11 @@ paper-state PVC. Tournament then drains those names under the existing
 The static universe stays inside ``UNIVERSE_TARGET_MAX`` (~40–120). The
 sidecar is the pending queue: after a refill, never-tested extras are one
 ``DISCOVERY_REFILL_BATCH_SIZE`` handful, not thousands of clones. Recipe
-generation is string-only (no history load). 2026-09-12 adds unused
-Donchian / swing / near-level lookbacks and ANDs already in
-``parse_strategy`` — still no named candlesticks.
+generation is string-only (no history load). 2026-09-12 first added unused
+Donchian / swing / near-level lookbacks through 96; the same-date later
+pass extends ``STRUCTURE_NS`` through 192 (9h–16h on 5m) and leftover
+TREND / ``ema_stack`` / 3-atom families already in ``parse_strategy`` —
+still no named candlesticks.
 """
 from __future__ import annotations
 
@@ -50,16 +52,38 @@ TREND_FILTERS: tuple[str, ...] = (
 )
 
 # Multiples of 6 so near_duplicate_key is the identity for structure N.
-# 6 bars = 30m on 5m; 96 bars = 8h. Distinct from a 1-bar param tweak.
+# 6 bars = 30m on 5m. After 72 the step is 12 (84=7h … 192=16h).
+# Distinct from a 1-bar param tweak.
 STRUCTURE_NS: tuple[int, ...] = (
+    6, 12, 18, 24, 30, 36, 42, 48, 54, 60, 66, 72, 84, 96,
+    108, 120, 132, 144, 156, 168, 180, 192,
+)
+
+# Frozen 2026-09-12 morning set (through 96). Tests park this to prove
+# the later lookback / leftover-AND pass still refills.
+STRUCTURE_NS_THROUGH_96: tuple[int, ...] = (
     6, 12, 18, 24, 30, 36, 42, 48, 54, 60, 66, 72, 84, 96,
 )
 
 # Trend tags for support / near-level ANDs (not every TREND_FILTERS × atom).
-# sma_abv_200 / rsi_14_>50 stay on don_hi and a few dbl_bot extras only.
+# The 2026-09-12 morning pass left sma_abv_100 / 200 / rsi on don_hi only.
 LEVEL_TRENDS: tuple[str, ...] = (
     "sma_abv_50",
     "ema_abv_50",
+    "sma_stack_20_50_100",
+)
+
+# Parser + static universe already have these; morning recipe never ANDed
+# them onto support / near-swing / don_hi (ema_abv_100) / dbl_bot extras.
+SUPPORT_EXTRA_TRENDS: tuple[str, ...] = (
+    "sma_abv_100",
+    "sma_abv_200",
+    "rsi_14_>50",
+    "ema_abv_100",
+)
+STACK_TREND: str = "ema_stack_20_50_100"
+THREE_ATOM_EXTRA_TRENDS: tuple[str, ...] = (
+    "sma_abv_100",
     "sma_stack_20_50_100",
 )
 
@@ -247,6 +271,37 @@ def _near_level_ands(n: int) -> Iterator[str]:
     yield f"dbl_bot_{n}&sma_abv_100"
 
 
+def _leftover_trend_ands(n: int) -> Iterator[str]:
+    """2026-09-12 later: leftover TREND / ema_stack / 3-atom ANDs.
+
+    Parser already allows ``ema_stack_*``, ``ema_abv_100``, and the rest of
+    TREND_FILTERS on support / near-swing. Morning recipe left those on
+    ``don_hi`` (or skipped them). ``dbl_bot`` × ``near_swing_lo`` is the
+    same fractal as the pattern atom. No named candlesticks.
+    """
+    for trend in SUPPORT_EXTRA_TRENDS:
+        yield f"{trend}&don_lo_{n}"
+        yield f"{trend}&near_swing_lo_{n}"
+        yield f"{trend}&near_swing_hi_{n}"
+    yield f"ema_abv_100&don_hi_{n}"
+    yield f"{STACK_TREND}&don_hi_{n}"
+    yield f"{STACK_TREND}&don_lo_{n}"
+    yield f"{STACK_TREND}&near_swing_hi_{n}"
+    yield f"{STACK_TREND}&near_swing_lo_{n}"
+    yield f"dbl_bot_{n}&near_swing_lo_{n}"
+    yield f"dbl_bot_{n}&sma_abv_200"
+    yield f"dbl_bot_{n}&ema_abv_100"
+    yield f"dbl_bot_{n}&{STACK_TREND}"
+    for dip in DIP_FILTERS:
+        for trend in THREE_ATOM_EXTRA_TRENDS:
+            yield f"{dip}&don_lo_{n}&{trend}"
+            yield f"{dip}&near_swing_lo_{n}&{trend}"
+    for mom in MOM_FILTERS:
+        for trend in THREE_ATOM_EXTRA_TRENDS:
+            yield f"{mom}&don_hi_{n}&{trend}"
+            yield f"{mom}&near_swing_hi_{n}&{trend}"
+
+
 def iter_recipe_names() -> Iterator[str]:
     """Deterministic bounded stream. Not a full cartesian of every atom.
 
@@ -254,12 +309,15 @@ def iter_recipe_names() -> Iterator[str]:
     (don_hi / near_swing_hi); dbl_bot is the one pattern family.
     Trend filters AND onto those structure atoms. Near-level tags
     (don_lo / near_swing_*) are also emitted standalone and with LEVEL_TRENDS.
-    Legacy families first, then the 2026-09-12 near-level pass. No WaveTrend, no MFI.
+    Legacy families first, then the 2026-09-12 near-level pass, then leftover
+    TREND / ema_stack / 3-atom families. No WaveTrend, no MFI.
     """
     for n in STRUCTURE_NS:
         yield from _legacy_structure_ands(n)
     for n in STRUCTURE_NS:
         yield from _near_level_ands(n)
+    for n in STRUCTURE_NS:
+        yield from _leftover_trend_ands(n)
 
 
 def next_refill_batch(
