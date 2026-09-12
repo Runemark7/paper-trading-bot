@@ -226,6 +226,96 @@ class IngestMergeTests(unittest.TestCase):
         self.assertNotIn("dbl_bot_120", names)
         self.assertEqual(by_name["window_veto_only"]["fail_reasons"], [])
 
+    def test_force_admit_seats_parked_beat_bh_fail(self):
+        parked = _eval(
+            "dbl_bot_120",
+            qualified=False,
+            tested_at="2026-09-01T00:00:00+00:00",
+            sharpe=0.58,
+            trades=296,
+            test_pnl=946.0,
+            bh_oos_pnl=2000.0,
+            sma_stack_oos_pnl=50.0,
+            regimes_tested=3,
+            fail_reasons=[
+                "window[1] failed/skipped/neg/empty",
+                "not all windows non-negative",
+                "oos_pnl 946.00 <= bh 2000.00",
+            ],
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "champions.json").write_text(json.dumps({
+                "champions": [
+                    {"name": "keep_me", "closed": 4, "pnl": 1.5, "wins": 2},
+                ],
+                "synced_until": "",
+            }))
+            (root / "discovery_log.json").write_text(json.dumps([parked]))
+            with patch.dict(os.environ, {"PAPER_STATE": str(root)}):
+                out = ingest_discovery_payload({
+                    "paper_only": True,
+                    "force_admit": ["dbl_bot_120"],
+                    "source": "manual_force_admit",
+                })
+                from hedge_fund.trading.champions import load_pool
+                from hedge_fund.trading.discovery import load_discovery_log
+
+                pool = load_pool()
+                log = load_discovery_log()
+        names = [c["name"] for c in pool["champions"]]
+        row = next(r for r in log if r["strategy"] == "dbl_bot_120")
+        self.assertEqual(out["force_admitted"], ["dbl_bot_120"])
+        self.assertEqual(out["admitted"], ["dbl_bot_120"])
+        self.assertEqual(out["requalified"], [])
+        self.assertIn("dbl_bot_120", names)
+        self.assertIn("keep_me", names)
+        self.assertTrue(row["qualified"])
+        self.assertEqual(row["fail_reasons"], parked["fail_reasons"])
+        self.assertTrue(row.get("force_admitted_at"))
+        self.assertEqual(row.get("force_admit_source"), "manual_force_admit")
+        champ = next(c for c in pool["champions"] if c["name"] == "dbl_bot_120")
+        self.assertEqual(champ["timeframe"], "5m")
+        self.assertEqual(champ["risk_policy"], "rm_v1")
+
+    def test_force_admit_skips_existing_champion(self):
+        parked = _eval(
+            "dbl_bot_120",
+            qualified=False,
+            tested_at="2026-09-01T00:00:00+00:00",
+            sharpe=0.58,
+            trades=296,
+            test_pnl=946.0,
+            bh_oos_pnl=2000.0,
+            fail_reasons=["oos_pnl 946.00 <= bh 2000.00"],
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "champions.json").write_text(json.dumps({
+                "champions": [
+                    {"name": "dbl_bot_120", "closed": 2, "pnl": 0.4, "wins": 1},
+                ],
+                "synced_until": "",
+            }))
+            (root / "discovery_log.json").write_text(json.dumps([parked]))
+            with patch.dict(os.environ, {"PAPER_STATE": str(root)}):
+                out = ingest_discovery_payload({
+                    "force_admit": ["dbl_bot_120"],
+                    "source": "manual_force_admit",
+                })
+                from hedge_fund.trading.champions import load_pool
+                from hedge_fund.trading.discovery import load_discovery_log
+
+                pool = load_pool()
+                log = load_discovery_log()
+        self.assertEqual(out["force_admitted"], [])
+        self.assertEqual(out["admitted"], [])
+        reasons = {s["strategy"]: s["reason"] for s in out["skipped"]}
+        self.assertEqual(reasons["dbl_bot_120"], "already_pooled_or_graduated")
+        self.assertEqual([c["name"] for c in pool["champions"]], ["dbl_bot_120"])
+        self.assertFalse(log[0]["qualified"])
+        self.assertNotIn("force_admitted_at", log[0])
+
 
 class IngestHttpTests(unittest.TestCase):
     def _start(self):
@@ -296,6 +386,45 @@ class IngestHttpTests(unittest.TestCase):
                     self.assertEqual(raw.status, 200)
                     self.assertEqual(body["admitted"], ["http_pass"])
                     self.assertTrue(body["paper_only"])
+        finally:
+            self._stop(httpd, thread)
+
+    def test_force_admit_rejects_wrong_token(self):
+        httpd, thread, port = self._start()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                env = {
+                    "PAPER_STATE": tmp,
+                    "PAPER_DISCOVERY_INGEST_TOKEN": "paper-secret-token",
+                }
+                with patch.dict(os.environ, env):
+                    body = json.dumps({
+                        "paper_only": True,
+                        "force_admit": ["dbl_bot_120"],
+                        "source": "manual_force_admit",
+                    }).encode()
+                    bad = Request(
+                        f"http://127.0.0.1:{port}/api/discovery/ingest",
+                        data=body,
+                        method="POST",
+                        headers={"X-Discovery-Token": "nope", "Content-Type": "application/json"},
+                    )
+                    try:
+                        urlopen(bad, timeout=3)
+                        self.fail("expected HTTPError")
+                    except HTTPError as err:
+                        self.assertEqual(err.code, 401)
+                    missing = Request(
+                        f"http://127.0.0.1:{port}/api/discovery/ingest",
+                        data=body,
+                        method="POST",
+                        headers={"Content-Type": "application/json"},
+                    )
+                    try:
+                        urlopen(missing, timeout=3)
+                        self.fail("expected HTTPError")
+                    except HTTPError as err:
+                        self.assertEqual(err.code, 401)
         finally:
             self._stop(httpd, thread)
 

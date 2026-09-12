@@ -4,8 +4,9 @@ Fail-once: a name that already has any discovery_log row is skipped
 (no second walk-forward). Qualified names are admitted the same way as
 ``replenish_and_evaluate``. On ingest, parked rows that now pass on
 stored aggregates (Sharpe / trades / beat-B&H / sma) are flipped and
-admitted without re-running walk-forwards. Existing champions are never
-removed. Paper only.
+admitted without re-running walk-forwards. Optional ``force_admit`` seats
+a named existing log row even when those aggregates still fail (token
+gated). Existing champions are never removed. Paper only.
 """
 from __future__ import annotations
 
@@ -84,11 +85,52 @@ def _admit_qualified(st: dict, record: dict, existing: set[str]) -> bool:
     return True
 
 
+def _latest_log_row(log: list[dict], name: str) -> dict | None:
+    """Newest-first log: first matching strategy row."""
+    for row in log:
+        if isinstance(row, dict) and row.get("strategy") == name:
+            return row
+    return None
+
+
+def _apply_force_admit(
+    names: list[Any],
+    *,
+    source: str,
+    st: dict,
+    existing: set[str],
+    log: list[dict],
+    skipped: list[dict],
+) -> list[str]:
+    """Seat named parked rows. Does not change OOS gates. Never culls."""
+    admitted: list[str] = []
+    stamp = _now()
+    for raw in names:
+        if not isinstance(raw, str) or not raw.strip():
+            skipped.append({"strategy": str(raw), "reason": "invalid_name"})
+            continue
+        name = raw.strip()
+        if name in existing:
+            skipped.append({"strategy": name, "reason": "already_pooled_or_graduated"})
+            continue
+        row = _latest_log_row(log, name)
+        if row is None:
+            skipped.append({"strategy": name, "reason": "not_in_discovery_log"})
+            continue
+        row["qualified"] = True
+        row["force_admitted_at"] = stamp
+        row["force_admit_source"] = source
+        if _admit_qualified(st, row, existing):
+            admitted.append(name)
+    return admitted
+
+
 def ingest_discovery_payload(payload: dict) -> dict:
     """Apply a worker batch. Caller must already have checked the ingest token.
 
     Returns counts. Never culls champions. May flip a parked log row to
-    qualified when stored aggregates now pass (all-windows veto dropped).
+    qualified when stored aggregates now pass (all-windows veto dropped),
+    or when ``force_admit`` names an existing log row.
     """
     if not isinstance(payload, dict):
         raise ValueError("payload must be an object")
@@ -99,12 +141,16 @@ def ingest_discovery_payload(payload: dict) -> dict:
     raw_extended = payload.get("extended_names") or []
     if raw_extended and not isinstance(raw_extended, list):
         raise ValueError("extended_names must be a list")
+    raw_force = payload.get("force_admit")
+    if raw_force is not None and not isinstance(raw_force, list):
+        raise ValueError("force_admit must be a list")
 
     ingested: list[str] = []
     skipped: list[dict] = []
     admitted: list[str] = []
     rejected_invalid: list[str] = []
     requalified: list[str] = []
+    force_admitted: list[str] = []
     added_extended: list[str] = []
 
     with paper_state_lock("discovery"):
@@ -138,12 +184,28 @@ def ingest_discovery_payload(payload: dict) -> dict:
         log = load_discovery_log()
         requal_rows, requal_names = requalify_parked_log(log, existing_names=existing)
         if requal_names:
-            save_discovery_log(log)
             for rec in requal_rows:
                 if _admit_qualified(st, rec, existing):
                     requalified.append(rec["strategy"])
                     if rec["strategy"] not in admitted:
                         admitted.append(rec["strategy"])
+
+        if raw_force:
+            force_source = str(payload.get("source") or "manual_force_admit")
+            force_admitted = _apply_force_admit(
+                raw_force,
+                source=force_source,
+                st=st,
+                existing=existing,
+                log=log,
+                skipped=skipped,
+            )
+            for name in force_admitted:
+                if name not in admitted:
+                    admitted.append(name)
+
+        if requal_names or force_admitted:
+            save_discovery_log(log)
 
         if admitted:
             save_pool(st)
@@ -186,6 +248,7 @@ def ingest_discovery_payload(payload: dict) -> dict:
         "skipped": skipped,
         "admitted": admitted,
         "requalified": requalified,
+        "force_admitted": force_admitted,
         "rejected_invalid": rejected_invalid,
         "extended_added": added_extended,
         "source": payload.get("source") or "windows_worker",
