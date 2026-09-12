@@ -834,6 +834,43 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertIn("8×90d span", html)
         self.assertNotIn("3×90d span", html)
 
+    def test_fetch_history_defaults_btc_eth_only(self):
+        from hedge_fund.trading.constants import (
+            MIN_BACKTEST_SHARPE,
+            MIN_BACKTEST_TRADES,
+            QUAL_N_WINDOWS,
+        )
+
+        fetch = (REPO / "scripts" / "fetch_history.py").read_text()
+        self.assertIn('_DEFAULT_SYMBOLS = ["BTC/USDT", "ETH/USDT"]', fetch)
+        self.assertIn("HIST_SYMBOLS", fetch)
+        self.assertNotIn("SOL/USDT", fetch)
+        self.assertNotIn("XRP/USDT", fetch)
+        self.assertIn("HIST_FETCH_PAGE_CAP = 2500", fetch)
+        self.assertIn("QUAL_WINDOW_BARS * QUAL_N_WINDOWS + 3000", fetch)
+
+        fetch5 = (REPO / "scripts" / "fetch_history_5m.py").read_text()
+        self.assertIn('_DEFAULT_SYMBOLS = ["BTC/USDT", "ETH/USDT"]', fetch5)
+        self.assertIn("HIST_SYMBOLS", fetch5)
+        self.assertNotIn("SOL/USDT", fetch5)
+        self.assertNotIn("XRP/USDT", fetch5)
+        self.assertIn("pages < 2500", fetch5)
+
+        self.assertEqual(QUAL_N_WINDOWS, 8)
+        self.assertEqual(MIN_BACKTEST_TRADES, 30)
+        self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
+
+        protocol = (REPO / "PROTOCOL.md").read_text()
+        self.assertIn("SOL/XRP are not fetched", protocol)
+        self.assertIn("HIST_SYMBOLS", protocol)
+        runbook = (REPO / "docs" / "WINDOWS_DISCOVERY.md").read_text()
+        self.assertIn("BTC/USDT and", runbook)
+        self.assertIn("ETH/USDT only", runbook)
+        self.assertIn("no SOL/XRP", runbook)
+        workflow = (REPO / "docs" / "WORKFLOW.md").read_text()
+        self.assertIn("BTC/USDT and ETH/USDT only", workflow)
+        self.assertIn("Binance 5m BTC/ETH", workflow)
+
 
 class IsolatedRunnerTests(unittest.TestCase):
     def test_no_second_hardcoded_book(self):

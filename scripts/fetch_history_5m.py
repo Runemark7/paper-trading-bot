@@ -3,6 +3,9 @@
 Writes crypto_history_5m.json. Qualification and the live book use 5m
 (`scripts/tournament_engine.py`, TradingLoop, CcxtSource.DEFAULT_TIMEFRAME).
 4h history must not admit champions.
+
+Default symbols are BTC/USDT and ETH/USDT only. Override with HIST_SYMBOLS
+(comma-separated ccxt symbols) if you need extra pairs.
 """
 from __future__ import annotations
 
@@ -20,7 +23,19 @@ STATE_DIR = state_root()
 TIMEFRAME = "5m"
 MAX_BARS = int(os.environ.get("HIST_BARS", "900000"))  # Up to ~8.5 years of 5m bars
 OUT = STATE_DIR / f"crypto_history_{TIMEFRAME}.json"
-SYMBOLS = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT"]
+# Discovery/qual tape is BTC+ETH. SOL/XRP waste time on the deep 5m fetch.
+# Override with HIST_SYMBOLS=BTC/USDT,ETH/USDT (comma-separated ccxt symbols).
+_DEFAULT_SYMBOLS = ["BTC/USDT", "ETH/USDT"]
+
+
+def _hist_symbols() -> list[str]:
+    raw = os.environ.get("HIST_SYMBOLS", "")
+    if not raw.strip():
+        return list(_DEFAULT_SYMBOLS)
+    return [s.strip() for s in raw.split(",") if s.strip()]
+
+
+SYMBOLS = _hist_symbols()
 
 src = CcxtSource()
 
