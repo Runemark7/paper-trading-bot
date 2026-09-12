@@ -9,6 +9,6 @@ resources:
   - ingress.yaml
 images:
   - name: ghcr.io/runemark7/paper-trading-bot/backend
-    newTag: 47bd8a769c004198bb66f07b415b619330cbb693
+    newTag: 43574c02e5a1a3f3e91ca62d1901b75540d73370
   - name: ghcr.io/runemark7/paper-trading-bot/frontend
-    newTag: 47bd8a769c004198bb66f07b415b619330cbb693
+    newTag: 43574c02e5a1a3f3e91ca62d1901b75540d73370
