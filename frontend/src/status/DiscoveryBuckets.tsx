@@ -6,11 +6,20 @@ import type { DiscoveryEvaluation } from "../api/types";
 import { Badge, Card, Empty, Field, FieldGrid, MonoName, NameChip, PhoneCards, DesktopTable, fmt } from "../components/ui";
 import { fmtWhen } from "./format";
 import {
+  DEFAULT_TESTED_SORT,
   EMPTY_TESTED_FILTERS,
-  filterTestedRows,
+  TESTED_SORT_COLUMNS,
+  applyTestedRows,
+  cycleTestedSort,
+  initialSortDir,
+  isDefaultTestedSort,
+  sortDirLabels,
   testedFiltersActive,
+  testedSortSummary,
   type ResultFilter,
   type TestedColumnFilters,
+  type TestedSort,
+  type TestedSortKey,
 } from "./discoveryFilters";
 
 const PAGE = 20;
@@ -62,6 +71,41 @@ function FilterInput({
   );
 }
 
+function SortTh({
+  label,
+  column,
+  sort,
+  onCycle,
+  align = "left",
+}: {
+  label: string;
+  column: TestedSortKey;
+  sort: TestedSort;
+  onCycle: (key: TestedSortKey) => void;
+  align?: "left" | "right";
+}) {
+  const active = sort.key === column;
+  const arrow = active ? (sort.dir === "asc" ? "↑" : "↓") : "↕";
+  const ariaSort = active ? (sort.dir === "asc" ? "ascending" : "descending") : "none";
+  return (
+    <th className={`${align === "right" ? "text-right" : "text-left"} py-1`} aria-sort={ariaSort}>
+      <button
+        type="button"
+        onClick={() => onCycle(column)}
+        aria-label={`Sort by ${label}`}
+        className={`inline-flex items-center gap-1 min-h-11 uppercase tracking-wider ${
+          align === "right" ? "justify-end w-full" : ""
+        } ${active ? "text-white" : "text-white/40 hover:text-white/70"}`}
+      >
+        {label}
+        <span className={active ? "text-white/80" : "text-white/25"} aria-hidden="true">
+          {arrow}
+        </span>
+      </button>
+    </th>
+  );
+}
+
 /** Short Champions-page pointer — full buckets live on /discovery. */
 export function DiscoveryTeaser() {
   const q = useQuery({
@@ -76,8 +120,9 @@ export function DiscoveryTeaser() {
   return (
     <Card title="Discovery" aside="full buckets on /discovery">
       <p className="text-sm text-white/60 mb-3">
-        Last-known tested / in-flight / leftover buckets. The full list and
-        already-tested column filters live on the Discovery page — not a live job.
+        Last-known tested / in-flight / leftover buckets. The full list,
+        already-tested column filters, and highest/lowest sort live on the
+        Discovery page — not a live job.
       </p>
       {q.isError && (
         <div className="text-rose-300 text-sm mb-3">
@@ -123,15 +168,16 @@ export default function DiscoveryBuckets() {
     refetchInterval: 15_000,
   });
   const [filters, setFilters] = useState<TestedColumnFilters>(EMPTY_TESTED_FILTERS);
+  const [sort, setSort] = useState<TestedSort>(DEFAULT_TESTED_SORT);
   const [shown, setShown] = useState(PAGE);
 
   const data = q.data;
   const tested = data?.tested ?? [];
-  const filtered = useMemo(
-    () => filterTestedRows(tested, filters, fmtWhen, fmt),
-    [tested, filters],
+  const viewed = useMemo(
+    () => applyTestedRows(tested, filters, sort, fmtWhen, fmt),
+    [tested, filters, sort],
   );
-  const visible = filtered.slice(0, shown);
+  const visible = viewed.slice(0, shown);
   const flight = data?.in_flight;
   const queued = data?.queued ?? data?.untested ?? [];
   const counts = data?.counts;
@@ -139,10 +185,20 @@ export default function DiscoveryBuckets() {
   const logRows = counts?.log_rows;
   const stuck = Boolean(data?.stuck || flight?.stale);
   const filtersOn = testedFiltersActive(filters);
+  const sortOn = !isDefaultTestedSort(sort);
 
   function setColumn<K extends keyof TestedColumnFilters>(key: K, value: TestedColumnFilters[K]) {
     setFilters((prev) => ({ ...prev, [key]: value }));
     setShown(PAGE);
+  }
+
+  function applySort(next: TestedSort) {
+    setSort(next);
+    setShown(PAGE);
+  }
+
+  function cycleColumn(key: TestedSortKey) {
+    applySort(cycleTestedSort(sort, key));
   }
 
   return (
@@ -259,7 +315,7 @@ export default function DiscoveryBuckets() {
           <h3 className="text-xs uppercase tracking-wider text-white/40">Already tested</h3>
           <p className="text-xs text-white/40">
             {tested.length
-              ? `Showing ${visible.length} of ${filtered.length}${filtersOn ? ` (filtered from ${tested.length})` : ""}`
+              ? `Showing ${visible.length} of ${viewed.length}${filtersOn ? ` (filtered from ${tested.length})` : ""}${sortOn ? ` · ${testedSortSummary(sort)}` : ""}`
               : null}
           </p>
         </div>
@@ -329,24 +385,66 @@ export default function DiscoveryBuckets() {
                 onChange={(v) => setColumn("failReasons", v)}
                 placeholder="contains…"
               />
+              <label className="min-w-0 block" htmlFor="tested-sort-key">
+                <span className="text-[11px] uppercase tracking-wider text-white/40">Sort</span>
+                <select
+                  id="tested-sort-key"
+                  value={sort.key}
+                  onChange={(e) => {
+                    const key = e.target.value as TestedSortKey;
+                    applySort({ key, dir: initialSortDir(key) });
+                  }}
+                  aria-label="Sort Already tested"
+                  className="mt-1 w-full min-h-11 rounded-md bg-[#121a38] px-2 text-xs text-white ring-1 ring-white/15"
+                >
+                  {TESTED_SORT_COLUMNS.map((col) => (
+                    <option key={col.key} value={col.key}>
+                      {col.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div className="min-w-0">
+                <div className="text-[11px] uppercase tracking-wider text-white/40 mb-1">Order</div>
+                <button
+                  type="button"
+                  onClick={() => applySort({ key: sort.key, dir: sort.dir === "desc" ? "asc" : "desc" })}
+                  aria-label="Toggle sort order"
+                  className="min-h-11 w-full px-3 py-1.5 rounded text-xs bg-white/15 text-white hover:bg-white/20"
+                >
+                  {sortDirLabels(sort.key)[sort.dir]} {sort.dir === "desc" ? "↓" : "↑"}
+                </button>
+              </div>
             </div>
             <div className="flex flex-wrap items-center justify-between gap-2">
               <p className="text-[11px] text-white/40">
                 Sharpe, trades, and P&amp;L accept &gt;, &gt;=, &lt;, &lt;=, or =. When matches the
-                UTC stamp or relative time.
+                UTC stamp or relative time. Sort ranks the filtered list — highest / lowest on
+                desktop headers and this Sort control.
               </p>
-              {filtersOn ? (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setFilters(EMPTY_TESTED_FILTERS);
-                    setShown(PAGE);
-                  }}
-                  className="min-h-11 px-3 py-1.5 text-xs bg-white/10 hover:bg-white/20 rounded text-white"
-                >
-                  Clear filters
-                </button>
-              ) : null}
+              <div className="flex flex-wrap gap-1">
+                {sortOn ? (
+                  <button
+                    type="button"
+                    onClick={() => applySort(DEFAULT_TESTED_SORT)}
+                    className="min-h-11 px-3 py-1.5 text-xs bg-white/10 hover:bg-white/20 rounded text-white"
+                  >
+                    Reset sort
+                  </button>
+                ) : null}
+                {filtersOn ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFilters(EMPTY_TESTED_FILTERS);
+                      setShown(PAGE);
+                    }}
+                    className="min-h-11 px-3 py-1.5 text-xs bg-white/10 hover:bg-white/20 rounded text-white"
+                  >
+                    Clear filters
+                  </button>
+                ) : null}
+              </div>
             </div>
           </div>
         ) : null}
@@ -361,7 +459,7 @@ export default function DiscoveryBuckets() {
               discovery is running.
             </Empty>
           )
-        ) : !filtered.length ? (
+        ) : !viewed.length ? (
           <Empty>No already-tested rows match these column filters.</Empty>
         ) : (
           <>
@@ -381,13 +479,13 @@ export default function DiscoveryBuckets() {
               <table className="w-full text-xs">
                 <thead className="text-white/40 uppercase">
                   <tr>
-                    <th className="text-left py-1">Name</th>
-                    <th className="text-left">When</th>
-                    <th className="text-left">Result</th>
-                    <th className="text-right">Sharpe</th>
-                    <th className="text-right">OOS trades</th>
-                    <th className="text-right">Test P&L</th>
-                    <th className="text-left">Fail reasons</th>
+                    <SortTh label="Name" column="strategy" sort={sort} onCycle={cycleColumn} />
+                    <SortTh label="When" column="testedAt" sort={sort} onCycle={cycleColumn} />
+                    <SortTh label="Result" column="result" sort={sort} onCycle={cycleColumn} />
+                    <SortTh label="Sharpe" column="sharpe" sort={sort} onCycle={cycleColumn} align="right" />
+                    <SortTh label="OOS trades" column="trades" sort={sort} onCycle={cycleColumn} align="right" />
+                    <SortTh label="Test P&L" column="testPnl" sort={sort} onCycle={cycleColumn} align="right" />
+                    <th className="text-left py-1">Fail reasons</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -413,13 +511,13 @@ export default function DiscoveryBuckets() {
                 </tbody>
               </table>
             </DesktopTable>
-            {filtered.length > shown && (
+            {viewed.length > shown && (
               <button
                 type="button"
                 onClick={() => setShown((n) => n + PAGE)}
                 className="mt-3 min-h-11 px-3 py-2 text-xs bg-white/10 hover:bg-white/20 rounded text-white"
               >
-                Show more ({filtered.length - shown} left)
+                Show more ({viewed.length - shown} left)
               </button>
             )}
           </>
