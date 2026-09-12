@@ -18,6 +18,7 @@ from hedge_fund.trading.discovery import (
     tested_discovery_names,
     write_in_flight,
 )
+from hedge_fund.trading.farm import apply_heartbeat_unlocked
 from hedge_fund.trading.refill import append_extended_batch, load_extended_names
 from hedge_fund.trading.store import paper_state_lock
 
@@ -136,6 +137,13 @@ def ingest_discovery_payload(payload: dict) -> dict:
                 before = set(load_extended_names())
                 append_extended_batch(names)
                 added_extended = [n for n in names if n not in before]
+
+        hb = payload.get("heartbeat")
+        if isinstance(hb, dict):
+            status = hb.get("status")
+            apply_heartbeat_unlocked(str(status) if status else None)
+        elif hb:
+            apply_heartbeat_unlocked(str(hb))
 
         flight = payload.get("in_flight")
         if payload.get("clear_in_flight"):

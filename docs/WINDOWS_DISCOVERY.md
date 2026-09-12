@@ -99,7 +99,36 @@ Discovery buckets update from the ingested log. A quiet leftover drain
 means this PC is off or stuck, not that the cycle sidecar should start
 walk-forwards again.
 
-## 4. What this worker must not do
+## 4. Pause for gaming (leave the worker running)
+
+Do **not** kill `discovery_worker.py` when you want the CPU/RAM back.
+Killing the parent has left orphaned multiprocessing children before.
+
+1. Leave `python scripts/discovery_worker.py --workers 2` running.
+2. Open [https://trading.runevibe.se/discovery](https://trading.runevibe.se/discovery).
+3. Paste the same paper ingest token (browser tab only) and click
+   **Stop discovery**. The worker polls prod, clears in-flight, and
+   sleeps 10–30s at a time with near-zero CPU.
+4. **Start discovery** when you are done gaming. The same process
+   resumes the next batch. Start cannot relaunch a dead process.
+
+If the UI says **Worker not seen**, the process on jensa actually died.
+Relaunch it in PowerShell (same env as §2):
+
+```
+$env:PAPER_STATE = "$PWD\state"
+$env:PAPER_DISCOVERY_INGEST_TOKEN = "the-same-token"
+$env:PAPER_DISCOVERY_INGEST_URL = "https://trading.runevibe.se/api/discovery/ingest"
+python scripts/discovery_worker.py --workers 2
+```
+
+Docker alternative: `docker compose -f docker-compose.discovery.yml up -d`
+(only if you already use Compose — native Python is enough).
+
+A batch already running when you click Stop may finish first. After that
+the farm stays idle until Start.
+
+## 5. What this worker must not do
 
 - No real-money broker.
 - No retest of a name that already has a discovery_log row (fail-once).

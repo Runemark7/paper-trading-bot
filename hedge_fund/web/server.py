@@ -8,14 +8,15 @@ A small, dependency-free HTTP server (stdlib only) that exposes:
   GET /api/regime       -> JSON: current regime zone/score
   GET /api/trades       -> JSON: recent closed trades
   GET /api/status       -> running-now vs in-progress (last-known stamps)
-  GET /api/discovery/summary -> tested / in-flight / leftover-untested; rejected parked forever
+  GET /api/discovery/summary -> tested / in-flight / leftover-untested; farm Start/Stop status
   POST /api/discovery/ingest -> Windows worker: append evals + admit (shared secret)
+  POST /api/discovery/farm -> Start/Stop Windows farm (same ingest token)
   POST /run             -> trigger a live decision cycle, then regenerate
   GET /health           -> liveness probe
 
 Purpose: a durable little service you can port-forward to and open the
 dashboard (and its data) from any device. Everything is read-only except
-POST /run, which is a manual trigger of the same paper-trading cycle.
+POST /run and the token-gated discovery ingest / farm Start/Stop routes.
 
 Run:
     .venv/bin/python -m hedge_fund.web.server [--port 8787] [--host 0.0.0.0]
@@ -441,6 +442,28 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(ingest_discovery_payload(payload))
             except ValueError as exc:
                 self._send_json({"ok": False, "error": str(exc), "paper_only": True}, 400)
+            except Exception as exc:
+                self._send_json({"ok": False, "error": str(exc), "paper_only": True}, 500)
+        elif route == "/api/discovery/farm":
+            ok, err, code = self._discovery_ingest_authorized()
+            if not ok:
+                self._send_json({"ok": False, "error": err, "paper_only": True}, code)
+                return
+            payload, err = self._read_json_body()
+            if err:
+                self._send_json({"ok": False, "error": err, "paper_only": True}, 400)
+                return
+            if "enabled" not in payload:
+                self._send_json(
+                    {"ok": False, "error": "enabled (bool) is required", "paper_only": True},
+                    400,
+                )
+                return
+            try:
+                from hedge_fund.trading.farm import set_farm_enabled
+
+                farm = set_farm_enabled(bool(payload.get("enabled")))
+                self._send_json({"ok": True, "paper_only": True, "farm": farm})
             except Exception as exc:
                 self._send_json({"ok": False, "error": str(exc), "paper_only": True}, 500)
         else:

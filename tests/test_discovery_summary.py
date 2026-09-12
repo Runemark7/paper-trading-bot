@@ -156,6 +156,10 @@ class DiscoverySummaryBucketTests(unittest.TestCase):
         self.assertEqual(s["last_strategy"], "tested_pass")
         self.assertTrue(s["paper_only"])
         self.assertIn("unique strategy names", s["note"])
+        self.assertIn("farm", s)
+        self.assertTrue(s["farm"]["enabled"])
+        self.assertEqual(s["farm"]["status"], "worker_unseen")
+        self.assertIn("Worker not seen", s["farm"]["note"])
 
     def test_last_tested_at_is_newest_not_alpha_min(self):
         universe = ["bb_lower_20_2", "wt_cross_up_os&sma_stack_20_50_100"]
@@ -482,6 +486,8 @@ class DiscoveryRouteTests(unittest.TestCase):
         src = (Path(__file__).resolve().parents[1] / "hedge_fund" / "web" / "server.py").read_text()
         self.assertIn('route == "/api/discovery/summary"', src)
         self.assertIn("build_discovery_summary", src)
+        self.assertIn('route == "/api/discovery/farm"', src)
+        self.assertIn("set_farm_enabled", src)
 
 
 if __name__ == "__main__":

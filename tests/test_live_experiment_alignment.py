@@ -574,6 +574,35 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertIn("near-level", runbook)
         self.assertIn("named candlesticks", runbook)
 
+    def test_amendment_2026_09_12_farm_start_stop(self):
+        from hedge_fund.trading.discovery_mode import discovery_on_cycle
+
+        text = (REPO / "PROTOCOL.md").read_text()
+        self.assertIn("farm Start/Stop from the Discovery page", text)
+        self.assertIn("discovery_farm.json", text)
+        self.assertIn("/api/discovery/farm", text)
+        self.assertIn("does not exit", text)
+        self.assertIn("Worker not seen", text)
+        self.assertIn("DISCOVERY_ON_CYCLE=0", text)
+        self.assertIn("Still paper", text)
+        self.assertFalse(discovery_on_cycle({}))
+        worker = (REPO / "scripts" / "discovery_worker.py").read_text()
+        self.assertIn("poll_farm_enabled", worker)
+        self.assertIn("consider_pause", worker)
+        self.assertIn("farm paused", worker)
+        self.assertNotIn("os._exit", worker)
+        web = (REPO / "docs" / "WEB_SERVICE.md").read_text()
+        self.assertIn("/api/discovery/farm", web)
+        self.assertIn("PAPER_DISCOVERY_INGEST_TOKEN", web)
+        runbook = (REPO / "docs" / "WINDOWS_DISCOVERY.md").read_text()
+        self.assertIn("Pause for gaming", runbook)
+        self.assertIn("leave the worker running", runbook.lower())
+        self.assertIn("Worker not seen", runbook)
+        self.assertIn("discovery_worker.py --workers 2", runbook)
+        server = (REPO / "hedge_fund" / "web" / "server.py").read_text()
+        self.assertIn('route == "/api/discovery/farm"', server)
+        self.assertIn("_discovery_ingest_authorized", server)
+
 
 class IsolatedRunnerTests(unittest.TestCase):
     def test_no_second_hardcoded_book(self):

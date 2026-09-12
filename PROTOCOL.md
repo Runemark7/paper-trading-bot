@@ -96,6 +96,7 @@ over a meaningful sample, AND calibration is demonstrated independently of P&L.
 | 2026-09-11 | Addendum: server overloaded under the 2-name slice. Live default is `DISCOVER_CYCLE_MAX_NAMES = 1` and `DISCOVER_CYCLE_TIME_BUDGET_SECONDS = 90` so discovery evaluates only one name per cycle; most of the 300s stays for `run_isolated` and the web/API. Not a return to 4 / 150s. Fail-once, auto-refill (`DISCOVERY_REFILL_BATCH_SIZE`), OOS gates, and window lengths unchanged. Paper only. No cull of champions. |
 | 2026-09-12 | Discovery walk-forwards leave the k8s cycle sidecar. `live_cycle` skips tournament by default (`DISCOVERY_ON_CYCLE=0` / `PAPER_DISCOVERY_MODE=off`). Cluster keeps `run_isolated` → collect → report. Windows PC (`jensa`) is the discovery farm: same fail-once / auto-refill / OOS / `rm_v1` / 5m windows; results POST to `https://trading.runevibe.se/api/discovery/ingest` with a paper-only shared secret. No kubectl tunnel. Paper only. No cull of champions. |
 | 2026-09-12 | Structure-AND refill recipe expands: unused Donchian / near-swing / near-level lookbacks (`STRUCTURE_NS` through 96) ANDed with existing 5m dip/mom/trend filters. Farm auto-refill picks them up. Fail-once stays — `near_duplicate_key` must not collapse onto parked fails. No named candlesticks, no WaveTrend spam, no MFI. Static `generate_universe()` stays inside `UNIVERSE_TARGET_MAX`. Paper only; OOS gates unchanged. |
+| 2026-09-12 | Windows farm Start/Stop from `/discovery`. Durable `state/discovery_farm.json` flag; `discovery_worker.py` idles (does not exit) while paused and resumes when the flag is on. Same ingest token gates `POST /api/discovery/farm`. Heartbeat on ingest so the UI can say worker not seen. k8s cycle stays `DISCOVERY_ON_CYCLE=0`. Paper only. No OOS / trading changes. |
 
 ### Amendment 2026-08-30 — what actually runs
 
@@ -473,5 +474,21 @@ This amendment does not rewrite original §§ 1–8 or prior amendments. Qual/li
 **Superseded on this date** (prior text kept above for history):
 
 - Same-date auto-refill / farm text insofar as `STRUCTURE_NS` froze at 72 and the recipe omitted standalone / trend×support / near-swing 3-atom families. Fail-once, farm ingest, cycle budget, OOS gates, and the static 40–120 compiled-list band are not superseded.
+
+### Amendment 2026-09-12 — farm Start/Stop from the Discovery page
+
+This amendment does not rewrite original §§ 1–8 or prior amendments. Qual/live remain 5m, risk policy remains `rm_v1`, OOS gates are unchanged. Cluster `live_cycle` stays live-only (`DISCOVERY_ON_CYCLE=0`). Walk-forwards stay on the Windows farm. **Still paper.** Do not cull existing champions. Do not retest parked fails.
+
+**Why.** Killing `discovery_worker.py` on jensa to free CPU for games left orphaned multiprocessing children. Start from the website must work without SSH as long as the process was left running.
+
+**Durable flag.** Prod stores `state/discovery_farm.json` (`enabled` true/false). `POST /api/discovery/farm` is token-gated with the same `PAPER_DISCOVERY_INGEST_TOKEN` as ingest. `GET /api/discovery/summary` includes `farm` (status Running / Paused / Worker idle / Worker not seen, last heartbeat). Missing file defaults to enabled.
+
+**Worker.** Before each batch, `scripts/discovery_worker.py` polls prod. When paused: clear in-flight, post a heartbeat, sleep 10–30s, do not exit. When enabled again, resume batches. A batch already running may finish first.
+
+**UI.** `/discovery` has Start / Stop plus status. Champions teaser is one line + link. If the worker is unseen, Start will not relaunch it — relaunch on jensa.
+
+**Superseded on this date** (prior text kept above for history):
+
+- Same-date Windows farm text insofar as it implied the only control surface was SSH / killing the process. Fail-once, ingest, OOS gates, and `DISCOVERY_ON_CYCLE=0` are not superseded.
 
 

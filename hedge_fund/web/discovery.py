@@ -24,6 +24,7 @@ from hedge_fund.trading.discovery import (
     read_in_flight,
 )
 from hedge_fund.trading.discovery_mode import discovery_on_cycle
+from hedge_fund.trading.farm import farm_status_block
 from hedge_fund.trading.refill import load_extended_names
 from hedge_fund.trading.universe import generate_universe, untested_candidates
 from hedge_fund.web.status import _iso, _pipeline_block
@@ -191,6 +192,11 @@ def build_discovery_summary() -> dict:
     else:
         flight_note = "idle — no sweep recorded yet"
 
+    farm = farm_status_block(
+        in_flight_active=bool(worker_flight and flight_names),
+        now=now,
+    )
+
     return {
         "paper_only": True,
         "as_of": _iso(now),
@@ -203,6 +209,7 @@ def build_discovery_summary() -> dict:
         "tested": tested,
         "discovery_on_cycle": on_cycle,
         "discovery_farm": "cycle_sidecar" if on_cycle else "windows_worker",
+        "farm": farm,
         "extended_names": list(extended),
         "in_flight": {
             "active": bool(tournament_now or (stamp_stale and tournament_stamp) or worker_flight),
