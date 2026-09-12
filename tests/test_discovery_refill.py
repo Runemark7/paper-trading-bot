@@ -12,12 +12,19 @@ from hedge_fund.signals.dynamic import eval_predicate, parse_strategy
 from hedge_fund.trading.constants import (
     DISCOVER_CYCLE_MAX_NAMES,
     DISCOVERY_REFILL_BATCH_SIZE,
+    MIN_BACKTEST_SHARPE,
+    MIN_BACKTEST_TRADES,
 )
 from hedge_fund.trading.discovery import prioritize_leftovers
 from hedge_fund.trading.refill import (
+    CONTINUATION_TRENDS,
     DIP_FILTERS,
+    DIP_FILTERS_LEGACY,
+    DIP_FILTERS_WIDE,
     LEVEL_TRENDS,
     MOM_FILTERS,
+    MOM_FILTERS_LEGACY,
+    MOM_FILTERS_WIDE,
     STACK_TREND,
     STRUCTURE_NS,
     STRUCTURE_NS_THROUGH_96,
@@ -84,10 +91,10 @@ def _snapshot_2026_09_11_recipe(ns: tuple[int, ...] | None = None) -> list[str]:
     """Frozen 2026-09-11 yield shape (dip×support, mom×breakout, trend×don_hi)."""
     out: list[str] = []
     for n in ns or (6, 12, 18, 24, 30, 36, 42, 48, 54, 60, 66, 72):
-        for dip in DIP_FILTERS:
+        for dip in DIP_FILTERS_LEGACY:
             out.append(f"{dip}&don_lo_{n}")
             out.append(f"{dip}&near_swing_lo_{n}")
-        for mom in MOM_FILTERS:
+        for mom in MOM_FILTERS_LEGACY:
             out.append(f"{mom}&don_hi_{n}")
             out.append(f"{mom}&near_swing_hi_{n}")
         out.append(f"dbl_bot_{n}")
@@ -98,11 +105,39 @@ def _snapshot_2026_09_11_recipe(ns: tuple[int, ...] | None = None) -> list[str]:
         out.append(f"don_hi_{n}")
         for trend in TREND_FILTERS:
             out.append(f"{trend}&don_hi_{n}")
-        for dip in DIP_FILTERS:
+        for dip in DIP_FILTERS_LEGACY:
             out.append(f"{dip}&don_lo_{n}&sma_abv_50")
             out.append(f"{dip}&near_swing_lo_{n}&sma_abv_50")
-        for mom in MOM_FILTERS:
+        for mom in MOM_FILTERS_LEGACY:
             out.append(f"{mom}&don_hi_{n}&sma_abv_50")
+    return out
+
+
+def _snapshot_2026_09_12_leftover(ns: tuple[int, ...] | None = None) -> list[str]:
+    """Frozen 2026-09-12 leftover stream (legacy + near-level + leftover TREND)."""
+    from hedge_fund.trading.refill import (
+        _leftover_trend_ands,
+        _legacy_structure_ands,
+        _near_level_ands,
+    )
+
+    out: list[str] = []
+    use = ns or STRUCTURE_NS
+    for n in use:
+        out.extend(_legacy_structure_ands(n))
+    for n in use:
+        out.extend(_near_level_ands(n))
+    for n in use:
+        out.extend(_leftover_trend_ands(n))
+    return out
+
+
+def _snapshot_trend_participation(ns: tuple[int, ...] | None = None) -> list[str]:
+    from hedge_fund.trading.refill import _trend_participation_ands
+
+    out: list[str] = []
+    for n in ns or STRUCTURE_NS:
+        out.extend(_trend_participation_ands(n))
     return out
 
 
@@ -123,7 +158,7 @@ class RecipeBoundsTests(unittest.TestCase):
     def test_recipe_is_finite_and_not_tens_of_thousands(self):
         names = list(iter_recipe_names())
         self.assertGreater(len(names), 1500)
-        self.assertLessEqual(len(names), 3000)
+        self.assertLessEqual(len(names), 4000)
         self.assertEqual(len(STRUCTURE_NS), 22)
         self.assertEqual(STRUCTURE_NS_THROUGH_96[-2:], (84, 96))
         self.assertIn(84, STRUCTURE_NS)
@@ -140,12 +175,45 @@ class RecipeBoundsTests(unittest.TestCase):
         )
         self.assertEqual(STACK_TREND, "ema_stack_20_50_100")
         self.assertEqual(THREE_ATOM_EXTRA_TRENDS, ("sma_abv_100", "sma_stack_20_50_100"))
+        self.assertEqual(DIP_FILTERS_LEGACY, ("dip_6b_lt2pc", "dip_12b_lt3pc", "dip_24b_lt5pc"))
+        self.assertEqual(MOM_FILTERS_LEGACY, ("mom_6b_gt2pc", "mom_12b_gt3pc", "mom_24b_gt5pc"))
+        self.assertEqual(
+            DIP_FILTERS_WIDE,
+            (
+                "dip_12b_lt2pc",
+                "dip_18b_lt2pc",
+                "dip_24b_lt2pc",
+                "dip_36b_lt2pc",
+                "dip_48b_lt2pc",
+                "dip_36b_lt4pc",
+            ),
+        )
+        self.assertEqual(
+            MOM_FILTERS_WIDE,
+            (
+                "mom_12b_gt2pc",
+                "mom_18b_gt2pc",
+                "mom_24b_gt2pc",
+                "mom_36b_gt2pc",
+                "mom_48b_gt2pc",
+                "mom_72b_gt2pc",
+                "mom_36b_gt4pc",
+                "mom_48b_gt6pc",
+            ),
+        )
+        self.assertEqual(DIP_FILTERS, DIP_FILTERS_LEGACY + DIP_FILTERS_WIDE)
+        self.assertEqual(MOM_FILTERS, MOM_FILTERS_LEGACY + MOM_FILTERS_WIDE)
+        self.assertEqual(CONTINUATION_TRENDS, ("sma_abv_20", "ema_abv_20"))
         self.assertEqual(DISCOVERY_REFILL_BATCH_SIZE, 16)
         self.assertLessEqual(DISCOVERY_REFILL_BATCH_SIZE, 24)
         self.assertGreaterEqual(DISCOVERY_REFILL_BATCH_SIZE, 8)
+        # Frozen OOS gate — recipe expansion must not touch these.
+        self.assertEqual(MIN_BACKTEST_TRADES, 30)
+        self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
         # Later passes sit on top of 09-11 / morning near-level, not a rewrite.
         self.assertGreater(len(names), len(_snapshot_2026_09_11_recipe(STRUCTURE_NS)))
         self.assertGreater(len(names), len(_snapshot_2026_09_12_morning()))
+        self.assertGreater(len(names), len(_snapshot_2026_09_12_leftover()))
 
     def test_every_recipe_name_parses_and_has_structure(self):
         # Tape longer than STRUCTURE_NS max (192) so long lookbacks can evaluate.
@@ -227,10 +295,56 @@ class RecipeBoundsTests(unittest.TestCase):
         for needle in ("engulfing", "hammer", "doji", "wt_cross", "mfi_", "dbl_top_"):
             self.assertNotIn(needle, blob)
 
-    def test_legacy_families_stay_first_in_the_stream(self):
+    def test_recipe_includes_wide_dip_mom_and_continuation_ands(self):
         names = list(iter_recipe_names())
+        # Wider parser-allowed bases (not the frozen 3×3).
+        self.assertIn("mom_12b_gt2pc&don_hi_12", names)
+        self.assertIn("mom_24b_gt2pc&don_hi_36", names)
+        self.assertIn("mom_36b_gt2pc&near_swing_hi_24", names)
+        self.assertIn("mom_48b_gt2pc&don_hi_48", names)
+        self.assertIn("mom_72b_gt2pc&don_hi_72", names)
+        self.assertIn("mom_36b_gt4pc&near_swing_hi_18", names)
+        self.assertIn("mom_48b_gt6pc&don_hi_24", names)
+        self.assertIn("dip_12b_lt2pc&don_hi_12", names)
+        self.assertIn("dip_24b_lt2pc&near_swing_hi_24", names)
+        self.assertIn("dip_36b_lt2pc&don_hi_36", names)
+        self.assertIn("dip_48b_lt2pc&near_swing_hi_18", names)
+        self.assertIn("dip_36b_lt4pc&don_hi_24", names)
+        # Short MA × breakout (more time in a grind than sma_abv_200).
+        self.assertIn("sma_abv_20&don_hi_12", names)
+        self.assertIn("ema_abv_20&near_swing_hi_24", names)
+        # Loose 3-atom continuation, not dip×support.
+        self.assertIn("mom_36b_gt2pc&don_hi_12&sma_abv_20", names)
+        self.assertIn("dip_18b_lt2pc&don_hi_18&sma_abv_20", names)
+        # Wide bases are not re-multiplied onto leftover dip×support.
+        self.assertNotIn("dip_12b_lt2pc&don_lo_12", names)
+        self.assertNotIn("mom_12b_gt2pc&don_lo_12", names)
+        blob = " ".join(names)
+        for needle in ("engulfing", "hammer", "doji", "wt_cross", "mfi_", "dbl_top_"):
+            self.assertNotIn(needle, blob)
+
+    def test_wide_bases_do_not_near_dup_legacy_filters(self):
+        legacy_keys = {near_duplicate_key(n) for n in DIP_FILTERS_LEGACY + MOM_FILTERS_LEGACY}
+        for name in DIP_FILTERS_WIDE + MOM_FILTERS_WIDE:
+            key = near_duplicate_key(name)
+            self.assertNotIn(key, legacy_keys, msg=f"{name} collapses onto {key}")
+        prior = _snapshot_2026_09_12_leftover()
+        prior_keys = {near_duplicate_key(n) for n in prior}
+        novel = 0
+        for name in _snapshot_trend_participation():
+            if near_duplicate_key(name) not in prior_keys:
+                novel += 1
+        self.assertGreater(novel, 200)
+
+    def test_legacy_families_stay_contiguous_after_new_pass(self):
+        names = list(iter_recipe_names())
+        new_pass = _snapshot_trend_participation(STRUCTURE_NS)
         legacy = _snapshot_2026_09_11_recipe(STRUCTURE_NS)
-        self.assertEqual(names[: len(legacy)], legacy)
+        self.assertEqual(names[: len(new_pass)], new_pass)
+        self.assertEqual(
+            names[len(new_pass) : len(new_pass) + len(legacy)],
+            legacy,
+        )
 
     def test_refused_families_stay_out_of_recipe_and_static(self):
         recipe = list(iter_recipe_names())
@@ -349,9 +463,11 @@ class RefillBatchTests(unittest.TestCase):
     def test_parking_legacy_recipe_still_feeds_near_level_names(self):
         # Prod / farm may have drained the 09-11 families. New near-level
         # keys must still refill and must not collapse onto those parked fails.
+        # New continuation pass is first in the stream — park it too so this
+        # still proves the near-level families refill after a legacy drain.
         uni = generate_universe()
         legacy = _snapshot_2026_09_11_recipe(STRUCTURE_NS)
-        taken = set(uni) | set(legacy)
+        taken = set(uni) | set(legacy) | set(_snapshot_trend_participation())
         taken_keys = {near_duplicate_key(n) for n in taken}
         with tempfile.TemporaryDirectory() as tmp:
             with patch.dict(os.environ, {"PAPER_STATE": str(tmp)}):
@@ -371,7 +487,7 @@ class RefillBatchTests(unittest.TestCase):
         # Longer lookbacks + leftover ANDs must still refill a full batch.
         uni = generate_universe()
         morning = _snapshot_2026_09_12_morning()
-        taken = set(uni) | set(morning)
+        taken = set(uni) | set(morning) | set(_snapshot_trend_participation())
         taken_keys = {near_duplicate_key(n) for n in taken}
         leftover = [n for n in iter_recipe_names() if n not in taken]
         leftover = [n for n in leftover if near_duplicate_key(n) not in taken_keys]
@@ -390,6 +506,34 @@ class RefillBatchTests(unittest.TestCase):
             )
         # First unused names after the morning drain are the 108 lookbacks.
         self.assertTrue(any("_108" in n for n in added))
+
+    def test_parking_leftover_recipe_still_feeds_trend_participation(self):
+        # Farm chewed the 192 / leftover-TREND pass (~1000 unique, 0 pass).
+        # Wide dip/mom + continuation ANDs must refill and must not collapse
+        # onto those parked fails. Fail-once stays.
+        uni = generate_universe()
+        prior = _snapshot_2026_09_12_leftover()
+        taken = set(uni) | set(prior)
+        taken_keys = {near_duplicate_key(n) for n in taken}
+        leftover = [n for n in iter_recipe_names() if n not in taken]
+        leftover = [n for n in leftover if near_duplicate_key(n) not in taken_keys]
+        self.assertGreater(len(leftover), 200)
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.dict(os.environ, {"PAPER_STATE": str(tmp)}):
+                added = next_refill_batch(taken_names=taken, n=DISCOVERY_REFILL_BATCH_SIZE)
+        self.assertEqual(len(added), DISCOVERY_REFILL_BATCH_SIZE)
+        continuation = set(_snapshot_trend_participation())
+        for name in added:
+            self.assertNotIn(name, taken)
+            self.assertNotIn(near_duplicate_key(name), taken_keys, msg=name)
+            self.assertTrue(name_is_parseable(name), msg=name)
+            self.assertIn(name, continuation)
+            self.assertTrue(
+                any(any(tok.startswith(m) for m in _STRUCTURE_MARKERS) for tok in name.split("&")),
+                msg=name,
+            )
+        # Next dry refill after a leftover drain starts at wide mom × don_hi_6.
+        self.assertTrue(any("mom_12b_gt2pc" in n or "sma_abv_20" in n for n in added))
 
     def test_max_names_one_refills_only_when_eligible_empty(self):
         self.assertEqual(DISCOVER_CYCLE_MAX_NAMES, 1)

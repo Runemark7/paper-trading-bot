@@ -567,7 +567,7 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertIn(84, STRUCTURE_NS)
         self.assertIn(96, STRUCTURE_NS)
         self.assertIn("through 96", text)
-        self.assertLessEqual(len(list(iter_recipe_names())), 3000)
+        self.assertLessEqual(len(list(iter_recipe_names())), 4000)
         self.assertLessEqual(len(generate_universe()), UNIVERSE_TARGET_MAX)
         readme = (REPO / "README.md").read_text()
         self.assertIn("near-level", readme)
@@ -655,7 +655,7 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertEqual(len(STRUCTURE_NS), 22)
         names = list(iter_recipe_names())
         self.assertGreater(len(names), 1500)
-        self.assertLessEqual(len(names), 3000)
+        self.assertLessEqual(len(names), 4000)
         uni = generate_universe()
         self.assertLessEqual(len(uni), UNIVERSE_TARGET_MAX)
         added = next_refill_batch(taken_names=uni, n=DISCOVERY_REFILL_BATCH_SIZE)
@@ -708,6 +708,68 @@ class ProtocolAmendmentTests(unittest.TestCase):
         html = (REPO / "hedge_fund" / "dashboard" / "report.py").read_text()
         self.assertIn("single empty/neg window is logged as a diagnostic", html)
         self.assertNotIn("Every window test PnL", html)
+
+    def test_amendment_2026_09_12_wide_dip_mom_continuation(self):
+        from hedge_fund.trading.constants import (
+            DISCOVER_CYCLE_MAX_NAMES,
+            DISCOVERY_REFILL_BATCH_SIZE,
+            MIN_BACKTEST_SHARPE,
+            MIN_BACKTEST_TRADES,
+            QUAL_TIMEFRAME,
+            RISK_POLICY,
+        )
+        from hedge_fund.trading.refill import (
+            CONTINUATION_TRENDS,
+            DIP_FILTERS_WIDE,
+            MOM_FILTERS_WIDE,
+            iter_recipe_names,
+            next_refill_batch,
+        )
+        from hedge_fund.trading.universe import UNIVERSE_TARGET_MAX, generate_universe
+
+        text = (REPO / "PROTOCOL.md").read_text()
+        self.assertIn("wider dip/mom mint bases and continuation ANDs", text)
+        self.assertIn("DIP_FILTERS_WIDE", text)
+        self.assertIn("MOM_FILTERS_WIDE", text)
+        self.assertIn("continuation ANDs", text)
+        self.assertIn("mom_12b_gt2pc", text)
+        self.assertIn("dip_12b_lt2pc", text)
+        self.assertIn("sma_abv_20", text)
+        self.assertIn("ema_abv_20", text)
+        self.assertIn("tested_pass", text)
+        self.assertIn("How to evaluate after merge", text)
+        self.assertIn("Do not cull existing champions", text)
+        self.assertIn("Do not retest parked fails", text)
+        self.assertIn("OOS gates are unchanged", text)
+        self.assertIn("Still paper", text)
+        self.assertIn("No named candlesticks", text)
+        self.assertIn("No MFI", text)
+        self.assertIn("near_duplicate_key", text)
+        self.assertEqual(QUAL_TIMEFRAME, "5m")
+        self.assertEqual(RISK_POLICY, "rm_v1")
+        self.assertEqual(MIN_BACKTEST_TRADES, 30)
+        self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
+        self.assertEqual(DISCOVER_CYCLE_MAX_NAMES, 1)
+        self.assertEqual(DISCOVERY_REFILL_BATCH_SIZE, 16)
+        self.assertIn("mom_36b_gt2pc", DIP_FILTERS_WIDE + MOM_FILTERS_WIDE)
+        self.assertIn("dip_36b_lt2pc", DIP_FILTERS_WIDE)
+        self.assertEqual(CONTINUATION_TRENDS, ("sma_abv_20", "ema_abv_20"))
+        names = list(iter_recipe_names())
+        self.assertGreater(len(names), 1500)
+        self.assertLessEqual(len(names), 4000)
+        self.assertIn("mom_36b_gt2pc&don_hi_12", names)
+        self.assertIn("dip_12b_lt2pc&near_swing_hi_24", names)
+        self.assertIn("sma_abv_20&don_hi_12", names)
+        uni = generate_universe()
+        self.assertLessEqual(len(uni), UNIVERSE_TARGET_MAX)
+        added = next_refill_batch(taken_names=uni, n=DISCOVERY_REFILL_BATCH_SIZE)
+        self.assertEqual(len(added), DISCOVERY_REFILL_BATCH_SIZE)
+        readme = (REPO / "README.md").read_text()
+        self.assertIn("3×3 dip/mom", readme)
+        self.assertIn("continuation ANDs", readme)
+        runbook = (REPO / "docs" / "WINDOWS_DISCOVERY.md").read_text()
+        self.assertIn("wider", runbook)
+        self.assertIn("continuation ANDs", runbook)
 
 
 class IsolatedRunnerTests(unittest.TestCase):
