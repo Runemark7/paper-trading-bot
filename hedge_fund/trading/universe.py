@@ -18,7 +18,9 @@ dip/mom, not WaveTrend clones. Same date: when never-tested leftovers run
 dry, ``hedge_fund.trading.refill`` appends the next handful to
 ``discovery_extended.json`` (pending queue sidecar). Static list here stays
 inside UNIVERSE_TARGET_MAX; the recipe is bounded, fail-once, no WaveTrend
-clones. Trend / breakout / momentum stay as sma_stack/sma_abv, don_hi_*,
+clones. Amendment 2026-09-12 expands that recipe with unused Donchian /
+near-swing / near-level ANDs (farm picks them up; this static list stays
+put). Trend / breakout / momentum stay as sma_stack/sma_abv, don_hi_*,
 mom_* — not a second stack. Near-duplicate keys collapse tiny param tweaks.
 Lookbacks in names (e.g. dip_24b) are bar counts: on 5m, 24 bars = 2 hours.
 """

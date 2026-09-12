@@ -523,6 +523,57 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertTrue((REPO / "scripts" / "discovery_worker.py").exists())
         self.assertTrue((REPO / "docker-compose.discovery.yml").exists())
 
+    def test_amendment_2026_09_12_structure_recipe_expansion(self):
+        from hedge_fund.trading.constants import (
+            DISCOVER_CYCLE_MAX_NAMES,
+            DISCOVER_CYCLE_TIME_BUDGET_SECONDS,
+            DISCOVERY_REFILL_BATCH_SIZE,
+            MIN_BACKTEST_SHARPE,
+            MIN_BACKTEST_TRADES,
+            QUAL_TIMEFRAME,
+            RISK_POLICY,
+        )
+        from hedge_fund.trading.refill import STRUCTURE_NS, iter_recipe_names
+        from hedge_fund.trading.universe import UNIVERSE_TARGET_MAX, generate_universe
+
+        text = (REPO / "PROTOCOL.md").read_text()
+        self.assertIn("more structure-AND recipe names", text)
+        self.assertIn("iter_recipe_names", text)
+        self.assertIn("STRUCTURE_NS", text)
+        self.assertIn("LEVEL_TRENDS", text)
+        self.assertIn("near_swing_hi_N", text)
+        self.assertIn("don_lo_N", text)
+        self.assertIn("near-level", text.lower())
+        self.assertIn("named candlesticks", text.lower())
+        self.assertIn("No named candlesticks", text)
+        self.assertIn("engulfing", text.lower())
+        self.assertIn("hammer", text.lower())
+        self.assertIn("doji", text.lower())
+        self.assertIn("farm auto-refill", text.lower())
+        self.assertIn("near_duplicate_key", text)
+        self.assertIn("Do not cull existing champions", text)
+        self.assertIn("Do not retest parked fails", text)
+        self.assertIn("OOS gates are unchanged", text)
+        self.assertIn("Still paper", text)
+        self.assertIn("No WaveTrend", text)
+        self.assertIn("No MFI", text)
+        self.assertEqual(QUAL_TIMEFRAME, "5m")
+        self.assertEqual(RISK_POLICY, "rm_v1")
+        self.assertEqual(MIN_BACKTEST_TRADES, 30)
+        self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
+        self.assertEqual(DISCOVER_CYCLE_MAX_NAMES, 1)
+        self.assertEqual(DISCOVER_CYCLE_TIME_BUDGET_SECONDS, 90)
+        self.assertEqual(DISCOVERY_REFILL_BATCH_SIZE, 16)
+        self.assertEqual(STRUCTURE_NS[-2:], (84, 96))
+        self.assertLessEqual(len(list(iter_recipe_names())), 950)
+        self.assertLessEqual(len(generate_universe()), UNIVERSE_TARGET_MAX)
+        readme = (REPO / "README.md").read_text()
+        self.assertIn("near-level", readme)
+        self.assertIn("named candlesticks", readme)
+        runbook = (REPO / "docs" / "WINDOWS_DISCOVERY.md").read_text()
+        self.assertIn("near-level", runbook)
+        self.assertIn("named candlesticks", runbook)
+
 
 class IsolatedRunnerTests(unittest.TestCase):
     def test_no_second_hardcoded_book(self):

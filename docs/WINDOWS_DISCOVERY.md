@@ -103,6 +103,7 @@ walk-forwards again.
 
 - No real-money broker.
 - No retest of a name that already has a discovery_log row (fail-once).
-- No WaveTrend clones, MFI, or chart-pattern zoo.
+- No WaveTrend clones, MFI, named candlesticks, or chart-pattern zoo.
+  Auto-refill already walks the expanded Donchian / swing / near-level recipe.
 - No culling champions.
 - Do not point `PAPER_STATE` at the cluster PVC.
