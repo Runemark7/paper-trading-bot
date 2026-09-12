@@ -88,13 +88,13 @@ function SortTh({
   const arrow = active ? (sort.dir === "asc" ? "↑" : "↓") : "↕";
   const ariaSort = active ? (sort.dir === "asc" ? "ascending" : "descending") : "none";
   return (
-    <th className={`${align === "right" ? "text-right" : "text-left"} py-1`} aria-sort={ariaSort}>
+    <th className={`${align === "right" ? "text-right" : "text-left"} py-1 px-1.5`} aria-sort={ariaSort}>
       <button
         type="button"
         onClick={() => onCycle(column)}
         aria-label={`Sort by ${label}`}
-        className={`inline-flex items-center gap-1 min-h-11 uppercase tracking-wider ${
-          align === "right" ? "justify-end w-full" : ""
+        className={`inline-flex items-center gap-1 min-h-11 uppercase tracking-wider whitespace-nowrap ${
+          align === "right" ? "ml-auto" : ""
         } ${active ? "text-white" : "text-white/40 hover:text-white/70"}`}
       >
         {label}
@@ -485,7 +485,7 @@ export default function DiscoveryBuckets() {
                     <SortTh label="Sharpe" column="sharpe" sort={sort} onCycle={cycleColumn} align="right" />
                     <SortTh label="OOS trades" column="trades" sort={sort} onCycle={cycleColumn} align="right" />
                     <SortTh label="Test P&L" column="testPnl" sort={sort} onCycle={cycleColumn} align="right" />
-                    <th className="text-left py-1">Fail reasons</th>
+                    <th className="text-left py-1 pl-3 whitespace-nowrap">Fail reasons</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -503,7 +503,7 @@ export default function DiscoveryBuckets() {
                       <td className={`text-right font-mono font-bold ${(d.test_pnl ?? 0) >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
                         {fmt(d.test_pnl)}
                       </td>
-                      <td className="text-white/40 break-words">
+                      <td className="text-white/40 break-words pl-3">
                         {!d.qualified && d.fail_reasons?.length ? d.fail_reasons.join("; ") : "—"}
                       </td>
                     </tr>
