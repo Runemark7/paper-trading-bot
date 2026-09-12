@@ -490,7 +490,7 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertIn("OOS gates are unchanged", text)
         self.assertIn("paper only", text.lower())
         self.assertIn("Still paper", text)
-        self.assertIn("no CUDA", text.lower())
+        self.assertIn("no cuda", text.lower())
         self.assertFalse(discovery_on_cycle({}))
         self.assertFalse(discovery_on_cycle({"DISCOVERY_ON_CYCLE": "0"}))
         self.assertTrue(discovery_on_cycle({"DISCOVERY_ON_CYCLE": "1"}))
