@@ -185,6 +185,7 @@ export interface DiscoveryCounts {
   leftovers?: number;
   rejected_parked?: number;
   eligible?: number;
+  extended?: number;
   champions: number;
   graduated: number;
   in_flight: number;
@@ -201,6 +202,9 @@ export interface DiscoverySummary {
   stuck?: boolean;
   stuck_reason?: string | null;
   tested: DiscoveryEvaluation[];
+  discovery_on_cycle?: boolean;
+  discovery_farm?: "windows_worker" | "cycle_sidecar" | string;
+  extended_names?: string[];
   in_flight: DiscoveryInFlight;
   queued: string[];
   untested: string[];

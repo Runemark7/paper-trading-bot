@@ -90,9 +90,14 @@ def main():
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     OUT.write_text(json.dumps(out))
     print(f"saved {OUT}")
-    # mirror for legacy tools
-    Path("/tmp/crypto_history.json").write_text(json.dumps(out))
-    print("mirrored -> /tmp/crypto_history.json")
+    # mirror for legacy tools (Linux). Skip on Windows if /tmp is not writable.
+    tmp = Path("/tmp/crypto_history.json")
+    try:
+        tmp.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_text(json.dumps(out))
+        print(f"mirrored -> {tmp}")
+    except OSError as exc:
+        print(f"skip /tmp mirror ({exc})")
 
 
 if __name__ == "__main__":

@@ -62,7 +62,8 @@ export default function DiscoveryBuckets() {
     >
       <p className="text-sm text-white/60 mb-4">
         Last-known backtest evaluations (5m history, same tape as live). Not a live
-        job. Champions and graduated names stay in their sections above — they are
+        job. Walk-forwards run on the Windows discovery worker, not the k8s cycle
+        sidecar. Champions and graduated names stay in their sections above — they are
         not leftover untested. Stamp in-flight is not process liveness. Unique
         tested is latest-eval-per-name, not how many log rows were ever written.
         Already tested · rejected is parked forever — fail once, never retested.

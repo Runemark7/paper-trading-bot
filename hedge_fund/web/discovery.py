@@ -23,6 +23,7 @@ from hedge_fund.trading.discovery import (
     prioritize_leftovers,
     read_in_flight,
 )
+from hedge_fund.trading.discovery_mode import discovery_on_cycle
 from hedge_fund.trading.refill import load_extended_names
 from hedge_fund.trading.universe import generate_universe, untested_candidates
 from hedge_fund.web.status import _iso, _pipeline_block
@@ -92,6 +93,7 @@ def build_discovery_summary() -> dict:
     last_eval_age_seconds = (now - last_ts).total_seconds() if last_ts else None
     evals_today = evals_on_utc_date(log, now)
 
+    on_cycle = discovery_on_cycle()
     work_now = bool(eligible)
     quiet = bool(
         work_now
@@ -110,17 +112,32 @@ def build_discovery_summary() -> dict:
             "discovery stuck / cycle overdue — "
             f"no new evaluations for {age_h}h while never-tested leftover names remain."
         )
+        if not on_cycle:
+            stuck_reason += (
+                " Walk-forwards run on the Windows discovery worker, "
+                "not this cycle sidecar."
+            )
     else:
         stuck_reason = None
 
-    flight = read_in_flight() if (tournament_now or (stamp_stale and tournament_stamp)) else None
+    raw_flight = read_in_flight()
+    worker_flight = bool(
+        raw_flight and raw_flight.get("source") == "windows_worker"
+    )
+    flight = raw_flight if (
+        tournament_now or (stamp_stale and tournament_stamp) or worker_flight
+    ) else None
     flight_names = []
     batch_size = None
     flight_started = None
     current = None
     remaining: list[str] = []
     completed: list[str] = []
-    show_flight = bool(tournament_now or (stamp_stale and tournament_stamp and flight))
+    show_flight = bool(
+        tournament_now
+        or (stamp_stale and tournament_stamp and flight)
+        or worker_flight
+    )
     if show_flight and flight:
         raw_names = flight.get("names") or []
         if isinstance(raw_names, list):
@@ -159,6 +176,13 @@ def build_discovery_summary() -> dict:
             "Name list was not persisted — not inventing names. "
             "Process liveness is not verified."
         )
+    elif worker_flight and flight_names:
+        cur = f" current {current}." if current else ""
+        flight_note = (
+            f"Windows discovery worker in_flight since {flight_started}. "
+            f"{len(flight_names)} outstanding / batch {batch_size}.{cur} "
+            "Process liveness is not verified."
+        )
     elif last_tested_at:
         flight_note = (
             f"idle — last eval {last_tested_at}"
@@ -177,10 +201,14 @@ def build_discovery_summary() -> dict:
         "stuck": stuck,
         "stuck_reason": stuck_reason,
         "tested": tested,
+        "discovery_on_cycle": on_cycle,
+        "discovery_farm": "cycle_sidecar" if on_cycle else "windows_worker",
+        "extended_names": list(extended),
         "in_flight": {
-            "active": bool(tournament_now or (stamp_stale and tournament_stamp)),
+            "active": bool(tournament_now or (stamp_stale and tournament_stamp) or worker_flight),
             "running": False,
             "stale": bool(stamp_stale and tournament_stamp),
+            "source": (flight or {}).get("source") if flight else None,
             "names": flight_names,
             "current": current,
             "remaining": remaining,
@@ -220,6 +248,13 @@ def build_discovery_summary() -> dict:
             "Already tested · rejected is parked forever — not a cooldown "
             "retest queue. Empty eligible auto-refills discovery_extended.json "
             "from a bounded structure-AND recipe (no human PR per batch). "
-            "A stamp is not process liveness."
+            "A stamp is not process liveness. "
+            + (
+                "Walk-forwards run on the Windows discovery worker "
+                "(POST /api/discovery/ingest); this cycle sidecar does not "
+                "run tournament."
+                if not on_cycle
+                else "This host still runs tournament inside live_cycle."
+            )
         ),
     }

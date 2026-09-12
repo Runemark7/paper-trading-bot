@@ -25,7 +25,7 @@ from hedge_fund.trading.constants import (
     TRADE_EVALUATION_LIMIT,
 )
 from hedge_fund.trading.open_lots import account_slug, attach_open_lots
-from hedge_fund.trading.store import TradeStore, connect_sqlite
+from hedge_fund.trading.store import TradeStore, connect_sqlite, paper_state_lock
 
 # Re-export so existing `from hedge_fund.trading.champions import TRADE_EVALUATION_LIMIT` still works.
 __all__ = [
@@ -140,6 +140,11 @@ def collect_live_results() -> dict:
     removes them from the active testing pool. Graduation requires beating
     buy-and-hold, not merely paper PnL > 0.
     """
+    with paper_state_lock("discovery"):
+        return _collect_live_results_unlocked()
+
+
+def _collect_live_results_unlocked() -> dict:
     st = load_pool()
     synced_until = st.get("synced_until", "")
     root = state_root()

@@ -32,7 +32,7 @@ only one name per cycle. Same date: leftover discovery names — unused
 Donchian / swing / `dbl_bot` lookbacks ANDed with existing 5m dip/mom
 (`NEW_STRUCTURE_ANDS`). Fail-once stays; the parked 60 are not retested.
 Same date: when never-tested leftovers run dry, tournament auto-refills
-`discovery_extended.json` from a bounded structure-AND recipe (no human PR per batch). Still paper.
+`discovery_extended.json` from a bounded structure-AND recipe (no human PR per batch). Amendment 2026-09-12: discovery walk-forwards leave the k8s cycle sidecar (`DISCOVERY_ON_CYCLE=0`). Cluster keeps live trading only. The Windows PC runs `scripts/discovery_worker.py` and POSTs results to `/api/discovery/ingest`. Still paper.
 
 Built on **[ai-hedge-fund](https://github.com/virattt/ai-hedge-fund)** (MIT, © Virat Singh)
 for Signal models, sim broker, risk limits, portfolio, backtesting, and the LLM layer.
@@ -72,7 +72,8 @@ docker compose up
 ```
 
 Cluster manifests: `k8s/` (ArgoCD app in `k8s/argocd-app.yaml`). HTTP routes:
-[docs/WEB_SERVICE.md](docs/WEB_SERVICE.md).
+[docs/WEB_SERVICE.md](docs/WEB_SERVICE.md). Windows discovery farm:
+[docs/WINDOWS_DISCOVERY.md](docs/WINDOWS_DISCOVERY.md).
 
 ## Layout
 

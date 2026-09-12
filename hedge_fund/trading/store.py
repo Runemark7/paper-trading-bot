@@ -17,12 +17,16 @@ outcome that resolved it, in the same row.
 
 from __future__ import annotations
 
-import fcntl
 import json
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+
+try:
+    import fcntl
+except ImportError:  # Windows native python — Docker worker is Linux
+    fcntl = None  # type: ignore[misc, assignment]
 
 SQLITE_BUSY_TIMEOUT_MS = 30_000
 
@@ -44,16 +48,33 @@ def connect_sqlite(path: str | Path) -> sqlite3.Connection:
 
 
 @contextmanager
-def sqlite_write_lock(db_path: Path):
-    """Exclusive file lock around a SQLite writer. Stops split-brain commits."""
-    lock_path = Path(str(db_path) + ".lock")
+def _exclusive_file_lock(lock_path: Path):
+    """fcntl flock on Linux; open-only fallback on Windows (single-process)."""
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with open(lock_path, "a") as fh:
-        fcntl.flock(fh, fcntl.LOCK_EX)
+        if fcntl is not None:
+            fcntl.flock(fh, fcntl.LOCK_EX)
         try:
             yield
         finally:
-            fcntl.flock(fh, fcntl.LOCK_UN)
+            if fcntl is not None:
+                fcntl.flock(fh, fcntl.LOCK_UN)
+
+
+@contextmanager
+def sqlite_write_lock(db_path: Path):
+    """Exclusive file lock around a SQLite writer. Stops split-brain commits."""
+    with _exclusive_file_lock(Path(str(db_path) + ".lock")):
+        yield
+
+
+@contextmanager
+def paper_state_lock(name: str = "discovery"):
+    """Serialize JSON writers on the paper-state dir (ingest vs collect)."""
+    from hedge_fund.paths import state_root
+
+    with _exclusive_file_lock(state_root() / f".{name}.lock"):
+        yield
 
 
 class TradeStore:

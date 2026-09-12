@@ -34,6 +34,18 @@ spec:
               value: sma_stack
             - name: PAPER_ONLY
               value: "1"
+            - name: DISCOVERY_ON_CYCLE
+              value: "0"
+            - name: PAPER_DISCOVERY_MODE
+              value: "off"
+            # Shared secret for POST /api/discovery/ingest (Windows worker).
+            # Create: kubectl -n trading create secret generic paper-discovery-ingest --from-literal=token='...'
+            - name: PAPER_DISCOVERY_INGEST_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: paper-discovery-ingest
+                  key: token
+                  optional: true
           livenessProbe:
             httpGet:
               path: /health
@@ -83,10 +95,10 @@ spec:
             - name: state-storage
               mountPath: /app/state
 
-        # 5-minute decision cycle (24/7): tournament discovery → run_isolated
-        # → collect_live_results → hourly_report. Sleep 300s so 5m bars can
-        # trade on close (hourly sleep would still trade ~once/hour). No
-        # Stockholm day window — same cadence at 02:00 as at noon.
+        # 5-minute decision cycle (24/7): run_isolated → collect_live_results
+        # → hourly_report. Discovery walk-forwards are OFF
+        # (DISCOVERY_ON_CYCLE=0) — they run on the Windows PC, not this
+        # 1 CPU / 1.5GiB sidecar. Sleep 300s so 5m bars can trade on close.
         # Same pod as heartbeat/web so they share the RWO PVC; SQLite WAL +
         # file lock serializes writers. Replaces Hermes cron paperbot-live-cycle.
         - name: cycle
@@ -109,6 +121,10 @@ spec:
               value: "1"
             - name: TZ
               value: Europe/Stockholm
+            - name: DISCOVERY_ON_CYCLE
+              value: "0"
+            - name: PAPER_DISCOVERY_MODE
+              value: "off"
           resources:
             requests:
               cpu: 100m
