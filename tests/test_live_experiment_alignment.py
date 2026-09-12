@@ -581,6 +581,8 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertIn("farm Start/Stop from the Discovery page", text)
         self.assertIn("discovery_farm.json", text)
         self.assertIn("/api/discovery/farm", text)
+        self.assertIn("authenticated", text.lower())
+        self.assertIn("401", text)
         self.assertIn("does not exit", text)
         self.assertIn("Worker not seen", text)
         self.assertIn("DISCOVERY_ON_CYCLE=0", text)
@@ -597,11 +599,16 @@ class ProtocolAmendmentTests(unittest.TestCase):
         runbook = (REPO / "docs" / "WINDOWS_DISCOVERY.md").read_text()
         self.assertIn("Pause for gaming", runbook)
         self.assertIn("leave the worker running", runbook.lower())
+        self.assertIn("Authentication (required)", runbook)
+        self.assertIn("Never commit the token", runbook)
+        self.assertIn("X-Paper-Discovery-Token", runbook)
         self.assertIn("Worker not seen", runbook)
         self.assertIn("discovery_worker.py --workers 2", runbook)
         server = (REPO / "hedge_fund" / "web" / "server.py").read_text()
         self.assertIn('route == "/api/discovery/farm"', server)
         self.assertIn("_discovery_ingest_authorized", server)
+        self.assertIn("X-Paper-Discovery-Token", server)
+        self.assertIn("_discovery_header_tokens", server)
 
 
 class IsolatedRunnerTests(unittest.TestCase):

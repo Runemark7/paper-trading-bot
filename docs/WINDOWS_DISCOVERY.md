@@ -106,11 +106,32 @@ Killing the parent has left orphaned multiprocessing children before.
 
 1. Leave `python scripts/discovery_worker.py --workers 2` running.
 2. Open [https://trading.runevibe.se/discovery](https://trading.runevibe.se/discovery).
-3. Paste the same paper ingest token (browser tab only) and click
-   **Stop discovery**. The worker polls prod, clears in-flight, and
-   sleeps 10–30s at a time with near-zero CPU.
+3. Paste the paper ingest token (same `PAPER_DISCOVERY_INGEST_TOKEN` as
+   jensa `.env` / the k8s secret). The UI keeps it in `sessionStorage`
+   for this browser tab only. Then click **Stop discovery**. The worker
+   polls prod, clears in-flight, and sleeps 10–30s at a time with
+   near-zero CPU.
 4. **Start discovery** when you are done gaming. The same process
    resumes the next batch. Start cannot relaunch a dead process.
+
+### Authentication (required)
+
+Start / Stop is **not** an open toggle. Anyone who can hit
+`trading.runevibe.se` must **not** be able to pause the farm.
+
+`POST /api/discovery/farm` reuses `PAPER_DISCOVERY_INGEST_TOKEN` (already
+on the k8s web container and in jensa `.env`). Send it as
+`Authorization: Bearer …`, `X-Discovery-Token`, or
+`X-Paper-Discovery-Token` — same pattern as `/api/discovery/ingest`.
+No token or a wrong token → **401**. Token unset on the server → **503**
+(fail-closed).
+
+The frontend does **not** bake the secret into the public JS bundle.
+Paste it once on `/discovery`; closing the tab clears `sessionStorage`.
+**Never commit the token.** Keep it off git, Slack, and screenshots.
+
+`GET /api/discovery/summary` farm status (Running / Paused / last
+heartbeat) stays public. Only the mutate is secret.
 
 If the UI says **Worker not seen**, the process on jensa actually died.
 Relaunch it in PowerShell (same env as §2):

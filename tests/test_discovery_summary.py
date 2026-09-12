@@ -488,6 +488,8 @@ class DiscoveryRouteTests(unittest.TestCase):
         self.assertIn("build_discovery_summary", src)
         self.assertIn('route == "/api/discovery/farm"', src)
         self.assertIn("set_farm_enabled", src)
+        self.assertIn("X-Paper-Discovery-Token", src)
+        self.assertIn("_discovery_ingest_authorized", src)
 
 
 if __name__ == "__main__":

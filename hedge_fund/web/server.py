@@ -411,15 +411,25 @@ class Handler(BaseHTTPRequestHandler):
             return None, "payload must be an object"
         return data, None
 
+    def _discovery_header_tokens(self) -> list[str]:
+        """Same secrets as ingest: Bearer, X-Discovery-Token, X-Paper-Discovery-Token."""
+        found: list[str] = []
+        for key in ("X-Discovery-Token", "X-Paper-Discovery-Token"):
+            val = (self.headers.get(key) or "").strip()
+            if val:
+                found.append(val)
+        auth = (self.headers.get("Authorization") or "").strip()
+        if auth.lower().startswith("bearer "):
+            val = auth[7:].strip()
+            if val:
+                found.append(val)
+        return found
+
     def _discovery_ingest_authorized(self) -> tuple[bool, str | None, int]:
         expected = ingest_token()
         if not expected:
             return False, "ingest disabled — PAPER_DISCOVERY_INGEST_TOKEN is not set", 503
-        got = (self.headers.get("X-Discovery-Token") or "").strip()
-        auth = (self.headers.get("Authorization") or "").strip()
-        if auth.lower().startswith("bearer "):
-            got = auth[7:].strip()
-        if not tokens_match(got, expected):
+        if not any(tokens_match(got, expected) for got in self._discovery_header_tokens()):
             return False, "unauthorized", 401
         return True, None, 200
 

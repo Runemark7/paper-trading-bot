@@ -59,6 +59,8 @@ async function postOnce<T>(path: string, body: unknown, token: string): Promise<
     headers: {
       "Content-Type": "application/json",
       "X-Discovery-Token": token,
+      "X-Paper-Discovery-Token": token,
+      Authorization: `Bearer ${token}`,
     },
     body: JSON.stringify(body),
   });

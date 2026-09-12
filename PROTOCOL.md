@@ -481,7 +481,7 @@ This amendment does not rewrite original §§ 1–8 or prior amendments. Qual/li
 
 **Why.** Killing `discovery_worker.py` on jensa to free CPU for games left orphaned multiprocessing children. Start from the website must work without SSH as long as the process was left running.
 
-**Durable flag.** Prod stores `state/discovery_farm.json` (`enabled` true/false). `POST /api/discovery/farm` is token-gated with the same `PAPER_DISCOVERY_INGEST_TOKEN` as ingest. `GET /api/discovery/summary` includes `farm` (status Running / Paused / Worker idle / Worker not seen, last heartbeat). Missing file defaults to enabled.
+**Durable flag.** Prod stores `state/discovery_farm.json` (`enabled` true/false). `POST /api/discovery/farm` is **authenticated** with the same `PAPER_DISCOVERY_INGEST_TOKEN` as ingest (`Authorization: Bearer`, `X-Discovery-Token`, or `X-Paper-Discovery-Token`). No/wrong token → 401. The public site cannot pause the farm. The UI prompts once and keeps the token in `sessionStorage` for that tab — it is not in the JS bundle. `GET /api/discovery/summary` includes `farm` (status Running / Paused / Worker idle / Worker not seen, last heartbeat) and stays public. Missing file defaults to enabled.
 
 **Worker.** Before each batch, `scripts/discovery_worker.py` polls prod. When paused: clear in-flight, post a heartbeat, sleep 10–30s, do not exit. When enabled again, resume batches. A batch already running may finish first.
 

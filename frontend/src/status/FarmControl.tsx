@@ -67,6 +67,7 @@ export default function FarmControl() {
   const farm = q.data?.farm;
   const enabled = farm?.enabled !== false;
   const unseen = farm?.status === "worker_unseen" || farm?.worker_seen === false;
+  const tokenReady = Boolean((savedToken || tokenDraft).trim());
 
   const mutate = useMutation({
     mutationFn: (next: boolean) => {
@@ -100,6 +101,9 @@ export default function FarmControl() {
       </div>
 
       <p className="text-sm text-white/65 mb-3">
+        Start / Stop is authenticated. Anyone who can open this site cannot pause
+        the farm — paste the paper ingest token first. It stays in this browser
+        tab only (`sessionStorage`) and is never shipped in the JS bundle.
         Leave the worker running on jensa. Stop idles it (near-zero CPU) so you can
         game. Start resumes from this page — it does not kill or relaunch the
         process. A batch already running may finish first.
@@ -120,7 +124,7 @@ export default function FarmControl() {
       <div className="flex flex-wrap items-center gap-2 mb-3">
         <button
           type="button"
-          disabled={busy}
+          disabled={busy || !tokenReady}
           onClick={() => mutate.mutate(!enabled)}
           className={`min-h-11 px-4 py-2 rounded text-sm font-medium ${
             enabled

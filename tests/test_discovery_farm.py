@@ -356,6 +356,59 @@ class FarmHttpTests(unittest.TestCase):
         thread.join(timeout=3)
         httpd.server_close()
 
+    def test_unauthenticated_or_wrong_token_cannot_toggle_farm(self):
+        """Anyone who can hit the public host must not pause the farm."""
+        httpd, thread, port = self._start()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                env = {
+                    "PAPER_STATE": tmp,
+                    "PAPER_DISCOVERY_INGEST_TOKEN": "paper-secret-token",
+                }
+                with patch.dict(os.environ, env):
+                    from hedge_fund.trading.farm import load_farm, set_farm_enabled
+
+                    set_farm_enabled(True)
+                    url = f"http://127.0.0.1:{port}/api/discovery/farm"
+                    body = b'{"enabled":false}'
+                    no_auth = Request(
+                        url,
+                        data=body,
+                        method="POST",
+                        headers={"Content-Type": "application/json"},
+                    )
+                    try:
+                        urlopen(no_auth, timeout=3)
+                        self.fail("expected HTTPError for missing token")
+                    except HTTPError as err:
+                        self.assertEqual(err.code, 401)
+
+                    wrong = Request(
+                        url,
+                        data=body,
+                        method="POST",
+                        headers={
+                            "X-Discovery-Token": "nope",
+                            "X-Paper-Discovery-Token": "also-nope",
+                            "Authorization": "Bearer nope",
+                            "Content-Type": "application/json",
+                        },
+                    )
+                    try:
+                        urlopen(wrong, timeout=3)
+                        self.fail("expected HTTPError for wrong token")
+                    except HTTPError as err:
+                        self.assertEqual(err.code, 401)
+
+                    self.assertTrue(load_farm()["enabled"])
+                    summary = json.loads(urlopen(
+                        f"http://127.0.0.1:{port}/api/discovery/summary",
+                        timeout=3,
+                    ).read().decode())
+                    self.assertTrue(summary["farm"]["enabled"])
+        finally:
+            self._stop(httpd, thread)
+
     def test_farm_toggle_requires_token_and_shows_on_summary(self):
         httpd, thread, port = self._start()
         try:
@@ -377,9 +430,24 @@ class FarmHttpTests(unittest.TestCase):
                     except HTTPError as err:
                         self.assertEqual(err.code, 401)
 
-                    good = Request(
+                    paper_hdr = Request(
                         f"http://127.0.0.1:{port}/api/discovery/farm",
                         data=b'{"enabled":false}',
+                        method="POST",
+                        headers={
+                            "X-Paper-Discovery-Token": "paper-secret-token",
+                            "Content-Type": "application/json",
+                        },
+                    )
+                    raw = urlopen(paper_hdr, timeout=3)
+                    body = json.loads(raw.read().decode())
+                    self.assertTrue(body["ok"])
+                    self.assertFalse(body["farm"]["enabled"])
+                    self.assertEqual(body["farm"]["status"], "paused")
+
+                    good = Request(
+                        f"http://127.0.0.1:{port}/api/discovery/farm",
+                        data=b'{"enabled":true}',
                         method="POST",
                         headers={
                             "Authorization": "Bearer paper-secret-token",
@@ -389,15 +457,13 @@ class FarmHttpTests(unittest.TestCase):
                     raw = urlopen(good, timeout=3)
                     body = json.loads(raw.read().decode())
                     self.assertTrue(body["ok"])
-                    self.assertFalse(body["farm"]["enabled"])
-                    self.assertEqual(body["farm"]["status"], "paused")
+                    self.assertTrue(body["farm"]["enabled"])
 
                     summary = json.loads(urlopen(
                         f"http://127.0.0.1:{port}/api/discovery/summary",
                         timeout=3,
                     ).read().decode())
-                    self.assertFalse(summary["farm"]["enabled"])
-                    self.assertEqual(summary["farm"]["status"], "paused")
+                    self.assertTrue(summary["farm"]["enabled"])
         finally:
             self._stop(httpd, thread)
 
