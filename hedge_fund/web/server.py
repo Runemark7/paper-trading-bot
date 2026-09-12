@@ -9,7 +9,7 @@ A small, dependency-free HTTP server (stdlib only) that exposes:
   GET /api/trades       -> JSON: recent closed trades
   GET /api/status       -> running-now vs in-progress (last-known stamps)
   GET /api/discovery/summary -> tested / in-flight / leftover-untested; farm Start/Stop status
-  POST /api/discovery/ingest -> Windows worker: append evals + admit (shared secret)
+  POST /api/discovery/ingest -> Windows worker: append evals + admit / force_admit (shared secret)
   POST /api/discovery/farm -> Start/Stop Windows farm (same ingest token)
   POST /run             -> trigger a live decision cycle, then regenerate
   GET /health           -> liveness probe

@@ -93,7 +93,8 @@ No PVC copy and no `kubectl port-forward`.
    `X-Discovery-Token`. Nginx already proxies `/api/`.
 4. Prod appends `discovery_log.json` and, if the name **qualified**, admits
    it to `champions.json` the same way tournament does. Existing champions
-   are never removed.
+   are never removed. Same-token optional `force_admit` (e.g. `["dbl_bot_120"]`)
+   seats an existing log row as a paper champion even when beat-B&H still fails.
 
 Dashboard: [https://trading.runevibe.se](https://trading.runevibe.se) —
 Discovery buckets update from the ingested log. A quiet leftover drain
