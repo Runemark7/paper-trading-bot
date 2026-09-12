@@ -1,3 +1,4 @@
+import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
 import { Card, Stat, fmt, fmtPct, Badge, Section, Empty, MonoName, Field, FieldGrid, PhoneCards, DesktopTable } from "../components/ui";
@@ -216,6 +217,7 @@ export default function Overview() {
               />
               <PipelineRow
                 title="Discovery / tournament qualification"
+                to="/discovery"
                 chip={
                   prog.pipeline.stale && prog.pipeline.phase === "tournament"
                     ? "discovery stuck / cycle overdue"
@@ -275,16 +277,24 @@ function PipelineRow({
   chip,
   tone,
   body,
+  to,
 }: {
   title: string;
   chip: string;
   tone: "wait" | "warn" | "neutral";
   body: string;
+  to?: string;
 }) {
   return (
     <div className="min-w-0 rounded-lg border border-white/10 p-3">
       <div className="flex flex-col gap-1.5 mb-1 sm:flex-row sm:items-start sm:justify-between sm:gap-2">
-        <div className="font-medium text-white">{title}</div>
+        {to ? (
+          <Link to={to} className="font-medium text-white hover:underline">
+            {title}
+          </Link>
+        ) : (
+          <div className="font-medium text-white">{title}</div>
+        )}
         <Badge tone={tone}>{chip}</Badge>
       </div>
       <div className="text-white/50 text-xs leading-relaxed break-words [overflow-wrap:anywhere]">{body}</div>

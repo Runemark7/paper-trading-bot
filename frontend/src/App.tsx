@@ -2,6 +2,7 @@ import { NavLink, Routes, Route, Navigate } from "react-router-dom";
 import Overview from "./pages/Overview";
 import Positions from "./pages/Positions";
 import Champions from "./pages/Champions";
+import Discovery from "./pages/Discovery";
 import Learning from "./pages/Learning";
 import ChartPage from "./pages/Chart";
 import StatusBar from "./status/StatusBar";
@@ -11,6 +12,7 @@ const nav = [
   { to: "/chart", label: "Chart" },
   { to: "/positions", label: "Positions" },
   { to: "/champions", label: "Champions" },
+  { to: "/discovery", label: "Discovery" },
   { to: "/learning", label: "Learning" },
 ];
 
@@ -61,6 +63,7 @@ export default function App() {
           <Route path="/chart" element={<ChartPage />} />
           <Route path="/positions" element={<Positions />} />
           <Route path="/champions" element={<Champions />} />
+          <Route path="/discovery" element={<Discovery />} />
           <Route path="/learning" element={<Learning />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
@@ -69,7 +72,7 @@ export default function App() {
         className="md:hidden fixed bottom-0 inset-x-0 z-40 border-t border-white/10 bg-[#0d1430]/95 pb-[env(safe-area-inset-bottom)]"
         aria-label="Primary"
       >
-        <div className="grid grid-cols-5">
+        <div className="grid grid-cols-6">
           {nav.map((n) => (
             <NavLink
               key={n.to}
