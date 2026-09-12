@@ -54,7 +54,10 @@ python scripts/fetch_history.py
 ```
 
 `crypto_history_5m.json` must exist under `state\`. Fetch talks to public
-Binance; it does not need the cluster. Default bars track
+Binance; it does not need the cluster. Default symbols are **BTC/USDT and
+ETH/USDT only** (no SOL/XRP — discovery/qual tape is BTC+ETH). Override
+with `HIST_SYMBOLS` (comma-separated ccxt symbols) only if you need extra
+pairs. Default bars track
 `QUAL_WINDOW_BARS * QUAL_N_WINDOWS + slack` (~210k five-minute bars for
 8 × 90d). The page cap is 2500 so a multi-year fetch can finish. Re-run
 until the file covers ~720 calendar days (or the deep ~5y target), then

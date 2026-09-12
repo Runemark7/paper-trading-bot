@@ -15,7 +15,7 @@ this file is the living topology.
 | Piece | Where | What it does |
 |---|---|---|
 | **Mint** | `hedge_fund/trading/refill.py` on the farm | Bounded DIP/MOM + structure AND recipe. When never-tested leftovers run dry, the next handful is appended to `state/discovery_extended.json`. Static `generate_universe()` stays inside the ~40–120 compiled-list band. |
-| **Farm** | Alexander's Windows PC (`jensa`) | `scripts/discovery_worker.py` evaluates names against local `state/crypto_history_5m.json` (Binance 5m). Same fail-once / auto-refill / aggregate-OOS / `rm_v1` / 5m rules as `scripts/tournament_engine.py`. |
+| **Farm** | Alexander's Windows PC (`jensa`) | `scripts/discovery_worker.py` evaluates names against local `state/crypto_history_5m.json` (Binance 5m, **BTC/USDT and ETH/USDT only**). Same fail-once / auto-refill / aggregate-OOS / `rm_v1` / 5m rules as `scripts/tournament_engine.py`. |
 | **Eval** | `parse_strategy` → walk-forward → backtest → gate | Name string → AND atoms on native 5m → 8 chronological ~90d windows → `rm_v1` paper backtest → aggregate OOS in `hedge_fund/trading/qualify.py`. |
 | **Ingest** | `POST /api/discovery/ingest` | Token-gated. Pass → champion + isolated paper book on k8s. Fail → parked forever (fail-once). Existing champions are never culled. |
 | **Prod** | k8s cycle sidecar | `DISCOVERY_ON_CYCLE=0` — live trading only (`run_isolated` → collect → report). Do not turn discovery back on in-cluster. UI: `/discovery`. |
@@ -54,7 +54,7 @@ flowchart TB
 
   subgraph farm [Farm: jensa Windows PC]
     worker["scripts/discovery_worker.py"]
-    hist["state/crypto_history_5m.json\nBinance 5m"]
+    hist["state/crypto_history_5m.json\nBinance 5m BTC/ETH"]
   end
   ext --> worker
   hist --> worker
@@ -85,9 +85,9 @@ flowchart TB
   ctl -.->|"pause / resume"| worker
 ```
 
-Caption: Names are minted on the farm, walked on jensa against Binance 5m,
-then POSTed to prod. The cluster never runs walk-forwards. Start/Stop on
-`/discovery` is token-gated and only idles the worker.
+Caption: Names are minted on the farm, walked on jensa against Binance 5m
+BTC/ETH, then POSTed to prod. The cluster never runs walk-forwards.
+Start/Stop on `/discovery` is token-gated and only idles the worker.
 
 ---
 
