@@ -11,8 +11,9 @@ paper-state PVC. Tournament then drains those names under the existing
 The static universe stays inside ``UNIVERSE_TARGET_MAX`` (~40–120). The
 sidecar is the pending queue: after a refill, never-tested extras are one
 ``DISCOVERY_REFILL_BATCH_SIZE`` handful, not thousands of clones. Recipe
-generation is string-only (no history load) so the 1 CPU / 1.5GiB sidecar
-does not OOM.
+generation is string-only (no history load). 2026-09-12 adds unused
+Donchian / swing / near-level lookbacks and ANDs already in
+``parse_strategy`` — still no named candlesticks.
 """
 from __future__ import annotations
 
@@ -49,12 +50,23 @@ TREND_FILTERS: tuple[str, ...] = (
 )
 
 # Multiples of 6 so near_duplicate_key is the identity for structure N.
-# 6 bars = 30m on 5m; 72 bars = 6h. Distinct from a 1-bar param tweak.
-STRUCTURE_NS: tuple[int, ...] = (6, 12, 18, 24, 30, 36, 42, 48, 54, 60, 66, 72)
+# 6 bars = 30m on 5m; 96 bars = 8h. Distinct from a 1-bar param tweak.
+STRUCTURE_NS: tuple[int, ...] = (
+    6, 12, 18, 24, 30, 36, 42, 48, 54, 60, 66, 72, 84, 96,
+)
 
-# Hard refuse: chart-pattern zoo, MFI, WaveTrend clones, MTF wrappers.
+# Trend tags for support / near-level ANDs (not every TREND_FILTERS × atom).
+# sma_abv_200 / rsi_14_>50 stay on don_hi and a few dbl_bot extras only.
+LEVEL_TRENDS: tuple[str, ...] = (
+    "sma_abv_50",
+    "ema_abv_50",
+    "sma_stack_20_50_100",
+)
+
+# Hard refuse: chart-pattern zoo, named candlesticks, MFI, WaveTrend clones, MTF.
 _REFUSED_RE = re.compile(
-    r"head_and_shoulders|flag|triangle|engulfing|mfi_|wt_|sommi|gold_dot|"
+    r"head_and_shoulders|flag|triangle|engulfing|hammer|doji|morning_star|"
+    r"evening_star|mfi_|wt_|sommi|gold_dot|"
     r"dbl_top_|daily\(|h1\(|m5\(|chart_pattern|order_block|fvg_|candlestick",
     re.IGNORECASE,
 )
@@ -187,33 +199,67 @@ def _has_structure_atom(name: str) -> bool:
     )
 
 
+def _legacy_structure_ands(n: int) -> Iterator[str]:
+    """2026-09-11 recipe families. Kept first so a mid-drain farm continues."""
+    for dip in DIP_FILTERS:
+        yield f"{dip}&don_lo_{n}"
+        yield f"{dip}&near_swing_lo_{n}"
+    for mom in MOM_FILTERS:
+        yield f"{mom}&don_hi_{n}"
+        yield f"{mom}&near_swing_hi_{n}"
+    yield f"dbl_bot_{n}"
+    yield f"dbl_bot_{n}&sma_abv_50"
+    yield f"dbl_bot_{n}&don_lo_{n}"
+    yield f"dbl_bot_{n}&sma_stack_20_50_100"
+    yield f"dbl_bot_{n}&ema_abv_50"
+    yield f"don_hi_{n}"
+    for trend in TREND_FILTERS:
+        yield f"{trend}&don_hi_{n}"
+    for dip in DIP_FILTERS:
+        yield f"{dip}&don_lo_{n}&sma_abv_50"
+        yield f"{dip}&near_swing_lo_{n}&sma_abv_50"
+    for mom in MOM_FILTERS:
+        yield f"{mom}&don_hi_{n}&sma_abv_50"
+
+
+def _near_level_ands(n: int) -> Iterator[str]:
+    """2026-09-12: unused near-level / support / swing ANDs already in the parser.
+
+    don_lo / near_swing_* already use the documented near-band. Standalone
+    tags and trend×support were missing; mom×near_swing_hi lacked the sma/ema
+    3-atoms that mom×don_hi already had. No named candlesticks.
+    """
+    yield f"don_lo_{n}"
+    yield f"near_swing_lo_{n}"
+    yield f"near_swing_hi_{n}"
+    for trend in LEVEL_TRENDS:
+        yield f"{trend}&don_lo_{n}"
+        yield f"{trend}&near_swing_lo_{n}"
+        yield f"{trend}&near_swing_hi_{n}"
+    for mom in MOM_FILTERS:
+        yield f"{mom}&near_swing_hi_{n}&sma_abv_50"
+        yield f"{mom}&near_swing_hi_{n}&ema_abv_50"
+        yield f"{mom}&don_hi_{n}&ema_abv_50"
+    for dip in DIP_FILTERS:
+        yield f"{dip}&don_lo_{n}&ema_abv_50"
+        yield f"{dip}&near_swing_lo_{n}&ema_abv_50"
+    yield f"dbl_bot_{n}&rsi_14_>50"
+    yield f"dbl_bot_{n}&sma_abv_100"
+
+
 def iter_recipe_names() -> Iterator[str]:
     """Deterministic bounded stream. Not a full cartesian of every atom.
 
     Dip tags support (don_lo / near_swing_lo); mom tags breakout
     (don_hi / near_swing_hi); dbl_bot is the one pattern family.
-    Trend filters AND onto those structure atoms. No WaveTrend, no MFI.
+    Trend filters AND onto those structure atoms. Near-level tags
+    (don_lo / near_swing_*) are also emitted standalone and with LEVEL_TRENDS.
+    Legacy families first, then the 2026-09-12 near-level pass. No WaveTrend, no MFI.
     """
     for n in STRUCTURE_NS:
-        for dip in DIP_FILTERS:
-            yield f"{dip}&don_lo_{n}"
-            yield f"{dip}&near_swing_lo_{n}"
-        for mom in MOM_FILTERS:
-            yield f"{mom}&don_hi_{n}"
-            yield f"{mom}&near_swing_hi_{n}"
-        yield f"dbl_bot_{n}"
-        yield f"dbl_bot_{n}&sma_abv_50"
-        yield f"dbl_bot_{n}&don_lo_{n}"
-        yield f"dbl_bot_{n}&sma_stack_20_50_100"
-        yield f"dbl_bot_{n}&ema_abv_50"
-        yield f"don_hi_{n}"
-        for trend in TREND_FILTERS:
-            yield f"{trend}&don_hi_{n}"
-        for dip in DIP_FILTERS:
-            yield f"{dip}&don_lo_{n}&sma_abv_50"
-            yield f"{dip}&near_swing_lo_{n}&sma_abv_50"
-        for mom in MOM_FILTERS:
-            yield f"{mom}&don_hi_{n}&sma_abv_50"
+        yield from _legacy_structure_ands(n)
+    for n in STRUCTURE_NS:
+        yield from _near_level_ands(n)
 
 
 def next_refill_batch(
