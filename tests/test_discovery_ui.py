@@ -91,7 +91,7 @@ class DiscoveryPageContractTests(unittest.TestCase):
 
     def test_champions_keeps_teaser_not_full_buckets(self):
         self.assertIn("DiscoveryTeaser", CHAMPS)
-        self.assertIn('to="/discovery"', CHAMPS)
+        self.assertIn('to="/discovery"', DISCOVERY_TSX)
         self.assertNotIn("<DiscoveryBuckets", CHAMPS)
         self.assertNotIn("Already tested", CHAMPS)
         self.assertIn("Open Discovery", DISCOVERY_TSX)

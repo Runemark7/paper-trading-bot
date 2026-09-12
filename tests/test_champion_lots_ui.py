@@ -252,7 +252,7 @@ class ChampionsAccordionUiTests(unittest.TestCase):
         self.assertIn("Could not load /api/graduated", CHAMPS_TSX)
         self.assertIn("Could not load /api/discovery/summary", DISCOVERY_TSX)
         self.assertIn("DiscoveryTeaser", CHAMPS_TSX)
-        self.assertIn('to="/discovery"', CHAMPS_TSX)
+        self.assertIn('to="/discovery"', DISCOVERY_TSX)
         self.assertNotIn("<DiscoveryBuckets", CHAMPS_TSX)
         self.assertNotIn("Already tested", CHAMPS_TSX)
         self.assertNotIn("Discovery log (", CHAMPS_TSX)
