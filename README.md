@@ -72,7 +72,8 @@ docker compose up
 ```
 
 Cluster manifests: `k8s/` (ArgoCD app in `k8s/argocd-app.yaml`). HTTP routes:
-[docs/WEB_SERVICE.md](docs/WEB_SERVICE.md). Windows discovery farm:
+[docs/WEB_SERVICE.md](docs/WEB_SERVICE.md). Living mint → farm → eval → prod
+map (Mermaid): [docs/WORKFLOW.md](docs/WORKFLOW.md). Windows discovery farm:
 [docs/WINDOWS_DISCOVERY.md](docs/WINDOWS_DISCOVERY.md).
 
 ## Layout
@@ -88,6 +89,7 @@ hedge_fund/
   dashboard/           static HTML report
 frontend/              React UI
 k8s/                   cluster + ArgoCD
+docs/WORKFLOW.md       living mint / farm / eval / prod map
 PROTOCOL.md            honesty contract
 ```
 

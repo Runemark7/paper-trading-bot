@@ -1,5 +1,8 @@
 # Windows discovery farm (Alexander / `jensa`)
 
+End-to-end mint → farm → gate → live map (Mermaid):
+[WORKFLOW.md](WORKFLOW.md).
+
 Paper only. The k8s cycle sidecar (1 CPU / 1.5GiB) no longer runs
 walk-forwards. This PC evaluates never-tested names with the **same**
 fail-once / auto-refill / aggregate-OOS / `rm_v1` / 5m rules as
