@@ -13,6 +13,7 @@ from unittest.mock import patch
 from hedge_fund.trading.constants import (
     DISCOVER_CYCLE_MAX_NAMES,
     DISCOVER_CYCLE_TIME_BUDGET_SECONDS,
+    QUAL_N_WINDOWS,
 )
 from hedge_fund.trading.discovery import (
     clear_in_flight,
@@ -55,7 +56,7 @@ def _dummy_windows():
             "skipped": False,
             "failed": False,
         }
-        for _ in range(3)
+        for _ in range(QUAL_N_WINDOWS)
     ]
 
 
@@ -67,7 +68,10 @@ def _tournament_patches(leftovers, evaluate_side_effect):
             "scripts.tournament_engine._load_qual_history",
             return_value={"BTC/USDT": [[0] * 5] * 10, "ETH/USDT": [[0] * 5] * 10},
         ),
-        patch("scripts.tournament_engine._window_slices", return_value=[{}, {}, {}]),
+        patch(
+            "scripts.tournament_engine._window_slices",
+            return_value=[{} for _ in range(QUAL_N_WINDOWS)],
+        ),
         patch("scripts.tournament_engine._benchmark_oos", return_value=(0.0, 0.0)),
         patch("scripts.tournament_engine.parse_strategy", return_value=lambda *a, **k: True),
         patch("scripts.tournament_engine.evaluate_windows", side_effect=evaluate_side_effect),

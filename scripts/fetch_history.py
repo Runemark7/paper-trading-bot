@@ -10,7 +10,7 @@ Discovery qualification reads crypto_history_5m.json (HIST_TIMEFRAME=5m).
 
 Usage:
   python scripts/fetch_history.py
-  HIST_TIMEFRAME=5m HIST_BARS=80000 python scripts/fetch_history.py
+  HIST_TIMEFRAME=5m HIST_BARS=210000 python scripts/fetch_history.py
   HIST_TIMEFRAME=4h HIST_BARS=20000 python scripts/fetch_history.py
 """
 import json, os, time
@@ -21,9 +21,13 @@ from hedge_fund.trading.constants import QUAL_TIMEFRAME, QUAL_N_WINDOWS, QUAL_WI
 from datetime import datetime, timezone
 
 DEFAULT_TF = os.environ.get("HIST_TIMEFRAME", QUAL_TIMEFRAME)
-# Cover 3 walk-forward windows on 5m (~90d each → ~77760 bars) plus slack.
+# Cover QUAL_N_WINDOWS × ~90d of 5m (8 × 25920 → 207360 bars, ~720d) plus slack.
+# Tracks the walk-forward constants so a longer span fetches more tape.
 _DEFAULT_BARS = QUAL_WINDOW_BARS * QUAL_N_WINDOWS + 3000 if DEFAULT_TF == QUAL_TIMEFRAME else 70000
 DEFAULT_BARS = int(os.environ.get("HIST_BARS", str(_DEFAULT_BARS)))
+# ~1000 bars/page. 300 pages capped a deep 5m fetch around ~280d; 2500
+# is enough for multi-year tape (e.g. ~600k bars / ~5y) with overlap.
+HIST_FETCH_PAGE_CAP = 2500
 STATE_DIR = state_root()
 OUT = STATE_DIR / f"crypto_history_{DEFAULT_TF}.json"
 SYMBOLS = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT"]
@@ -37,7 +41,7 @@ def history(sym, timeframe, max_bars):
     since = None
     pages = 0
     page_ms = _tf_ms(timeframe) * 1000  # 1000 bars worth of the timeframe
-    while len(bars) < max_bars and pages < 300:
+    while len(bars) < max_bars and pages < HIST_FETCH_PAGE_CAP:
         batch = src.exchange.fetch_ohlcv(sym, timeframe=timeframe, since=since, limit=1000)
         if not batch:
             break

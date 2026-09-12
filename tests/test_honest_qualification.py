@@ -154,7 +154,7 @@ class OosGateTests(unittest.TestCase):
             "test_pnl": 946.0,
             "bh_oos_pnl": 100.0,
             "sma_stack_oos_pnl": 50.0,
-            "regimes_tested": 3,
+            "regimes_tested": 8,
             "fail_reasons": [
                 "window[1] failed/skipped/neg/empty",
                 "not all windows non-negative",
@@ -180,6 +180,51 @@ class OosGateTests(unittest.TestCase):
         self.assertTrue(row["qualified"])
         self.assertFalse(dbl["qualified"])
         self.assertEqual(flipped[0]["strategy"], "window_veto_only")
+
+    def test_eight_by_ninety_is_the_default_walk_forward(self):
+        from hedge_fund.trading.constants import (
+            MIN_BACKTEST_SHARPE,
+            MIN_BACKTEST_TRADES,
+            QUAL_COVERAGE_DAYS,
+            QUAL_N_WINDOWS,
+            QUAL_WINDOW_BARS,
+            QUAL_WINDOW_DAYS,
+        )
+
+        self.assertEqual(QUAL_N_WINDOWS, 8)
+        self.assertEqual(QUAL_WINDOW_DAYS, 90)
+        self.assertEqual(QUAL_WINDOW_BARS, 25920)
+        self.assertEqual(QUAL_COVERAGE_DAYS, 720)
+        self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
+        self.assertEqual(MIN_BACKTEST_TRADES, 30)
+
+        windows = [_win(test_pnl=20, test_trades=8) for _ in range(QUAL_N_WINDOWS)]
+        d = qualification_decision(
+            windows, expected_windows=QUAL_N_WINDOWS, bh_oos_pnl=1.0, sma_stack_oos_pnl=1.0
+        )
+        self.assertTrue(d["passed"], d["reasons"])
+        self.assertEqual(d["tot_oos_trades"], 64)
+
+        short = [_win(test_pnl=50, test_trades=15) for _ in range(3)]
+        d_short = qualification_decision(
+            short, expected_windows=QUAL_N_WINDOWS, bh_oos_pnl=1.0, sma_stack_oos_pnl=1.0
+        )
+        self.assertFalse(d_short["passed"])
+        self.assertTrue(any("windows" in r for r in d_short["reasons"]))
+
+        old_row = {
+            "strategy": "three_window_legacy",
+            "qualified": False,
+            "sharpe": 0.58,
+            "trades": 296,
+            "test_pnl": 946.0,
+            "bh_oos_pnl": 100.0,
+            "sma_stack_oos_pnl": 50.0,
+            "regimes_tested": 3,
+        }
+        d_old = qualification_from_record(old_row)
+        self.assertFalse(d_old["passed"])
+        self.assertTrue(any("windows" in r for r in d_old["reasons"]))
 
 
 class QualTapeTests(unittest.TestCase):
@@ -323,6 +368,8 @@ class LeftoverDrainTests(unittest.TestCase):
 
     def test_replenish_one_cycle_stays_within_budget_and_later_cycles_drain(self):
         leftovers = [f"cand_{i}" for i in range(40)]
+        from hedge_fund.trading.constants import QUAL_N_WINDOWS
+
         dummy_windows = [
             {
                 "train_pnl": 0.0,
@@ -334,7 +381,7 @@ class LeftoverDrainTests(unittest.TestCase):
                 "skipped": False,
                 "failed": False,
             }
-            for _ in range(3)
+            for _ in range(QUAL_N_WINDOWS)
         ]
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -351,7 +398,7 @@ class LeftoverDrainTests(unittest.TestCase):
                     ),
                     patch(
                         "scripts.tournament_engine._window_slices",
-                        return_value=[{}, {}, {}],
+                        return_value=[{} for _ in range(QUAL_N_WINDOWS)],
                     ),
                     patch(
                         "scripts.tournament_engine._benchmark_oos",

@@ -14,6 +14,7 @@ from hedge_fund.trading.constants import (
     DISCOVERY_REFILL_BATCH_SIZE,
     MIN_BACKTEST_SHARPE,
     MIN_BACKTEST_TRADES,
+    QUAL_N_WINDOWS,
 )
 from hedge_fund.trading.discovery import prioritize_leftovers
 from hedge_fund.trading.refill import (
@@ -569,7 +570,7 @@ class TournamentRefillIntegrationTests(unittest.TestCase):
                 "skipped": False,
                 "failed": False,
             }
-            for _ in range(3)
+            for _ in range(QUAL_N_WINDOWS)
         ]
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -584,7 +585,10 @@ class TournamentRefillIntegrationTests(unittest.TestCase):
                         "scripts.tournament_engine._load_qual_history",
                         return_value={"BTC/USDT": [[0] * 5] * 10, "ETH/USDT": [[0] * 5] * 10},
                     ),
-                    patch("scripts.tournament_engine._window_slices", return_value=[{}, {}, {}]),
+                    patch(
+                        "scripts.tournament_engine._window_slices",
+                        return_value=[{} for _ in range(QUAL_N_WINDOWS)],
+                    ),
                     patch("scripts.tournament_engine._benchmark_oos", return_value=(0.0, 0.0)),
                     patch(
                         "scripts.tournament_engine.parse_strategy",

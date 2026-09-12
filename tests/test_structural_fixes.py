@@ -201,6 +201,8 @@ class GraduatedPaperTokenTests(unittest.TestCase):
             MIN_BACKTEST_SHARPE,
             MIN_BACKTEST_TRADES,
             QUAL_TIMEFRAME,
+            QUAL_COVERAGE_DAYS,
+            QUAL_N_WINDOWS,
             QUAL_WINDOW_BARS,
             QUAL_WINDOW_DAYS,
             RISK_POLICY,
@@ -210,7 +212,9 @@ class GraduatedPaperTokenTests(unittest.TestCase):
         self.assertEqual(DEFAULT_TIMEFRAME, "5m")
         self.assertEqual(QUAL_TIMEFRAME, DEFAULT_TIMEFRAME)
         self.assertEqual(QUAL_TIMEFRAME, "5m")
+        self.assertEqual(QUAL_N_WINDOWS, 8)
         self.assertEqual(QUAL_WINDOW_DAYS, 90)
+        self.assertEqual(QUAL_COVERAGE_DAYS, 720)
         self.assertEqual(QUAL_WINDOW_BARS, 90 * 24 * 12)  # 25920; not 2500 (~9 days of 5m)
         self.assertEqual(CYCLE_INTERVAL_SECONDS, 300)
         self.assertEqual(RISK_POLICY, "rm_v1")

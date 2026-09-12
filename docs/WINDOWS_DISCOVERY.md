@@ -5,6 +5,10 @@ walk-forwards. This PC evaluates never-tested names with the **same**
 fail-once / auto-refill / aggregate-OOS / `rm_v1` / 5m rules as
 `scripts/tournament_engine.py` and POSTs results to prod.
 A single empty/neg window is not a veto (beat-B&H and Sharpe ≥ 0.30 stay).
+Walk-forward is **8 × ~90 calendar days** of native 5m (~720 days, not
+~270). Thresholds are unchanged. Longer tape makes each eval slower on
+this PC — that is expected. Do **not** turn discovery back on in the
+k8s cycle sidecar to "make up time."
 
 Machine: i5-6600K / 16GB / GTX 1070. GPU is unused (no CUDA rewrite).
 Use 2 workers (safe) or 4 (all cores). Do not keep a kubectl tunnel.
@@ -47,8 +51,12 @@ python scripts/fetch_history.py
 ```
 
 `crypto_history_5m.json` must exist under `state\`. Fetch talks to public
-Binance; it does not need the cluster. Re-run every few days so the tape
-stays current. The `/tmp` mirror is skipped on Windows.
+Binance; it does not need the cluster. Default bars track
+`QUAL_WINDOW_BARS * QUAL_N_WINDOWS + slack` (~210k five-minute bars for
+8 × 90d). The page cap is 2500 so a multi-year fetch can finish. Re-run
+until the file covers ~720 calendar days (or the deep ~5y target), then
+every few days so the tape stays current. The `/tmp` mirror is skipped
+on Windows.
 
 3. `.env` next to `docker-compose.discovery.yml` (do not commit):
 
