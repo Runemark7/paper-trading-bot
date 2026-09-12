@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { fetchDiscoverySummary } from "../api/client";
 import type { DiscoveryEvaluation } from "../api/types";
 import { Badge, Card, Empty, Field, FieldGrid, MonoName, NameChip, PhoneCards, DesktopTable, fmt } from "../components/ui";
+import { farmStatusLabel } from "./FarmControl";
 import { fmtWhen } from "./format";
 import {
   DEFAULT_TESTED_SORT,
@@ -143,7 +144,10 @@ export function DiscoveryTeaser() {
         </div>
       ) : null}
       <p className="text-xs text-white/45 mb-3">
-        Last eval {q.data?.last_tested_at ? fmtWhen(q.data.last_tested_at) : "never recorded"}
+        Farm: {farmStatusLabel(q.data?.farm)}
+        {q.data?.farm?.heartbeat_at ? ` · heartbeat ${fmtWhen(q.data.farm.heartbeat_at)}` : ""}
+        {" · "}
+        last eval {q.data?.last_tested_at ? fmtWhen(q.data.last_tested_at) : "never recorded"}
         {q.data?.last_strategy ? (
           <>
             {" "}

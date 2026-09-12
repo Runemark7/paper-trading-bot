@@ -4,6 +4,10 @@ Evaluates never-tested names (fail-once, auto-refill, rm_v1, 5m windows)
 against local ``crypto_history_5m.json`` and POSTs results to prod
 ``/api/discovery/ingest``. Cluster ``live_cycle`` stays live-only.
 
+Leave this process running. Pause/resume from the Discovery page
+(``POST /api/discovery/farm``) — the loop polls prod and idles instead
+of exiting so Start works without relaunching on jensa.
+
 GPU is unused (no CUDA rewrite). Modest CPU parallelism (2–4) on an i5.
 
     python scripts/discovery_worker.py --workers 2
@@ -53,6 +57,7 @@ from hedge_fund.trading.discovery import (
     write_in_flight,
 )
 from hedge_fund.trading.discovery_mode import ingest_token
+from hedge_fund.trading.farm import farm_enabled_from_summary
 from hedge_fund.trading.refill import (
     append_extended_batch,
     discovery_universe,
@@ -69,6 +74,9 @@ from scripts.tournament_engine import (
 
 DEFAULT_INGEST_URL = "https://trading.runevibe.se/api/discovery/ingest"
 DEFAULT_BASE_URL = "https://trading.runevibe.se"
+PAUSE_SLEEP_DEFAULT = 15
+PAUSE_SLEEP_MIN = 10
+PAUSE_SLEEP_MAX = 30
 
 _SLICES = None
 _BH = None
@@ -206,13 +214,65 @@ def _plan_batch(max_names: int) -> tuple[list[str], list[str], list[str]]:
     return planned, rotated, added
 
 
-def _post_ingest(url: str, token: str, evaluations: list[dict], extended: list[str], flight: dict | None, *, clear: bool = False) -> dict:
+def poll_farm_enabled(base_url: str, last_known: bool = True) -> bool:
+    """Ask prod whether the farm should run. Network errors keep last_known."""
+    try:
+        summary = _http_json(f"{base_url.rstrip('/')}/api/discovery/summary", timeout=20)
+    except Exception:
+        return last_known
+    return farm_enabled_from_summary(summary, last_known)
+
+
+def pause_sleep_seconds(raw: int) -> int:
+    return max(PAUSE_SLEEP_MIN, min(int(raw), PAUSE_SLEEP_MAX))
+
+
+def consider_pause(
+    enabled: bool,
+    *,
+    once: bool,
+    ingest_url: str | None,
+    token: str | None,
+    pause_sleep: int,
+    sleeper=time.sleep,
+) -> str:
+    """Idle when the farm flag is off. Does not exit the worker process.
+
+    Returns ``run``, ``pause``, or ``exit`` (``--once`` while paused).
+    """
+    if enabled:
+        return "run"
+    print("discovery_worker: farm paused — idling (near-zero CPU)", flush=True)
+    clear_in_flight()
+    if ingest_url and token:
+        try:
+            _post_ingest(ingest_url, token, [], [], None, clear=True, heartbeat="paused")
+        except Exception as exc:
+            print(f"discovery_worker: pause ingest failed: {exc}", flush=True)
+    if once:
+        return "exit"
+    sleeper(pause_sleep_seconds(pause_sleep))
+    return "pause"
+
+
+def _post_ingest(
+    url: str,
+    token: str,
+    evaluations: list[dict],
+    extended: list[str],
+    flight: dict | None,
+    *,
+    clear: bool = False,
+    heartbeat: str | None = None,
+) -> dict:
     payload = {
         "evaluations": evaluations,
         "extended_names": extended,
         "source": "windows_worker",
         "paper_only": True,
     }
+    if heartbeat:
+        payload["heartbeat"] = {"status": heartbeat, "source": "windows_worker"}
     if clear:
         payload["clear_in_flight"] = True
     elif flight:
@@ -245,7 +305,7 @@ def run_batch(
     if not planned:
         print("discovery_worker: no never-tested names (recipe dry or all parked)", flush=True)
         if ingest_url and token:
-            _post_ingest(ingest_url, token, [], added, None, clear=True)
+            _post_ingest(ingest_url, token, [], added, None, clear=True, heartbeat="idle")
         clear_in_flight()
         return {"evaluated": 0, "qualified": 0, "planned": [], "refilled": added}
 
@@ -271,6 +331,7 @@ def run_batch(
                 "batch_size": len(planned),
                 "current": None,
             },
+            heartbeat="running",
         )
 
     records: list[dict] = []
@@ -339,6 +400,7 @@ def run_batch(
                         "completed": completed,
                         "batch_size": len(planned),
                     },
+                    heartbeat="running",
                 )
     finally:
         done = set(completed)
@@ -351,7 +413,7 @@ def run_batch(
         clear_in_flight()
         if ingest_url and token:
             try:
-                _post_ingest(ingest_url, token, [], [], None, clear=True)
+                _post_ingest(ingest_url, token, [], [], None, clear=True, heartbeat="idle")
             except Exception as exc:
                 print(f"discovery_worker: clear in_flight ingest failed: {exc}", flush=True)
 
@@ -375,6 +437,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--ingest-url", default=os.environ.get("PAPER_DISCOVERY_INGEST_URL") or DEFAULT_INGEST_URL)
     ap.add_argument("--base-url", default=os.environ.get("PAPER_DISCOVERY_BASE_URL") or "")
     ap.add_argument("--idle-sleep", type=int, default=60)
+    ap.add_argument(
+        "--pause-sleep",
+        type=int,
+        default=PAUSE_SLEEP_DEFAULT,
+        help="Seconds to sleep while the farm flag is off (10–30)",
+    )
     args = ap.parse_args(argv)
 
     workers = max(1, min(int(args.workers), 4))
@@ -397,7 +465,21 @@ def main(argv: list[str] | None = None) -> int:
         flush=True,
     )
 
+    farm_enabled = True
     while True:
+        if not args.no_ingest:
+            farm_enabled = poll_farm_enabled(base, farm_enabled)
+            decision = consider_pause(
+                farm_enabled,
+                once=args.once,
+                ingest_url=ingest_url,
+                token=token,
+                pause_sleep=args.pause_sleep,
+            )
+            if decision == "exit":
+                return 0
+            if decision == "pause":
+                continue
         if not args.no_bootstrap and not args.no_ingest:
             try:
                 info = bootstrap_from_prod(base)

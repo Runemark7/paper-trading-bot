@@ -6,6 +6,7 @@ import type {
   LearningMap,
   GraduatedStrategy,
   DiscoveryEvaluation,
+  DiscoveryFarm,
   DiscoverySummary,
   StatusSnapshot,
   ChampionsPayload,
@@ -50,6 +51,38 @@ async function get<T>(path: string): Promise<T> {
     }
     throw err;
   }
+}
+
+async function postOnce<T>(path: string, body: unknown, token: string): Promise<T> {
+  const res = await fetch(path, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Discovery-Token": token,
+      "X-Paper-Discovery-Token": token,
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    let detail = `${path} -> ${res.status}`;
+    try {
+      const payload = (await res.json()) as { error?: string };
+      if (payload?.error) detail = `${detail}: ${payload.error}`;
+    } catch {
+      /* bare nginx 502 is HTML, not JSON */
+    }
+    throw new Error(detail);
+  }
+  return res.json() as Promise<T>;
+}
+
+export function setDiscoveryFarm(enabled: boolean, token: string) {
+  return postOnce<{ ok: boolean; farm: DiscoveryFarm; paper_only?: boolean }>(
+    "/api/discovery/farm",
+    { enabled, paper_only: true },
+    token,
+  );
 }
 
 export const api = {

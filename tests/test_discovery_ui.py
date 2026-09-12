@@ -10,6 +10,9 @@ REPO = Path(__file__).resolve().parents[1]
 APP = (REPO / "frontend" / "src" / "App.tsx").read_text()
 DISCOVERY_PAGE = (REPO / "frontend" / "src" / "pages" / "Discovery.tsx").read_text()
 DISCOVERY_TSX = (REPO / "frontend" / "src" / "status" / "DiscoveryBuckets.tsx").read_text()
+FARM_TSX = (REPO / "frontend" / "src" / "status" / "FarmControl.tsx").read_text()
+CLIENT_TS = (REPO / "frontend" / "src" / "api" / "client.ts").read_text()
+TYPES_TS = (REPO / "frontend" / "src" / "api" / "types.ts").read_text()
 FILTERS_TS = REPO / "frontend" / "src" / "status" / "discoveryFilters.ts"
 CHAMPS = (REPO / "frontend" / "src" / "pages" / "Champions.tsx").read_text()
 OVERVIEW = (REPO / "frontend" / "src" / "pages" / "Overview.tsx").read_text()
@@ -87,6 +90,7 @@ class DiscoveryPageContractTests(unittest.TestCase):
         self.assertIn("grid-cols-6", APP)
         self.assertIn("import Discovery from", APP)
         self.assertIn("<DiscoveryBuckets", DISCOVERY_PAGE)
+        self.assertIn("<FarmControl", DISCOVERY_PAGE)
         self.assertIn("/api/discovery/summary", DISCOVERY_PAGE)
 
     def test_champions_keeps_teaser_not_full_buckets(self):
@@ -95,6 +99,35 @@ class DiscoveryPageContractTests(unittest.TestCase):
         self.assertNotIn("<DiscoveryBuckets", CHAMPS)
         self.assertNotIn("Already tested", CHAMPS)
         self.assertIn("Open Discovery", DISCOVERY_TSX)
+        self.assertIn("farmStatusLabel", DISCOVERY_TSX)
+        self.assertIn("Farm:", DISCOVERY_TSX)
+
+    def test_farm_control_start_stop_and_unseen_copy(self):
+        self.assertIn("Stop discovery", FARM_TSX)
+        self.assertIn("Start discovery", FARM_TSX)
+        self.assertIn("Running", FARM_TSX)
+        self.assertIn("Paused", FARM_TSX)
+        self.assertIn("Worker idle", FARM_TSX)
+        self.assertIn("Worker not seen", FARM_TSX)
+        self.assertIn("sessionStorage", FARM_TSX)
+        self.assertIn("paper_discovery_farm_token", FARM_TSX)
+        self.assertIn('type="password"', FARM_TSX)
+        self.assertIn("setDiscoveryFarm", FARM_TSX)
+        self.assertIn("/api/discovery/farm", CLIENT_TS)
+        self.assertIn("X-Discovery-Token", CLIENT_TS)
+        self.assertIn("X-Paper-Discovery-Token", CLIENT_TS)
+        self.assertIn("Authorization", CLIENT_TS)
+        self.assertIn("sessionStorage", FARM_TSX)
+        self.assertNotIn("import.meta.env", FARM_TSX)
+        self.assertNotIn("import.meta.env", CLIENT_TS)
+        self.assertNotIn("VITE_", FARM_TSX)
+        self.assertNotIn("VITE_", CLIENT_TS)
+        self.assertIn("!tokenReady", FARM_TSX)
+        self.assertIn("Anyone who can open this site cannot pause", FARM_TSX)
+        self.assertIn("export interface DiscoveryFarm", TYPES_TS)
+        self.assertIn("worker_unseen", TYPES_TS)
+        self.assertIn("Start will not relaunch", FARM_TSX)
+        self.assertIn("Leave the worker running", FARM_TSX)
 
     def test_overview_links_to_discovery(self):
         self.assertIn('to="/discovery"', OVERVIEW)

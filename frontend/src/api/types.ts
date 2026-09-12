@@ -192,6 +192,21 @@ export interface DiscoveryCounts {
   evals_today?: number;
 }
 
+export type DiscoveryFarmStatus = "running" | "paused" | "worker_idle" | "worker_unseen" | string;
+
+export interface DiscoveryFarm {
+  enabled: boolean;
+  status: DiscoveryFarmStatus;
+  worker_seen?: boolean;
+  updated_at?: string | null;
+  heartbeat_at?: string | null;
+  heartbeat_age_seconds?: number | null;
+  heartbeat_status?: string | null;
+  source?: string;
+  note?: string;
+  paper_only?: boolean;
+}
+
 export interface DiscoverySummary {
   paper_only: boolean;
   as_of: string;
@@ -204,6 +219,7 @@ export interface DiscoverySummary {
   tested: DiscoveryEvaluation[];
   discovery_on_cycle?: boolean;
   discovery_farm?: "windows_worker" | "cycle_sidecar" | string;
+  farm?: DiscoveryFarm;
   extended_names?: string[];
   in_flight: DiscoveryInFlight;
   queued: string[];

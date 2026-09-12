@@ -281,5 +281,286 @@ class WorkerHelperTests(unittest.TestCase):
         self.assertNotIn("champ_a", planned)
 
 
+class FarmFlagTests(unittest.TestCase):
+    def test_default_enabled_and_unseen_until_heartbeat(self):
+        from hedge_fund.trading.farm import farm_status_block, set_farm_enabled
+        from hedge_fund.web.discovery import build_discovery_summary
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.dict(os.environ, {"PAPER_STATE": str(tmp)}):
+                block = farm_status_block()
+                self.assertTrue(block["enabled"])
+                self.assertEqual(block["status"], "worker_unseen")
+                self.assertFalse(block["worker_seen"])
+                self.assertIn("Worker not seen", block["note"])
+
+                paused = set_farm_enabled(False)
+                self.assertFalse(paused["enabled"])
+                self.assertEqual(paused["status"], "paused")
+
+                resumed = set_farm_enabled(True)
+                self.assertTrue(resumed["enabled"])
+
+                with patch("hedge_fund.web.discovery.generate_universe", return_value=[]):
+                    with patch("hedge_fund.trading.universe.generate_universe", return_value=[]):
+                        s = build_discovery_summary()
+                self.assertIn("farm", s)
+                self.assertTrue(s["farm"]["enabled"])
+                self.assertEqual(s["farm"]["status"], "worker_unseen")
+
+    def test_heartbeat_marks_idle_or_running(self):
+        from hedge_fund.trading.discovery import write_in_flight
+        from hedge_fund.trading.farm import record_heartbeat, farm_status_block
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.dict(os.environ, {"PAPER_STATE": str(tmp)}):
+                record_heartbeat("idle")
+                idle = farm_status_block(in_flight_active=False)
+                self.assertTrue(idle["worker_seen"])
+                self.assertEqual(idle["status"], "worker_idle")
+                self.assertEqual(idle["heartbeat_status"], "idle")
+
+                write_in_flight(["n1"], source="windows_worker")
+                running = farm_status_block(in_flight_active=True)
+                self.assertEqual(running["status"], "running")
+
+    def test_ingest_heartbeat_does_not_flip_enabled(self):
+        from hedge_fund.trading.farm import load_farm, set_farm_enabled
+        from hedge_fund.trading.ingest import ingest_discovery_payload
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.dict(os.environ, {"PAPER_STATE": str(tmp)}):
+                set_farm_enabled(False)
+                ingest_discovery_payload({
+                    "evaluations": [],
+                    "heartbeat": {"status": "paused", "source": "windows_worker"},
+                    "clear_in_flight": True,
+                })
+                farm = load_farm()
+        self.assertFalse(farm["enabled"])
+        self.assertEqual(farm["heartbeat_status"], "paused")
+        self.assertTrue(farm["heartbeat_at"])
+
+
+class FarmHttpTests(unittest.TestCase):
+    def _start(self):
+        from hedge_fund.web.server import Handler
+
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+        return httpd, thread, httpd.server_address[1]
+
+    def _stop(self, httpd, thread):
+        httpd.shutdown()
+        thread.join(timeout=3)
+        httpd.server_close()
+
+    def test_unauthenticated_or_wrong_token_cannot_toggle_farm(self):
+        """Anyone who can hit the public host must not pause the farm."""
+        httpd, thread, port = self._start()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                env = {
+                    "PAPER_STATE": tmp,
+                    "PAPER_DISCOVERY_INGEST_TOKEN": "paper-secret-token",
+                }
+                with patch.dict(os.environ, env):
+                    from hedge_fund.trading.farm import load_farm, set_farm_enabled
+
+                    set_farm_enabled(True)
+                    url = f"http://127.0.0.1:{port}/api/discovery/farm"
+                    body = b'{"enabled":false}'
+                    no_auth = Request(
+                        url,
+                        data=body,
+                        method="POST",
+                        headers={"Content-Type": "application/json"},
+                    )
+                    try:
+                        urlopen(no_auth, timeout=3)
+                        self.fail("expected HTTPError for missing token")
+                    except HTTPError as err:
+                        self.assertEqual(err.code, 401)
+
+                    wrong = Request(
+                        url,
+                        data=body,
+                        method="POST",
+                        headers={
+                            "X-Discovery-Token": "nope",
+                            "X-Paper-Discovery-Token": "also-nope",
+                            "Authorization": "Bearer nope",
+                            "Content-Type": "application/json",
+                        },
+                    )
+                    try:
+                        urlopen(wrong, timeout=3)
+                        self.fail("expected HTTPError for wrong token")
+                    except HTTPError as err:
+                        self.assertEqual(err.code, 401)
+
+                    self.assertTrue(load_farm()["enabled"])
+                    summary = json.loads(urlopen(
+                        f"http://127.0.0.1:{port}/api/discovery/summary",
+                        timeout=3,
+                    ).read().decode())
+                    self.assertTrue(summary["farm"]["enabled"])
+        finally:
+            self._stop(httpd, thread)
+
+    def test_farm_toggle_requires_token_and_shows_on_summary(self):
+        httpd, thread, port = self._start()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                env = {
+                    "PAPER_STATE": tmp,
+                    "PAPER_DISCOVERY_INGEST_TOKEN": "paper-secret-token",
+                }
+                with patch.dict(os.environ, env):
+                    bad = Request(
+                        f"http://127.0.0.1:{port}/api/discovery/farm",
+                        data=b'{"enabled":false}',
+                        method="POST",
+                        headers={"X-Discovery-Token": "nope", "Content-Type": "application/json"},
+                    )
+                    try:
+                        urlopen(bad, timeout=3)
+                        self.fail("expected HTTPError")
+                    except HTTPError as err:
+                        self.assertEqual(err.code, 401)
+
+                    paper_hdr = Request(
+                        f"http://127.0.0.1:{port}/api/discovery/farm",
+                        data=b'{"enabled":false}',
+                        method="POST",
+                        headers={
+                            "X-Paper-Discovery-Token": "paper-secret-token",
+                            "Content-Type": "application/json",
+                        },
+                    )
+                    raw = urlopen(paper_hdr, timeout=3)
+                    body = json.loads(raw.read().decode())
+                    self.assertTrue(body["ok"])
+                    self.assertFalse(body["farm"]["enabled"])
+                    self.assertEqual(body["farm"]["status"], "paused")
+
+                    good = Request(
+                        f"http://127.0.0.1:{port}/api/discovery/farm",
+                        data=b'{"enabled":true}',
+                        method="POST",
+                        headers={
+                            "Authorization": "Bearer paper-secret-token",
+                            "Content-Type": "application/json",
+                        },
+                    )
+                    raw = urlopen(good, timeout=3)
+                    body = json.loads(raw.read().decode())
+                    self.assertTrue(body["ok"])
+                    self.assertTrue(body["farm"]["enabled"])
+
+                    summary = json.loads(urlopen(
+                        f"http://127.0.0.1:{port}/api/discovery/summary",
+                        timeout=3,
+                    ).read().decode())
+                    self.assertTrue(summary["farm"]["enabled"])
+        finally:
+            self._stop(httpd, thread)
+
+
+class WorkerPauseTests(unittest.TestCase):
+    def test_farm_enabled_from_summary_and_poll_keeps_last_known(self):
+        from hedge_fund.trading.farm import farm_enabled_from_summary
+        from scripts.discovery_worker import poll_farm_enabled
+
+        self.assertTrue(farm_enabled_from_summary({"farm": {"enabled": True}}))
+        self.assertFalse(farm_enabled_from_summary({"farm": {"enabled": False}}))
+        self.assertTrue(farm_enabled_from_summary({}, last_known=True))
+        self.assertFalse(farm_enabled_from_summary(None, last_known=False))
+
+        with patch(
+            "scripts.discovery_worker._http_json",
+            side_effect=RuntimeError("down"),
+        ):
+            self.assertTrue(poll_farm_enabled("http://example.invalid", True))
+            self.assertFalse(poll_farm_enabled("http://example.invalid", False))
+
+        with patch(
+            "scripts.discovery_worker._http_json",
+            return_value={"farm": {"enabled": False}},
+        ):
+            self.assertFalse(poll_farm_enabled("http://example.invalid", True))
+
+    def test_consider_pause_idles_then_run_resumes(self):
+        from scripts.discovery_worker import consider_pause
+
+        slept = []
+        posts = []
+
+        def sleeper(n):
+            slept.append(n)
+
+        with patch("scripts.discovery_worker._post_ingest", side_effect=lambda *a, **k: posts.append(k) or {}):
+            with patch("scripts.discovery_worker.clear_in_flight") as clear:
+                self.assertEqual(
+                    consider_pause(
+                        False,
+                        once=False,
+                        ingest_url="http://prod/api/discovery/ingest",
+                        token="t",
+                        pause_sleep=15,
+                        sleeper=sleeper,
+                    ),
+                    "pause",
+                )
+                clear.assert_called_once()
+                self.assertEqual(slept, [15])
+                self.assertEqual(posts[-1].get("heartbeat"), "paused")
+                self.assertTrue(posts[-1].get("clear"))
+
+                self.assertEqual(
+                    consider_pause(
+                        True,
+                        once=False,
+                        ingest_url="http://prod/api/discovery/ingest",
+                        token="t",
+                        pause_sleep=15,
+                        sleeper=sleeper,
+                    ),
+                    "run",
+                )
+                self.assertEqual(len(slept), 1)
+
+                self.assertEqual(
+                    consider_pause(
+                        False,
+                        once=True,
+                        ingest_url=None,
+                        token=None,
+                        pause_sleep=15,
+                        sleeper=sleeper,
+                    ),
+                    "exit",
+                )
+
+    def test_main_once_skips_batch_when_paused(self):
+        from scripts import discovery_worker
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "crypto_history_5m.json").write_text("{}")
+            env = {
+                "PAPER_STATE": str(root),
+                "PAPER_DISCOVERY_INGEST_TOKEN": "paper-secret-token",
+            }
+            with patch.dict(os.environ, env):
+                with patch.object(discovery_worker, "poll_farm_enabled", return_value=False):
+                    with patch.object(discovery_worker, "run_batch") as batch:
+                        with patch.object(discovery_worker, "_post_ingest", return_value={}):
+                            rc = discovery_worker.main(["--once", "--workers", "1"])
+        self.assertEqual(rc, 0)
+        batch.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()
