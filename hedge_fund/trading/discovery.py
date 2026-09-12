@@ -133,6 +133,13 @@ def append_discovery_evaluation(record: dict, *, cap: int = DISCOVERY_LOG_CAP) -
     return append_discovery_evaluations([record], cap=cap)
 
 
+def save_discovery_log(log: list[dict]) -> None:
+    """Rewrite discovery_log.json in place (requalify flips, not a new eval)."""
+    path = discovery_log_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(log, separators=(",", ":")))
+
+
 def write_in_flight(
     names: list[str],
     *,

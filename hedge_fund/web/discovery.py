@@ -48,6 +48,7 @@ def _eval_row(row: dict) -> dict:
         "risk_policy": row.get("risk_policy"),
         "bh_oos_pnl": row.get("bh_oos_pnl"),
         "sma_stack_oos_pnl": row.get("sma_stack_oos_pnl"),
+        "all_windows_nonneg": row.get("all_windows_nonneg"),
     }
 
 

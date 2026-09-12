@@ -29,6 +29,13 @@ function testedTone(ok: boolean): "pos" | "neg" {
   return ok ? "pos" : "neg";
 }
 
+function windowDiagnostic(d: DiscoveryEvaluation): string | null {
+  if (d.all_windows_nonneg === false) {
+    return "empty/neg window (diagnostic, not a veto)";
+  }
+  return null;
+}
+
 function TestedRowFields({ d }: { d: DiscoveryEvaluation }) {
   return (
     <FieldGrid>
@@ -476,6 +483,9 @@ export default function DiscoveryBuckets() {
                   {!d.qualified && d.fail_reasons?.length ? (
                     <p className="text-[11px] text-white/40 break-words">{d.fail_reasons.join("; ")}</p>
                   ) : null}
+                  {windowDiagnostic(d) ? (
+                    <p className="text-[11px] text-white/35 break-words">{windowDiagnostic(d)}</p>
+                  ) : null}
                 </li>
               ))}
             </PhoneCards>
@@ -508,7 +518,12 @@ export default function DiscoveryBuckets() {
                         {fmt(d.test_pnl)}
                       </td>
                       <td className="text-white/40 break-words pl-3">
-                        {!d.qualified && d.fail_reasons?.length ? d.fail_reasons.join("; ") : "—"}
+                        {[
+                          !d.qualified && d.fail_reasons?.length ? d.fail_reasons.join("; ") : null,
+                          windowDiagnostic(d),
+                        ]
+                          .filter(Boolean)
+                          .join(" · ") || "—"}
                       </td>
                     </tr>
                   ))}

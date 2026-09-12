@@ -516,4 +516,26 @@ This amendment does not rewrite original §§ 1–8 or prior amendments. Qual/li
 
 - Same-date "more structure-AND recipe names" insofar as `STRUCTURE_NS` froze at 96 and the recipe omitted leftover TREND × support / `ema_stack` / extra 3-atom families. Fail-once, farm ingest, cycle budget, OOS gates, and the static 40–120 compiled-list band are not superseded.
 
+### Amendment 2026-09-12 — all-windows OOS veto dropped
+
+This amendment does not rewrite original §§ 1–8 or prior amendments. Qual/live remain 5m, risk policy remains `rm_v1`. Windows remain 3 × ~90 calendar days of native 5m (`QUAL_WINDOW_BARS` = 25920, `QUAL_STRIDE` = 1). Fail-once never-retest from the 2026-09-10 amendment stays — a fail on the remaining gates parks that name forever; this is **not** a walk-forward retest. Beat buy-and-hold and beat `sma_stack` stay. Sharpe ≥ 0.30 and `MIN_BACKTEST_TRADES` = 30 stay. Discovery walk-forwards stay on the Windows farm (`scripts/discovery_worker.py` → `/api/discovery/ingest`); cluster `live_cycle` keeps discovery off. **Still paper.** `GRADUATED_PAPER` meaning is unchanged. Do not cull existing champions. No named candlesticks. No WaveTrend spam. No MFI.
+
+**Why.** Alexander chose to soften the all-windows non-negative OOS rule so more names can get a running paper book, rather than a few "perfect window" passes. A name like `dbl_bot_120` (Sharpe 0.58, 296 OOS trades, +946 test PnL) was parked because one window was empty/neg even when the aggregate OOS was fine. Prefer more paper tests.
+
+**New admit bar.** `qualification_decision` (shared by `scripts/tournament_engine.py` and the Windows worker via `evaluate_strategy_record`) uses **aggregate OOS only**:
+
+- `len(windows) == expected_windows` (the three slices exist; `regimes_tested` is the stored equivalent)
+- total OOS trades ≥ `MIN_BACKTEST_TRADES` (30)
+- average OOS Sharpe ≥ `MIN_BACKTEST_SHARPE` (0.30)
+- `tot_test_pnl` > `bh_oos_pnl`
+- `tot_test_pnl` > `sma_stack_oos_pnl`
+
+Do **not** fail on a per-window skipped / empty / negative test. Do **not** emit `window[i] failed/skipped/neg/empty` or `not all windows non-negative` as `fail_reasons`. `all_windows_nonneg` stays as a diagnostic flag so the log/UI can still show that a window was empty.
+
+**Re-qualify from stored aggregates.** Ingest may flip a parked `discovery_log.json` row to qualified and admit it when those stored fields (`sharpe`, `trades`, `test_pnl`, `bh_oos_pnl`, `sma_stack_oos_pnl`, `regimes_tested`) now pass — no second walk-forward. Names that still lose to B&H / sma, miss Sharpe, or miss trade count stay parked (fail-once). A dry count on current prod-like logs: 0 existing names pass after this change alone (`dbl_bot_120` still loses to B&H).
+
+**Superseded on this date** (prior text kept above for history):
+
+- 2026-09-01 / 2026-09-02 and later "OOS gates are unchanged" text insofar as they required every window's test PnL ≥ 0 or treated a skipped/empty/negative window as a fail. Fail-once, beat-B&H, beat-`sma_stack`, Sharpe 0.30, 30 OOS trades, 5m, and `rm_v1` are not superseded.
+
 

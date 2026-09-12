@@ -8,6 +8,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from hedge_fund.trading.qualify import qualification_from_record, requalify_parked_log
 from scripts.tournament_engine import (
     _leftover_batch,
     discover_and_qualify,
@@ -28,30 +29,52 @@ def _win(test_pnl=100.0, test_trades=12, sharpe=0.5, train_pnl=0.0, skipped=Fals
     }
 
 
+def _assert_no_window_veto(reasons: list[str]) -> None:
+    joined = " ".join(reasons)
+    assert "window[" not in joined
+    assert "not all windows non-negative" not in joined
+
+
 class OosGateTests(unittest.TestCase):
     def test_all_windows_non_negative_required(self):
-        # Sum of OOS is positive, but one window is negative → fail.
+        # One negative window + passing aggregates → pass. Diagnostic stays.
         windows = [
             _win(test_pnl=400, test_trades=15),
             _win(test_pnl=-10, test_trades=15),
             _win(test_pnl=50, test_trades=15),
         ]
         d = qualification_decision(windows, expected_windows=3, bh_oos_pnl=1.0, sma_stack_oos_pnl=1.0)
-        self.assertFalse(d["passed"])
+        self.assertTrue(d["passed"], d["reasons"])
         self.assertGreater(d["tot_test_pnl"], 0)
         self.assertFalse(d["all_windows_nonneg"])
+        _assert_no_window_veto(d["reasons"])
 
         ok = [_win(test_pnl=50, test_trades=12) for _ in range(3)]
         d_ok = qualification_decision(ok, expected_windows=3, bh_oos_pnl=1.0, sma_stack_oos_pnl=1.0)
         self.assertTrue(d_ok["passed"], d_ok["reasons"])
+        self.assertTrue(d_ok["all_windows_nonneg"])
 
     def test_skipped_or_empty_window_fails(self):
-        windows = [_win(), _win(skipped=True), _win()]
+        # One skipped/empty window + passing aggregates (30+ trades) → pass.
+        windows = [
+            _win(test_pnl=100, test_trades=20),
+            _win(skipped=True),
+            _win(test_pnl=100, test_trades=20),
+        ]
         d = qualification_decision(windows, expected_windows=3, bh_oos_pnl=1.0, sma_stack_oos_pnl=1.0)
-        self.assertFalse(d["passed"])
-        empty = [_win(), _win(test_pnl=80, test_trades=0), _win()]
+        self.assertTrue(d["passed"], d["reasons"])
+        self.assertFalse(d["all_windows_nonneg"])
+        _assert_no_window_veto(d["reasons"])
+
+        empty = [
+            _win(test_pnl=100, test_trades=20),
+            _win(test_pnl=80, test_trades=0),
+            _win(test_pnl=100, test_trades=20),
+        ]
         d2 = qualification_decision(empty, expected_windows=3, bh_oos_pnl=1.0, sma_stack_oos_pnl=1.0)
-        self.assertFalse(d2["passed"])
+        self.assertTrue(d2["passed"], d2["reasons"])
+        self.assertFalse(d2["all_windows_nonneg"])
+        _assert_no_window_veto(d2["reasons"])
 
     def test_train_positive_test_negative_fails(self):
         windows = [
@@ -59,8 +82,10 @@ class OosGateTests(unittest.TestCase):
             _win(test_pnl=1, test_trades=20, train_pnl=10_000),
             _win(test_pnl=1, test_trades=20, train_pnl=10_000),
         ]
-        d = qualification_decision(windows, expected_windows=3, bh_oos_pnl=-100, sma_stack_oos_pnl=-100)
+        # Aggregate OOS is -3; huge train must not rescue a miss vs B&H.
+        d = qualification_decision(windows, expected_windows=3, bh_oos_pnl=0.0, sma_stack_oos_pnl=0.0)
         self.assertFalse(d["passed"])
+        _assert_no_window_veto(d["reasons"])
 
     def test_train_pnl_does_not_boost_weak_oos_score(self):
         weak_oos = oos_admission_score(tot_test_pnl=10, avg_sharpe=0.3)
@@ -100,6 +125,61 @@ class OosGateTests(unittest.TestCase):
         self.assertFalse(vs_sma["passed"])
         beat = qualification_decision(windows, expected_windows=3, bh_oos_pnl=10.0, sma_stack_oos_pnl=10.0)
         self.assertTrue(beat["passed"], beat["reasons"])
+
+    def test_missing_window_slice_still_fails(self):
+        windows = [_win(test_pnl=50, test_trades=15) for _ in range(2)]
+        d = qualification_decision(windows, expected_windows=3, bh_oos_pnl=1.0, sma_stack_oos_pnl=1.0)
+        self.assertFalse(d["passed"])
+        self.assertTrue(any("windows" in r for r in d["reasons"]))
+
+    def test_window_veto_not_emitted_when_other_gates_fail(self):
+        windows = [
+            _win(test_pnl=20, test_trades=12),
+            _win(test_pnl=20, test_trades=12),
+            _win(test_pnl=-5, test_trades=12),
+        ]
+        d = qualification_decision(windows, expected_windows=3, bh_oos_pnl=80.0, sma_stack_oos_pnl=1.0)
+        self.assertFalse(d["passed"])
+        self.assertFalse(d["all_windows_nonneg"])
+        _assert_no_window_veto(d["reasons"])
+        self.assertTrue(any("bh" in r for r in d["reasons"]))
+
+    def test_stored_aggregates_window_only_fail_now_passes(self):
+        # Fixture that used to fail only on windows (dbl_bot_120-shaped, but beats B&H).
+        row = {
+            "strategy": "window_veto_only",
+            "qualified": False,
+            "sharpe": 0.58,
+            "trades": 296,
+            "test_pnl": 946.0,
+            "bh_oos_pnl": 100.0,
+            "sma_stack_oos_pnl": 50.0,
+            "regimes_tested": 3,
+            "fail_reasons": [
+                "window[1] failed/skipped/neg/empty",
+                "not all windows non-negative",
+            ],
+        }
+        d = qualification_from_record(row)
+        self.assertTrue(d["passed"], d["reasons"])
+        self.assertFalse(d["all_windows_nonneg"])
+
+        # Prod-like dbl_bot_120: same window veto, still loses to B&H → stay parked.
+        dbl = {
+            **row,
+            "strategy": "dbl_bot_120",
+            "bh_oos_pnl": 2000.0,
+        }
+        d_dbl = qualification_from_record(dbl)
+        self.assertFalse(d_dbl["passed"])
+        self.assertTrue(any("bh" in r for r in d_dbl["reasons"]))
+        _assert_no_window_veto(d_dbl["reasons"])
+
+        flipped, names = requalify_parked_log([row, dbl], existing_names=set())
+        self.assertEqual(names, ["window_veto_only"])
+        self.assertTrue(row["qualified"])
+        self.assertFalse(dbl["qualified"])
+        self.assertEqual(flipped[0]["strategy"], "window_veto_only")
 
 
 class QualTapeTests(unittest.TestCase):

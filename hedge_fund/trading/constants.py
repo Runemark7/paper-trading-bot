@@ -31,7 +31,8 @@ RISK_POLICY = "rm_v1"
 MIN_BACKTEST_SHARPE = 0.30  # modest OOS floor; 0.10 was a participation trophy
 MIN_BACKTEST_TRADES = 30  # OOS trades across all windows (not train+test)
 # Win-rate 38% dropped as an admit bar (2026-09-01). Beating B&H + sma_stack
-# + 30 OOS trades + all windows non-negative is the bar.
+# + 30 OOS trades + Sharpe ≥ 0.30 is the bar. All-windows non-negative is a
+# diagnostic only (2026-09-12) — one empty/neg window does not veto.
 
 # Paper graduation: TRADE_EVALUATION_LIMIT closed paper trades, then vs B&H.
 TRADE_EVALUATION_LIMIT = 80
