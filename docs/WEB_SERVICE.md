@@ -21,7 +21,9 @@ forward. To restrict, pass `--host 127.0.0.1`.
 | GET    | `/api/summary` | Equity, closed trades, win rate, total P&L, last update |
 | GET    | `/api/learning`| Per-condition learning state: trials, calibrated probability, level |
 | GET    | `/api/regime`  | Current crypto regime zone / score / allowed flag  |
-| GET    | `/api/discovery/summary` | Last-known unique-tested / in-flight (1 name / ~90s cycle slice) / leftover-untested; rejected parked forever; empty eligible auto-refills `discovery_extended.json`; newest last_tested_at; stuck/stale copy |
+| GET    | `/api/discovery/summary` | Last-known unique-tested / in-flight (1 name / ~90s cycle slice if `DISCOVERY_ON_CYCLE=1`; otherwise Windows worker) / leftover-untested; rejected parked forever; empty eligible auto-refills `discovery_extended.json`; newest last_tested_at; stuck/stale copy |
+| GET    | `/api/discovery` | Raw `discovery_log.json` (newest-first) |
+| POST   | `/api/discovery/ingest` | Windows worker: append evals + admit qualified names. Requires `PAPER_DISCOVERY_INGEST_TOKEN` (`X-Discovery-Token` or `Authorization: Bearer`). Fail-closed if unset. Fail-once. Does not cull champions. |
 | GET    | `/api/trades`  | Recent closed trades                              |
 | POST   | `/run`         | Trigger one live paper cycle, then regenerate      |
 | GET    | `/health`      | Liveness probe                                     |
@@ -36,12 +38,19 @@ Forward whichever public port to this machine's port `8787`. Example:
 cloudflared tunnel --url http://127.0.0.1:8787
 ```
 
-Everything except `POST /run` is read-only. `POST /run` runs the same paper
-trading cycle (no real orders) and regenerates the dashboard.
+Everything except `POST /run` and `POST /api/discovery/ingest` is read-only.
+`POST /run` is **not** proxied on the public host (`trading.runevibe.se`).
+`POST /api/discovery/ingest` is proxied under `/api/` and requires the
+paper-only shared secret. It appends discovery evaluations and may admit
+new champions; it never culls existing ones.
 
 ## Notes
 
-- No authentication. Only expose over the network you trust, or put it behind
-  a VPN / auth proxy. All data is paper-trading state.
-- The cron job (`paperbot-live-cycle`) keeps `state/` fresh; the service reads
-  the current files on each request, so it always reflects the latest cycle.
+- GET routes have no authentication. Only expose over the network you trust,
+  or put it behind a VPN / auth proxy. All data is paper-trading state.
+- Ingest is fail-closed: if `PAPER_DISCOVERY_INGEST_TOKEN` is unset, POST
+  returns 503. Set the k8s secret `paper-discovery-ingest` on the web
+  container. See [WINDOWS_DISCOVERY.md](WINDOWS_DISCOVERY.md).
+- Cluster `live_cycle` skips tournament by default (`DISCOVERY_ON_CYCLE=0`).
+  The cycle sidecar keeps `state/` fresh for live paper trading; the
+  Windows worker keeps `discovery_log.json` / new admits fresh.

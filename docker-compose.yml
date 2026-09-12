@@ -15,6 +15,9 @@ services:
       PAPER_STATE: /app/state
       PAPER_STRATEGY: ${PAPER_STRATEGY:-sma_stack}
       PAPER_ONLY: "1"
+      DISCOVERY_ON_CYCLE: "0"
+      PAPER_DISCOVERY_MODE: "off"
+      PAPER_DISCOVERY_INGEST_TOKEN: ${PAPER_DISCOVERY_INGEST_TOKEN:-}
     restart: unless-stopped
 
   scheduler:
@@ -30,6 +33,8 @@ services:
       PAPER_STRATEGY: ${PAPER_STRATEGY:-sma_stack}
       PAPER_ONLY: "1"
       TZ: Europe/Stockholm
+      DISCOVERY_ON_CYCLE: "0"
+      PAPER_DISCOVERY_MODE: "off"
     command:
       - sh
       - -c

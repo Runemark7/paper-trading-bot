@@ -94,6 +94,7 @@ over a meaningful sample, AND calibration is demonstrated independently of P&L.
 | 2026-09-11 | Leftover universe batch: existing 5m dip/mom ANDed with unused Donchian / swing / `dbl_bot` lookbacks (`NEW_STRUCTURE_ANDS`). Fail-once stays — new names get one shot. No WaveTrend clones, no MFI, no chart-pattern zoo. Champions and the parked 60 untouched. Paper only; OOS gates unchanged. |
 | 2026-09-11 | Auto-refill: when never-tested leftovers are empty (or fewer than the 2-name cycle slice), tournament appends the next handful of parseable, non-near-duplicate structure-AND names to `discovery_extended.json`. No human PR per batch. Fail-once stays. Static `generate_universe()` remains inside `UNIVERSE_TARGET_MAX`. Paper only; OOS gates unchanged. |
 | 2026-09-11 | Addendum: server overloaded under the 2-name slice. Live default is `DISCOVER_CYCLE_MAX_NAMES = 1` and `DISCOVER_CYCLE_TIME_BUDGET_SECONDS = 90` so discovery evaluates only one name per cycle; most of the 300s stays for `run_isolated` and the web/API. Not a return to 4 / 150s. Fail-once, auto-refill (`DISCOVERY_REFILL_BATCH_SIZE`), OOS gates, and window lengths unchanged. Paper only. No cull of champions. |
+| 2026-09-12 | Discovery walk-forwards leave the k8s cycle sidecar. `live_cycle` skips tournament by default (`DISCOVERY_ON_CYCLE=0` / `PAPER_DISCOVERY_MODE=off`). Cluster keeps `run_isolated` → collect → report. Windows PC (`jensa`) is the discovery farm: same fail-once / auto-refill / OOS / `rm_v1` / 5m windows; results POST to `https://trading.runevibe.se/api/discovery/ingest` with a paper-only shared secret. No kubectl tunnel. Paper only. No cull of champions. |
 
 ### Amendment 2026-08-30 — what actually runs
 
@@ -432,5 +433,21 @@ The leftover universe still drains 24/7 across cycles. `MIN_BACKTEST_TRADES` = 3
 
 - Same-date "cautious per-cycle discovery bump" "Live slice" insofar as it set `DISCOVER_CYCLE_MAX_NAMES` (2) and `DISCOVER_CYCLE_TIME_BUDGET_SECONDS` (120s).
 - Same-date structure-window leftovers / auto-refill insofar as "Cycle budget stays 2 names / ~120s" and "`DISCOVER_CYCLE_MAX_NAMES` = 2" named the live defaults. Fail-once, auto-refill trigger vs the name cap, OOS gates, and window lengths are not superseded.
+
+### Amendment 2026-09-12 — discovery farm on the Windows PC
+
+This amendment does not rewrite original §§ 1–8 or prior amendments. Qual/live remain 5m, risk policy remains `rm_v1`, OOS gates are unchanged (30 OOS trades, all windows ≥ 0, beat B&H + `sma_stack`, Sharpe ≥ 0.30, paper 80 vs B&H). Windows remain 3 × ~90 calendar days of native 5m (`QUAL_WINDOW_BARS` = 25920, `QUAL_STRIDE` = 1). Fail-once never-retest from the 2026-09-10 amendment stays. Auto-refill (`DISCOVERY_REFILL_BATCH_SIZE` = 16, `discovery_extended.json`) stays. Cycle remains 24/7 (`CYCLE_INTERVAL_SECONDS` = 300). No live-slot cap. **Still paper.** `GRADUATED_PAPER` meaning is unchanged. Do not cull existing champions. No pattern zoo / WaveTrend spam / MFI. The homemade `DISCOVER_BATCH_SIZE` = 30 random sample stays deleted.
+
+**Why.** The prod k8s cycle sidecar (1 CPU / 1.5GiB) overloaded under discovery walk-forwards. Auto-refill + 1 name / ~90s still fought `run_isolated` and the web/API. Discovery must leave the cluster.
+
+**Cluster `live_cycle`.** Tournament / `discover_and_qualify` is **off by default**. Set `DISCOVERY_ON_CYCLE=0` or `PAPER_DISCOVERY_MODE=off` (unset also means off). The sidecar still runs `run_isolated` → `collect_live_results` → report on every 300s tick. Heartbeat and the web/API stay. Re-enable in-cycle discovery only with `DISCOVERY_ON_CYCLE=1` / `PAPER_DISCOVERY_MODE=on` (dev / emergency). The 1 name / ~90s slice remains the rule **if** someone turns tournament back on inside `live_cycle`. It is not the Windows farm budget.
+
+**Windows discovery worker.** Alexander's home PC (`jensa`, i5-6600K / 16GB / GTX 1070) is the discovery farm. GPU is unused (no CUDA rewrite). `scripts/discovery_worker.py` (Docker Compose preferred; `python scripts/discovery_worker.py --workers N` also works) uses a **local** `PAPER_STATE` with `crypto_history_5m.json` (fetch via `scripts/fetch_history.py`). Same fail-once / auto-refill / OOS gates / `rm_v1` / 5m windows as `scripts/tournament_engine.py`. Modest parallelism: 2–4 CPU workers.
+
+**Results land on prod.** The worker POSTs evaluations (and qualified admits) to `https://trading.runevibe.se/api/discovery/ingest`. Nginx already proxies `/api/`. The route is protected by `PAPER_DISCOVERY_INGEST_TOKEN` (shared secret from env / k8s secret `paper-discovery-ingest`). Fail-closed: missing token → ingest disabled (503). Fail-once on the server: an already-logged name is skipped. Qualified names are admitted the same way as `replenish_and_evaluate`. Existing champions are never removed. Do not require a long-lived kubectl tunnel.
+
+**Superseded on this date** (prior text kept above for history):
+
+- 2026-09-05 / 2026-09-07 / 2026-09-11 text insofar as each `live_cycle` tick **must** run tournament / leftover walk-forwards on the k8s sidecar. Fail-once, auto-refill, OOS gates, window lengths, and the 1 / 90s *if-enabled* slice are not superseded.
 
 

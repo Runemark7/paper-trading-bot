@@ -461,6 +461,68 @@ class ProtocolAmendmentTests(unittest.TestCase):
         web = (REPO / "docs" / "WEB_SERVICE.md").read_text()
         self.assertIn("1 name / ~90s cycle slice", web)
 
+    def test_amendment_2026_09_12_windows_discovery_farm(self):
+        import hedge_fund.trading.constants as constants
+        from hedge_fund.trading.constants import (
+            CYCLE_INTERVAL_SECONDS,
+            DISCOVER_CYCLE_MAX_NAMES,
+            DISCOVER_CYCLE_TIME_BUDGET_SECONDS,
+            DISCOVERY_REFILL_BATCH_SIZE,
+            MIN_BACKTEST_SHARPE,
+            MIN_BACKTEST_TRADES,
+            QUAL_TIMEFRAME,
+            QUAL_WINDOW_BARS,
+            RISK_POLICY,
+            TRADE_EVALUATION_LIMIT,
+        )
+        from hedge_fund.trading.discovery_mode import discovery_on_cycle
+
+        text = (REPO / "PROTOCOL.md").read_text()
+        self.assertIn("Amendment 2026-09-12", text)
+        self.assertIn("discovery farm on the Windows PC", text)
+        self.assertIn("DISCOVERY_ON_CYCLE=0", text)
+        self.assertIn("PAPER_DISCOVERY_MODE=off", text)
+        self.assertIn("/api/discovery/ingest", text)
+        self.assertIn("PAPER_DISCOVERY_INGEST_TOKEN", text)
+        self.assertIn("jensa", text)
+        self.assertIn("scripts/discovery_worker.py", text)
+        self.assertIn("Do not cull existing champions", text)
+        self.assertIn("OOS gates are unchanged", text)
+        self.assertIn("paper only", text.lower())
+        self.assertIn("Still paper", text)
+        self.assertIn("no cuda", text.lower())
+        self.assertFalse(discovery_on_cycle({}))
+        self.assertFalse(discovery_on_cycle({"DISCOVERY_ON_CYCLE": "0"}))
+        self.assertTrue(discovery_on_cycle({"DISCOVERY_ON_CYCLE": "1"}))
+        self.assertEqual(QUAL_TIMEFRAME, "5m")
+        self.assertEqual(RISK_POLICY, "rm_v1")
+        self.assertEqual(MIN_BACKTEST_TRADES, 30)
+        self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
+        self.assertEqual(TRADE_EVALUATION_LIMIT, 80)
+        self.assertEqual(QUAL_WINDOW_BARS, 25920)
+        self.assertEqual(DISCOVER_CYCLE_MAX_NAMES, 1)
+        self.assertEqual(DISCOVER_CYCLE_TIME_BUDGET_SECONDS, 90)
+        self.assertEqual(DISCOVERY_REFILL_BATCH_SIZE, 16)
+        self.assertEqual(CYCLE_INTERVAL_SECONDS, 300)
+        self.assertFalse(hasattr(constants, "DISCOVER_BATCH_SIZE"))
+        self.assertFalse(hasattr(constants, "MAX_ACTIVE_CHAMPIONS"))
+        readme = (REPO / "README.md").read_text()
+        self.assertIn("2026-09-12", readme)
+        self.assertIn("DISCOVERY_ON_CYCLE=0", readme)
+        self.assertIn("discovery_worker.py", readme)
+        web = (REPO / "docs" / "WEB_SERVICE.md").read_text()
+        self.assertIn("/api/discovery/ingest", web)
+        self.assertIn("PAPER_DISCOVERY_INGEST_TOKEN", web)
+        runbook = (REPO / "docs" / "WINDOWS_DISCOVERY.md").read_text()
+        self.assertIn("jensa", runbook)
+        self.assertIn("fetch_history.py", runbook)
+        self.assertIn("DISCOVERY_ON_CYCLE=0", runbook)
+        live = (REPO / "scripts" / "live_cycle.py").read_text()
+        self.assertIn("discovery_on_cycle", live)
+        self.assertIn("tournament skipped", live)
+        self.assertTrue((REPO / "scripts" / "discovery_worker.py").exists())
+        self.assertTrue((REPO / "docker-compose.discovery.yml").exists())
+
 
 class IsolatedRunnerTests(unittest.TestCase):
     def test_no_second_hardcoded_book(self):

@@ -141,6 +141,7 @@ def write_in_flight(
     completed: list[str] | None = None,
     batch_size: int | None = None,
     started_at: str | None = None,
+    source: str | None = None,
 ) -> Path:
     """Persist this cycle's budget names. Not process liveness.
 
@@ -164,7 +165,7 @@ def write_in_flight(
         "names": outstanding,
         "batch_size": planned,
         "started_at": started,
-        "source": "tournament_engine.py",
+        "source": source or "tournament_engine.py",
         "current": current,
         "remaining": rem,
         "completed": list(completed or []),

@@ -48,6 +48,9 @@ TRADE_EVALUATION_LIMIT = 80
 # the budget. #29 bumped a cautious notch to 2 names / ~120s; the server
 # overloaded, so live default is back to a single-name slice: 1 name /
 # ~90s. Most of the 300s stays for live + API. Do not jump back to 4/150.
+# 2026-09-12: live_cycle skips tournament unless DISCOVERY_ON_CYCLE=1.
+# The 1/90s slice is only the in-cycle emergency budget. The Windows
+# worker is the discovery farm (scripts/discovery_worker.py).
 # MIN_BACKTEST_TRADES = 30 remains the OOS trade floor, not a sample size.
 # A non-qualified discovery_log eval parks that name forever — there is
 # no DISCOVER_RETEST_COOLDOWN re-eligibility timer. Never-tested leftovers

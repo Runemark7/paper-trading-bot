@@ -9,6 +9,7 @@ A small, dependency-free HTTP server (stdlib only) that exposes:
   GET /api/trades       -> JSON: recent closed trades
   GET /api/status       -> running-now vs in-progress (last-known stamps)
   GET /api/discovery/summary -> tested / in-flight / leftover-untested; rejected parked forever
+  POST /api/discovery/ingest -> Windows worker: append evals + admit (shared secret)
   POST /run             -> trigger a live decision cycle, then regenerate
   GET /health           -> liveness probe
 
@@ -35,9 +36,12 @@ from urllib.parse import parse_qs, urlparse
 
 from hedge_fund.paths import state_root
 from hedge_fund.regime.gate import RegimeGate
+from hedge_fund.trading.discovery_mode import ingest_token, tokens_match
 from hedge_fund.trading.open_lots import open_lots_snapshot, paper_book_dbs
 from hedge_fund.trading.store import TradeStore
 from hedge_fund.web.live import live_preview, live_prices
+
+_INGEST_MAX_BYTES = 1_000_000
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 RUN_LOCK = threading.Lock()
@@ -389,10 +393,56 @@ class Handler(BaseHTTPRequestHandler):
     def do_HEAD(self):
         self.do_GET()
 
+    def _read_json_body(self, max_bytes: int = _INGEST_MAX_BYTES):
+        raw_len = self.headers.get("Content-Length") or "0"
+        try:
+            length = int(raw_len)
+        except ValueError:
+            return None, "invalid Content-Length"
+        if length < 0 or length > max_bytes:
+            return None, "payload too large"
+        raw = self.rfile.read(length) if length else b"{}"
+        try:
+            data = json.loads(raw.decode("utf-8") or "{}")
+        except (UnicodeDecodeError, ValueError):
+            return None, "invalid json"
+        if not isinstance(data, dict):
+            return None, "payload must be an object"
+        return data, None
+
+    def _discovery_ingest_authorized(self) -> tuple[bool, str | None, int]:
+        expected = ingest_token()
+        if not expected:
+            return False, "ingest disabled — PAPER_DISCOVERY_INGEST_TOKEN is not set", 503
+        got = (self.headers.get("X-Discovery-Token") or "").strip()
+        auth = (self.headers.get("Authorization") or "").strip()
+        if auth.lower().startswith("bearer "):
+            got = auth[7:].strip()
+        if not tokens_match(got, expected):
+            return False, "unauthorized", 401
+        return True, None, 200
+
     def do_POST(self):
         route, _qs = parse_route(self.path)
         if route == "/run":
             self._send_json(trigger_run())
+        elif route == "/api/discovery/ingest":
+            ok, err, code = self._discovery_ingest_authorized()
+            if not ok:
+                self._send_json({"ok": False, "error": err, "paper_only": True}, code)
+                return
+            payload, err = self._read_json_body()
+            if err:
+                self._send_json({"ok": False, "error": err, "paper_only": True}, 400)
+                return
+            try:
+                from hedge_fund.trading.ingest import ingest_discovery_payload
+
+                self._send_json(ingest_discovery_payload(payload))
+            except ValueError as exc:
+                self._send_json({"ok": False, "error": str(exc), "paper_only": True}, 400)
+            except Exception as exc:
+                self._send_json({"ok": False, "error": str(exc), "paper_only": True}, 500)
         else:
             self._send_json({"error": "unknown route"}, 404)
 

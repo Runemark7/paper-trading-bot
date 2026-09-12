@@ -10,11 +10,12 @@
    list bound; auto-refill appends a handful of never-tested names to
    discovery_extended.json when leftovers run dry (pending queue sidecar).
 4. Graduation: TRADE_EVALUATION_LIMIT (80) closed paper trades vs B&H.
-5. Each live_cycle invocation evaluates a leftover *slice* (max names +
-   wall-clock budget, rotating cursor) and appends discovery_log.json
-   after each name — not after the full leftover list. A non-qualified
-   eval parks that name forever (no 24h retest cooldown). Empty eligible
-   triggers one refill batch so the 1 / 90s drain keeps moving.
+5. When invoked (Windows worker, or live_cycle with DISCOVERY_ON_CYCLE=1)
+   evaluates a leftover *slice* (max names + wall-clock budget, rotating
+   cursor) and appends discovery_log.json after each name — not after the
+   full leftover list. A non-qualified eval parks that name forever (no
+   24h retest cooldown). Empty eligible triggers one refill batch.
+   Cluster live_cycle defaults to skipping this module.
 
 Qualification uses hedge_fund.backtest.strategies with rm_v1 stops/fees,
 not fast_quant or fee-free SimBroker.
@@ -279,6 +280,54 @@ def evaluate_windows(pred, window_slices: list[dict]) -> list[dict]:
     return scores
 
 
+def evaluate_strategy_record(
+    name: str,
+    window_slices: list[dict],
+    *,
+    n_windows: int,
+    bh_oos_pnl: float | None,
+    sma_stack_oos_pnl: float | None,
+) -> dict | None:
+    """One name through evaluate_windows + qualification_decision.
+
+    Returns a discovery_log record, or None if the name does not parse.
+    Same OOS gates as ``discover_and_qualify``. Picklable for ProcessPool.
+    """
+    try:
+        pred = parse_strategy(name)
+    except Exception:
+        return None
+    window_scores = evaluate_windows(pred, window_slices)
+    decision = qualification_decision(
+        window_scores,
+        expected_windows=n_windows,
+        bh_oos_pnl=bh_oos_pnl,
+        sma_stack_oos_pnl=sma_stack_oos_pnl,
+    )
+    tot_wins = sum(int(ws.get("wins") or 0) for ws in window_scores)
+    oos_trades = decision["tot_oos_trades"]
+    overall_win_rate = (tot_wins / oos_trades) if oos_trades > 0 else 0.0
+    record = {
+        "strategy": name,
+        "tested_at": datetime.now(timezone.utc).isoformat(),
+        "timeframe": QUAL_TIMEFRAME,
+        "risk_policy": RISK_POLICY,
+        "train_pnl": round(decision["tot_train_pnl"], 2),
+        "test_pnl": round(decision["tot_test_pnl"], 2),
+        "sharpe": round(decision["avg_sharpe"], 2),
+        "win_rate_pct": round(overall_win_rate * 100, 1),
+        "trades": oos_trades,
+        "regimes_tested": len(window_scores),
+        "qualified": decision["passed"],
+        "bh_oos_pnl": None if bh_oos_pnl is None else round(bh_oos_pnl, 2),
+        "sma_stack_oos_pnl": None if sma_stack_oos_pnl is None else round(sma_stack_oos_pnl, 2),
+        "fail_reasons": decision["reasons"],
+    }
+    if decision["passed"]:
+        record["score"] = round(decision["score"], 2)
+    return record
+
+
 def _benchmark_oos(window_slices: list[dict]) -> tuple[float | None, float | None]:
     bh_total = 0.0
     bh_ok = False
@@ -426,41 +475,17 @@ def discover_and_qualify(
                 completed=completed,
                 batch_size=len(planned),
             )
-            try:
-                pred = parse_strategy(name)
-            except Exception:
-                completed.append(name)
-                continue
-
-            window_scores = evaluate_windows(pred, window_slices)
-            decision = qualification_decision(
-                window_scores,
-                expected_windows=n_windows,
+            record = evaluate_strategy_record(
+                name,
+                window_slices,
+                n_windows=n_windows,
                 bh_oos_pnl=bh_oos,
                 sma_stack_oos_pnl=sma_oos,
             )
-            tot_wins = sum(int(ws.get("wins") or 0) for ws in window_scores)
-            oos_trades = decision["tot_oos_trades"]
-            overall_win_rate = (tot_wins / oos_trades) if oos_trades > 0 else 0.0
-
-            record = {
-                "strategy": name,
-                "tested_at": datetime.now(timezone.utc).isoformat(),
-                "timeframe": QUAL_TIMEFRAME,
-                "risk_policy": RISK_POLICY,
-                "train_pnl": round(decision["tot_train_pnl"], 2),
-                "test_pnl": round(decision["tot_test_pnl"], 2),
-                "sharpe": round(decision["avg_sharpe"], 2),
-                "win_rate_pct": round(overall_win_rate * 100, 1),
-                "trades": oos_trades,
-                "regimes_tested": len(window_scores),
-                "qualified": decision["passed"],
-                "bh_oos_pnl": None if bh_oos is None else round(bh_oos, 2),
-                "sma_stack_oos_pnl": None if sma_oos is None else round(sma_oos, 2),
-                "fail_reasons": decision["reasons"],
-            }
-            if decision["passed"]:
-                record["score"] = round(decision["score"], 2)
+            if record is None:
+                completed.append(name)
+                continue
+            if record.get("qualified"):
                 qualified.append(record)
             append_discovery_evaluation(record)
             all_evaluated.append(record)

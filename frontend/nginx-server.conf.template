@@ -16,7 +16,8 @@ server {
     # In docker-compose BACKEND_URL=http://web:8787.
     # Ingress paperbot.local points only at this frontend. Backend is not on
     # Ingress. POST /run is intentionally NOT proxied — unauthenticated cycle
-    # trigger must not be on the public host.
+    # trigger must not be on the public host. POST /api/discovery/ingest is
+    # under /api/ (proxied) and requires PAPER_DISCOVERY_INGEST_TOKEN.
     location = /run {
         return 404;
     }
