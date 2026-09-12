@@ -182,7 +182,7 @@ class IngestMergeTests(unittest.TestCase):
             test_pnl=946.0,
             bh_oos_pnl=100.0,
             sma_stack_oos_pnl=50.0,
-            regimes_tested=3,
+            regimes_tested=8,
             fail_reasons=[
                 "window[1] failed/skipped/neg/empty",
                 "not all windows non-negative",
@@ -197,7 +197,7 @@ class IngestMergeTests(unittest.TestCase):
             test_pnl=946.0,
             bh_oos_pnl=2000.0,
             sma_stack_oos_pnl=50.0,
-            regimes_tested=3,
+            regimes_tested=8,
             fail_reasons=[
                 "window[1] failed/skipped/neg/empty",
                 "not all windows non-negative",

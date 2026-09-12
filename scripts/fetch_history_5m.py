@@ -35,7 +35,7 @@ def history(sym: str, timeframe: str = TIMEFRAME, max_bars: int = MAX_BARS) -> l
     print(f"[{sym}] Starting 5m fetch (target max: {max_bars:,} bars)...", flush=True)
     t0 = time.time()
 
-    while len(bars) < max_bars and pages < 1000:
+    while len(bars) < max_bars and pages < 2500:
         try:
             batch = src.exchange.fetch_ohlcv(sym, timeframe=timeframe, since=since, limit=1000)
         except Exception as e:

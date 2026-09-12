@@ -771,6 +771,69 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertIn("wider", runbook)
         self.assertIn("continuation ANDs", runbook)
 
+    def test_amendment_2026_09_12_multi_year_walk_forward(self):
+        from hedge_fund.trading.constants import (
+            DISCOVER_CYCLE_MAX_NAMES,
+            DISCOVER_CYCLE_TIME_BUDGET_SECONDS,
+            MIN_BACKTEST_SHARPE,
+            MIN_BACKTEST_TRADES,
+            QUAL_COVERAGE_DAYS,
+            QUAL_N_WINDOWS,
+            QUAL_STRIDE,
+            QUAL_TIMEFRAME,
+            QUAL_WINDOW_BARS,
+            QUAL_WINDOW_DAYS,
+            RISK_POLICY,
+        )
+
+        text = (REPO / "PROTOCOL.md").read_text()
+        self.assertIn("multi-year walk-forward calendar coverage", text)
+        self.assertIn("QUAL_N_WINDOWS` = 8", text)
+        self.assertIn("QUAL_WINDOW_DAYS` = 90", text)
+        self.assertIn("QUAL_COVERAGE_DAYS` = 720", text)
+        self.assertIn("HIST_FETCH_PAGE_CAP` = 2500", text)
+        self.assertIn("window_size * n_windows", text)
+        self.assertIn("years", text.lower())
+        self.assertIn("thresholds", text.lower())
+        self.assertIn("Still paper", text)
+        self.assertIn("Do not cull existing champions", text)
+        self.assertIn("Do not retest parked fails", text)
+        self.assertIn("jensa", text)
+        self.assertIn("do not throttle", text.lower())
+        self.assertIn("DISCOVERY_ON_CYCLE=0", text)
+        self.assertEqual(QUAL_TIMEFRAME, "5m")
+        self.assertEqual(RISK_POLICY, "rm_v1")
+        self.assertEqual(QUAL_N_WINDOWS, 8)
+        self.assertEqual(QUAL_WINDOW_DAYS, 90)
+        self.assertEqual(QUAL_WINDOW_BARS, 25920)
+        self.assertEqual(QUAL_COVERAGE_DAYS, 720)
+        self.assertEqual(QUAL_STRIDE, 1)
+        self.assertEqual(MIN_BACKTEST_TRADES, 30)
+        self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
+        self.assertEqual(DISCOVER_CYCLE_MAX_NAMES, 1)
+        self.assertEqual(DISCOVER_CYCLE_TIME_BUDGET_SECONDS, 90)
+
+        fetch = (REPO / "scripts" / "fetch_history.py").read_text()
+        self.assertIn("QUAL_WINDOW_BARS * QUAL_N_WINDOWS + 3000", fetch)
+        self.assertIn("HIST_FETCH_PAGE_CAP = 2500", fetch)
+        self.assertNotIn("pages < 300", fetch)
+        fetch5 = (REPO / "scripts" / "fetch_history_5m.py").read_text()
+        self.assertIn("pages < 2500", fetch5)
+
+        readme = (REPO / "README.md").read_text()
+        self.assertIn("8 × ~90d", readme)
+        self.assertIn("~720 days", readme)
+        self.assertIn("OOS thresholds unchanged", readme)
+        self.assertIn("do not throttle live k8s", readme)
+        runbook = (REPO / "docs" / "WINDOWS_DISCOVERY.md").read_text()
+        self.assertIn("8 × ~90 calendar days", runbook)
+        self.assertIn("~720 days", runbook)
+        self.assertIn("page cap is 2500", runbook)
+        self.assertIn("Do **not** turn discovery back on", runbook)
+        html = (REPO / "hedge_fund" / "dashboard" / "report.py").read_text()
+        self.assertIn("8×90d span", html)
+        self.assertNotIn("3×90d span", html)
+
 
 class IsolatedRunnerTests(unittest.TestCase):
     def test_no_second_hardcoded_book(self):

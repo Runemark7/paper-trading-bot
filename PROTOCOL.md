@@ -99,6 +99,7 @@ over a meaningful sample, AND calibration is demonstrated independently of P&L.
 | 2026-09-12 | Windows farm Start/Stop from `/discovery`. Durable `state/discovery_farm.json` flag; `discovery_worker.py` idles (does not exit) while paused and resumes when the flag is on. Same ingest token gates `POST /api/discovery/farm`. Heartbeat on ingest so the UI can say worker not seen. k8s cycle stays `DISCOVERY_ON_CYCLE=0`. Paper only. No OOS / trading changes. |
 | 2026-09-12 | Same-date later: refill recipe lookbacks extend through 192 (9h–16h on 5m) and leftover TREND / `ema_stack` / 3-atom families already in `parse_strategy`. Farm was eligible=0 after ~917 unique fails. Fail-once stays. No named candlesticks. Static list unchanged. Paper only; OOS gates unchanged. |
 | 2026-09-12 | Same-date later: refill mint bases broaden past the frozen 3×3 dip/mom. Parser-allowed lookbacks + `%` thresholds (`DIP_FILTERS_WIDE` / `MOM_FILTERS_WIDE`) and continuation ANDs (wide mom/shallow dip × `don_hi` / `near_swing_hi`, short MA × breakout). Farm was ~1000 unique / 0 natural pass; beat-B&H ~100%. Fail-once stays. No named candlesticks. Static list unchanged. Paper only; OOS gates unchanged. |
+| 2026-09-12 | Walk-forward calendar coverage extends to 8 × ~90d of native 5m (`QUAL_N_WINDOWS` = 8, `QUAL_WINDOW_DAYS` = 90, ~720 calendar days) once multi-year `crypto_history_5m.json` exists. Per-window size stays 90d (honest chronological hold-outs, not one giant in-sample). OOS **thresholds** unchanged: 30 trades, Sharpe ≥ 0.30, beat B&H, beat `sma_stack`, all-windows diagnostic only, fail-once, 5m, `rm_v1`. Fetch default bars track the new span; page cap 2500. Slower evals on jensa; do not throttle live k8s. Still paper. |
 
 ### Amendment 2026-08-30 — what actually runs
 
@@ -566,5 +567,31 @@ This amendment does not rewrite original §§ 1–8 or prior amendments. Qual/li
 **Superseded on this date** (prior text kept above for history):
 
 - Same-date "longer structure lookbacks and leftover AND families" insofar as `DIP_FILTERS` / `MOM_FILTERS` froze at three names each and the recipe omitted continuation / wide-base families. Fail-once, farm ingest, cycle budget, OOS gates, and the static 40–120 compiled-list band are not superseded.
+
+### Amendment 2026-09-12 — multi-year walk-forward calendar coverage
+
+This amendment does not rewrite original §§ 1–8 or prior amendments. Qual/live remain 5m, risk policy remains `rm_v1`. OOS **thresholds** are unchanged: `MIN_BACKTEST_TRADES` = 30, `MIN_BACKTEST_SHARPE` = 0.30, must beat buy-and-hold, must beat `sma_stack`, all-windows non-negative is diagnostic only, fail-once never-retest stays. Discovery walk-forwards stay on the Windows farm (`scripts/discovery_worker.py` → `/api/discovery/ingest`); cluster `live_cycle` keeps discovery off (`DISCOVERY_ON_CYCLE=0`). Do not raise the k8s cycle discovery budget — longer tape is a jensa cost. Cycle remains 24/7. No live-slot cap. **Still paper.** `GRADUATED_PAPER` meaning is unchanged. Do not cull existing champions. Do not retest parked fails.
+
+**Why.** Alexander wants discovery OOS tested on **years** of 5m history, not ~280 days. `crypto_history_5m.json` on jensa was ~81k bars (~281 days) because `scripts/fetch_history.py` defaulted to `QUAL_WINDOW_BARS * QUAL_N_WINDOWS + slack` and the page loop capped at `pages < 300`. Qual loaded only the last `QUAL_WINDOW_BARS * QUAL_N_WINDOWS` bars. With `QUAL_N_WINDOWS` = 3 and `QUAL_WINDOW_DAYS` = 90 that was ~270 calendar days — too short for a multi-year tape.
+
+**What changed.** More sequential ~90d windows, same per-window size (honest walk-forward: train/test split inside each window, chronological, no single giant in-sample):
+
+- `QUAL_N_WINDOWS` = 8 (was 3)
+- `QUAL_WINDOW_DAYS` = 90 (unchanged)
+- `QUAL_WINDOW_BARS` = 25920 (unchanged; 90 × 24 × 12)
+- `QUAL_COVERAGE_DAYS` = 720 (8 × 90)
+- `QUAL_STRIDE` = 1 (unchanged)
+
+`_load_qual_history` / the Windows worker still keep the last `window_size * n_windows` bars. That pattern scales with the constants: more windows → more calendar tape loaded from the same file; extra years on disk past 720d are trimmed.
+
+**Fetch.** `scripts/fetch_history.py` `_DEFAULT_BARS` still tracks `QUAL_WINDOW_BARS * QUAL_N_WINDOWS + 3000` (~210k five-minute bars for the 8 × 90d span). The pagination cap is `HIST_FETCH_PAGE_CAP` = 2500 (was 300) so a multi-year deep fetch is possible (~600k bars / ~5y). `scripts/fetch_history_5m.py` uses the same 2500 page cap. Re-run fetch on jensa so `crypto_history_5m.json` actually covers the new span.
+
+**What did not change.** Sharpe 0.30, 30 OOS trades, beat B&H, beat `sma_stack`, 5m, `rm_v1`, all-windows diagnostic only, fail-once. Parked 3-window evals stay parked — this is not a re-walk of the leftover list. Ingest requalify still requires stored `regimes_tested` to match the current window count (8). Existing champions are not culled.
+
+**Cost.** Eight 90d windows is slower than three on jensa (more bars per `evaluate_windows`). Mention it; do not throttle the live k8s sidecar to compensate. Discovery stays off-cluster.
+
+**Superseded on this date** (prior text kept above for history):
+
+- 2026-09-02 / later "Windows remain 3 × ~90 calendar days" insofar as they froze `QUAL_N_WINDOWS` = 3 and ~270d of tape. Per-window 90d, `QUAL_WINDOW_BARS` = 25920, `QUAL_STRIDE` = 1, and the OOS **thresholds** are not superseded.
 
 

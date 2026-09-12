@@ -131,6 +131,54 @@ class HistoryTrimTests(unittest.TestCase):
                 self.assertEqual(h1, h2)
                 self.assertEqual(l1, l2)
 
+    def test_default_keep_is_window_size_times_n_windows(self):
+        from hedge_fund.trading.constants import QUAL_N_WINDOWS
+
+        window_bars = 10
+        keep = window_bars * QUAL_N_WINDOWS
+        extra = 25
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            payload = {
+                "BTC/USDT": _ohlcv(keep + extra, start=100.0),
+                "ETH/USDT": _ohlcv(keep + extra, start=10.0),
+                "SOL/USDT": _ohlcv(keep + extra, start=50.0),
+            }
+            (root / "crypto_history_5m.json").write_text(json.dumps(payload))
+            with (
+                patch.dict(os.environ, {"PAPER_STATE": str(root)}),
+                patch("scripts.tournament_engine.QUAL_WINDOW_BARS", window_bars),
+                patch("scripts.tournament_engine.QUAL_N_WINDOWS", QUAL_N_WINDOWS),
+            ):
+                data = _load_qual_history()
+        self.assertEqual(set(data), {"BTC/USDT", "ETH/USDT"})
+        self.assertEqual(keep, window_bars * QUAL_N_WINDOWS)
+        self.assertEqual(len(data["BTC/USDT"]), keep)
+        self.assertEqual(data["BTC/USDT"][0], payload["BTC/USDT"][-keep])
+        self.assertEqual(data["BTC/USDT"][-1], payload["BTC/USDT"][-1])
+
+    def test_eight_windows_are_chronological_full_size_holdouts(self):
+        from hedge_fund.trading.constants import QUAL_N_WINDOWS
+
+        window_size = 10
+        n_windows = QUAL_N_WINDOWS
+        data = {
+            "BTC/USDT": _ohlcv(window_size * n_windows, start=100.0),
+            "ETH/USDT": _ohlcv(window_size * n_windows, start=10.0),
+        }
+        slices = _window_slices(data, window_size=window_size, n_windows=n_windows, stride=1)
+        self.assertEqual(len(slices), n_windows)
+        prev_last = None
+        for i, sl in enumerate(slices):
+            closes = sl["BTC/USDT"][0]
+            self.assertEqual(len(closes), window_size)
+            if prev_last is not None:
+                self.assertGreater(closes[0], prev_last)
+            prev_last = closes[-1]
+        # Last slice is the most recent tape; first slice is the oldest hold-out.
+        self.assertEqual(slices[-1]["BTC/USDT"][0][-1], data["BTC/USDT"][-1][4])
+        self.assertEqual(slices[0]["BTC/USDT"][0][0], data["BTC/USDT"][0][4])
+
 
 class CompactDiscoveryLogTests(unittest.TestCase):
     def test_append_writes_compact_json(self):
