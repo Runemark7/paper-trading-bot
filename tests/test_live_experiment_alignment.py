@@ -564,8 +564,10 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertEqual(DISCOVER_CYCLE_MAX_NAMES, 1)
         self.assertEqual(DISCOVER_CYCLE_TIME_BUDGET_SECONDS, 90)
         self.assertEqual(DISCOVERY_REFILL_BATCH_SIZE, 16)
-        self.assertEqual(STRUCTURE_NS[-2:], (84, 96))
-        self.assertLessEqual(len(list(iter_recipe_names())), 950)
+        self.assertIn(84, STRUCTURE_NS)
+        self.assertIn(96, STRUCTURE_NS)
+        self.assertIn("through 96", text)
+        self.assertLessEqual(len(list(iter_recipe_names())), 3000)
         self.assertLessEqual(len(generate_universe()), UNIVERSE_TARGET_MAX)
         readme = (REPO / "README.md").read_text()
         self.assertIn("near-level", readme)
@@ -609,6 +611,60 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertIn("_discovery_ingest_authorized", server)
         self.assertIn("X-Paper-Discovery-Token", server)
         self.assertIn("_discovery_header_tokens", server)
+
+    def test_amendment_2026_09_12_longer_lookbacks_and_leftover_ands(self):
+        from hedge_fund.trading.constants import (
+            DISCOVER_CYCLE_MAX_NAMES,
+            DISCOVERY_REFILL_BATCH_SIZE,
+            MIN_BACKTEST_SHARPE,
+            MIN_BACKTEST_TRADES,
+            QUAL_TIMEFRAME,
+            RISK_POLICY,
+        )
+        from hedge_fund.trading.refill import (
+            STRUCTURE_NS,
+            STRUCTURE_NS_THROUGH_96,
+            iter_recipe_names,
+            next_refill_batch,
+        )
+        from hedge_fund.trading.universe import UNIVERSE_TARGET_MAX, generate_universe
+
+        text = (REPO / "PROTOCOL.md").read_text()
+        self.assertIn("longer structure lookbacks and leftover AND families", text)
+        self.assertIn("108", text)
+        self.assertIn("192", text)
+        self.assertIn("ema_stack_20_50_100", text)
+        self.assertIn("ema_abv_100", text)
+        self.assertIn("leftover TREND", text)
+        self.assertIn("3-atom extras", text)
+        self.assertIn("eligible=0", text)
+        self.assertIn("Do not cull existing champions", text)
+        self.assertIn("Do not retest parked fails", text)
+        self.assertIn("OOS gates are unchanged", text)
+        self.assertIn("Still paper", text)
+        self.assertIn("No named candlesticks", text)
+        self.assertIn("No MFI", text)
+        self.assertEqual(QUAL_TIMEFRAME, "5m")
+        self.assertEqual(RISK_POLICY, "rm_v1")
+        self.assertEqual(MIN_BACKTEST_TRADES, 30)
+        self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
+        self.assertEqual(DISCOVER_CYCLE_MAX_NAMES, 1)
+        self.assertEqual(DISCOVERY_REFILL_BATCH_SIZE, 16)
+        self.assertEqual(STRUCTURE_NS_THROUGH_96[-2:], (84, 96))
+        self.assertEqual(STRUCTURE_NS[-2:], (180, 192))
+        self.assertEqual(len(STRUCTURE_NS), 22)
+        names = list(iter_recipe_names())
+        self.assertGreater(len(names), 1500)
+        self.assertLessEqual(len(names), 3000)
+        uni = generate_universe()
+        self.assertLessEqual(len(uni), UNIVERSE_TARGET_MAX)
+        added = next_refill_batch(taken_names=uni, n=DISCOVERY_REFILL_BATCH_SIZE)
+        self.assertEqual(len(added), DISCOVERY_REFILL_BATCH_SIZE)
+        readme = (REPO / "README.md").read_text()
+        self.assertIn("192", readme)
+        self.assertIn("ema_stack", readme)
+        runbook = (REPO / "docs" / "WINDOWS_DISCOVERY.md").read_text()
+        self.assertIn("192", runbook)
 
 
 class IsolatedRunnerTests(unittest.TestCase):

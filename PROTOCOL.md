@@ -97,6 +97,7 @@ over a meaningful sample, AND calibration is demonstrated independently of P&L.
 | 2026-09-12 | Discovery walk-forwards leave the k8s cycle sidecar. `live_cycle` skips tournament by default (`DISCOVERY_ON_CYCLE=0` / `PAPER_DISCOVERY_MODE=off`). Cluster keeps `run_isolated` → collect → report. Windows PC (`jensa`) is the discovery farm: same fail-once / auto-refill / OOS / `rm_v1` / 5m windows; results POST to `https://trading.runevibe.se/api/discovery/ingest` with a paper-only shared secret. No kubectl tunnel. Paper only. No cull of champions. |
 | 2026-09-12 | Structure-AND refill recipe expands: unused Donchian / near-swing / near-level lookbacks (`STRUCTURE_NS` through 96) ANDed with existing 5m dip/mom/trend filters. Farm auto-refill picks them up. Fail-once stays — `near_duplicate_key` must not collapse onto parked fails. No named candlesticks, no WaveTrend spam, no MFI. Static `generate_universe()` stays inside `UNIVERSE_TARGET_MAX`. Paper only; OOS gates unchanged. |
 | 2026-09-12 | Windows farm Start/Stop from `/discovery`. Durable `state/discovery_farm.json` flag; `discovery_worker.py` idles (does not exit) while paused and resumes when the flag is on. Same ingest token gates `POST /api/discovery/farm`. Heartbeat on ingest so the UI can say worker not seen. k8s cycle stays `DISCOVERY_ON_CYCLE=0`. Paper only. No OOS / trading changes. |
+| 2026-09-12 | Same-date later: refill recipe lookbacks extend through 192 (9h–16h on 5m) and leftover TREND / `ema_stack` / 3-atom families already in `parse_strategy`. Farm was eligible=0 after ~917 unique fails. Fail-once stays. No named candlesticks. Static list unchanged. Paper only; OOS gates unchanged. |
 
 ### Amendment 2026-08-30 — what actually runs
 
@@ -490,5 +491,29 @@ This amendment does not rewrite original §§ 1–8 or prior amendments. Qual/li
 **Superseded on this date** (prior text kept above for history):
 
 - Same-date Windows farm text insofar as it implied the only control surface was SSH / killing the process. Fail-once, ingest, OOS gates, and `DISCOVERY_ON_CYCLE=0` are not superseded.
+
+### Amendment 2026-09-12 — longer structure lookbacks and leftover AND families
+
+This amendment does not rewrite original §§ 1–8 or prior amendments. Qual/live remain 5m, risk policy remains `rm_v1`, OOS gates are unchanged (30 OOS trades, all windows ≥ 0, beat B&H + `sma_stack`, Sharpe ≥ 0.30, paper 80 vs B&H). Windows remain 3 × ~90 calendar days of native 5m (`QUAL_WINDOW_BARS` = 25920, `QUAL_STRIDE` = 1). Fail-once never-retest from the 2026-09-10 amendment stays — a fail parks that name forever; each auto-refilled name gets **one shot**. Auto-refill (`DISCOVERY_REFILL_BATCH_SIZE` = 16, `discovery_extended.json`) stays. Discovery walk-forwards stay on the Windows farm (`scripts/discovery_worker.py` → `/api/discovery/ingest`); cluster `live_cycle` keeps discovery off. Cycle remains 24/7. No live-slot cap. **Still paper.** `GRADUATED_PAPER` meaning is unchanged. Do not cull existing champions. Do not retest parked fails.
+
+**Why.** The Windows farm (`jensa`) was healthy (heartbeat idle, farm enabled) but eligible=0: ~917 unique names tested, 0 passes. `maybe_refill_discovery` / `next_refill_batch` returned an empty batch because the morning `STRUCTURE_NS` (6…96) structure-AND recipe was exhausted versus taken/tested. Opening another frozen leftover-list PR is not the drain.
+
+**What was added** (`hedge_fund.trading.refill.iter_recipe_names`). Still a bounded stream — a couple of thousand names, not tens of thousands of near-clones. Legacy 2026-09-11 families stay first; morning near-level families stay second; leftover TREND / `ema_stack` / 3-atom families follow. `STRUCTURE_NS` is `{6,12,18,24,30,36,42,48,54,60,66,72,84,96,108,120,132,144,156,168,180,192}` (108 = 9h through 192 = 16h on 5m; step of 12 after 72; still multiples of 6 so `near_duplicate_key` is the identity). New AND families, atoms already in `parse_strategy` / `_ALLOWED_ATOM_RES` only:
+
+- Longer unused Donchian / swing / `dbl_bot` lookbacks on the existing dip/mom/trend / near-level families
+- Leftover `TREND_FILTERS` on support / near-swing (`sma_abv_100` / `sma_abv_200` / `rsi_14_>50` were `don_hi`-only) plus `ema_abv_100` (parser + static universe; morning recipe skipped it)
+- `ema_stack_20_50_100` × `don_hi` / `don_lo` / `near_swing_*` (`ema_stack` already matched the allow-list)
+- `dbl_bot_N&near_swing_lo_N` (same fractal as the pattern atom) and leftover `dbl_bot` trends (`sma_abv_200`, `ema_abv_100`, `ema_stack_20_50_100`)
+- 3-atom extras: dip×support and mom×breakout with `sma_abv_100` / `sma_stack_20_50_100` (morning already had `sma_abv_50` / `ema_abv_50`)
+
+**Static list unchanged.** `generate_universe()` / `NEW_STRUCTURE_ANDS` stay inside `UNIVERSE_TARGET_MIN` / `UNIVERSE_TARGET_MAX` (~40–120). The farm picks new names from the recipe via `discovery_extended.json`, one `DISCOVERY_REFILL_BATCH_SIZE` handful at a time.
+
+**Skipped.** Exact names and `near_duplicate_key` collisions against champions, graduated, the static universe, already-emitted extended names, and any `discovery_log.json` row (pass or fail). Refused families stay out: no H&S / flags / triangles / engulfing / hammer / doji / morning_star / evening_star / candlestick encyclopedia / chart_patterns zoo; no Market Cipher scrape; no new `wt_*` WaveTrend spam; no MFI until honest 5m volume; no `dbl_top` longs; no `daily()`/`h1()`/`m5()` wrappers.
+
+**When the recipe is exhausted.** Refill returns nothing. Discovery idles honestly (eligible=0) until the recipe is amended again. That is not a silent retest of parked fails.
+
+**Superseded on this date** (prior text kept above for history):
+
+- Same-date "more structure-AND recipe names" insofar as `STRUCTURE_NS` froze at 96 and the recipe omitted leftover TREND × support / `ema_stack` / extra 3-atom families. Fail-once, farm ingest, cycle budget, OOS gates, and the static 40–120 compiled-list band are not superseded.
 
 

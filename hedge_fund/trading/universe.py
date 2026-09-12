@@ -19,9 +19,11 @@ dry, ``hedge_fund.trading.refill`` appends the next handful to
 ``discovery_extended.json`` (pending queue sidecar). Static list here stays
 inside UNIVERSE_TARGET_MAX; the recipe is bounded, fail-once, no WaveTrend
 clones. Amendment 2026-09-12 expands that recipe with unused Donchian /
-near-swing / near-level ANDs (farm picks them up; this static list stays
-put). Trend / breakout / momentum stay as sma_stack/sma_abv, don_hi_*,
-mom_* — not a second stack. Near-duplicate keys collapse tiny param tweaks.
+near-swing / near-level ANDs, then the same-date later pass extends
+lookbacks through 192 and leftover TREND / ema_stack / 3-atom families
+(farm picks them up; this static list stays put). Trend / breakout /
+momentum stay as sma_stack/sma_abv, don_hi_*, mom_* — not a second stack.
+Near-duplicate keys collapse tiny param tweaks.
 Lookbacks in names (e.g. dip_24b) are bar counts: on 5m, 24 bars = 2 hours.
 """
 from __future__ import annotations

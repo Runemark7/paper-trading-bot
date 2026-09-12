@@ -154,6 +154,7 @@ the farm stays idle until Start.
 - No real-money broker.
 - No retest of a name that already has a discovery_log row (fail-once).
 - No WaveTrend clones, MFI, named candlesticks, or chart-pattern zoo.
-  Auto-refill already walks the expanded Donchian / swing / near-level recipe.
+  Auto-refill already walks the expanded Donchian / swing / near-level
+  recipe (lookbacks through 192, leftover TREND / ema_stack ANDs).
 - No culling champions.
 - Do not point `PAPER_STATE` at the cluster PVC.
