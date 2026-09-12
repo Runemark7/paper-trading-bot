@@ -172,6 +172,60 @@ class IngestMergeTests(unittest.TestCase):
         self.assertEqual(out["ingested"], [])
         self.assertEqual(out["rejected_invalid"], ["bad"])
 
+    def test_requalifies_window_veto_only_from_stored_aggregates(self):
+        parked_pass = _eval(
+            "window_veto_only",
+            qualified=False,
+            tested_at="2026-09-01T00:00:00+00:00",
+            sharpe=0.58,
+            trades=296,
+            test_pnl=946.0,
+            bh_oos_pnl=100.0,
+            sma_stack_oos_pnl=50.0,
+            regimes_tested=3,
+            fail_reasons=[
+                "window[1] failed/skipped/neg/empty",
+                "not all windows non-negative",
+            ],
+        )
+        parked_bh = _eval(
+            "dbl_bot_120",
+            qualified=False,
+            tested_at="2026-09-01T00:00:00+00:00",
+            sharpe=0.58,
+            trades=296,
+            test_pnl=946.0,
+            bh_oos_pnl=2000.0,
+            sma_stack_oos_pnl=50.0,
+            regimes_tested=3,
+            fail_reasons=[
+                "window[1] failed/skipped/neg/empty",
+                "not all windows non-negative",
+                "oos_pnl 946.00 <= bh 2000.00",
+            ],
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "discovery_log.json").write_text(json.dumps([parked_pass, parked_bh]))
+            with patch.dict(os.environ, {"PAPER_STATE": str(root)}):
+                out = ingest_discovery_payload({"evaluations": [], "source": "windows_worker"})
+                from hedge_fund.trading.champions import load_pool
+                from hedge_fund.trading.discovery import load_discovery_log
+
+                pool = load_pool()
+                log = load_discovery_log()
+        by_name = {r["strategy"]: r for r in log}
+        names = [c["name"] for c in pool["champions"]]
+        self.assertIn("window_veto_only", out["admitted"])
+        self.assertIn("window_veto_only", out["requalified"])
+        self.assertNotIn("dbl_bot_120", out["admitted"])
+        self.assertNotIn("dbl_bot_120", out["requalified"])
+        self.assertTrue(by_name["window_veto_only"]["qualified"])
+        self.assertFalse(by_name["dbl_bot_120"]["qualified"])
+        self.assertIn("window_veto_only", names)
+        self.assertNotIn("dbl_bot_120", names)
+        self.assertEqual(by_name["window_veto_only"]["fail_reasons"], [])
+
 
 class IngestHttpTests(unittest.TestCase):
     def _start(self):

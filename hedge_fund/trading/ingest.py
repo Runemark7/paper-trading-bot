@@ -1,8 +1,11 @@
 """Merge Windows-worker discovery evaluations into prod paper state.
 
-Fail-once: a name that already has any discovery_log row is skipped.
-Qualified names are admitted the same way as ``replenish_and_evaluate``.
-Existing champions are never removed. Paper only.
+Fail-once: a name that already has any discovery_log row is skipped
+(no second walk-forward). Qualified names are admitted the same way as
+``replenish_and_evaluate``. On ingest, parked rows that now pass on
+stored aggregates (Sharpe / trades / beat-B&H / sma) are flipped and
+admitted without re-running walk-forwards. Existing champions are never
+removed. Paper only.
 """
 from __future__ import annotations
 
@@ -15,10 +18,12 @@ from hedge_fund.trading.discovery import (
     append_discovery_evaluation,
     clear_in_flight,
     load_discovery_log,
+    save_discovery_log,
     tested_discovery_names,
     write_in_flight,
 )
 from hedge_fund.trading.farm import apply_heartbeat_unlocked
+from hedge_fund.trading.qualify import requalify_parked_log
 from hedge_fund.trading.refill import append_extended_batch, load_extended_names
 from hedge_fund.trading.store import paper_state_lock
 
@@ -82,7 +87,8 @@ def _admit_qualified(st: dict, record: dict, existing: set[str]) -> bool:
 def ingest_discovery_payload(payload: dict) -> dict:
     """Apply a worker batch. Caller must already have checked the ingest token.
 
-    Returns counts. Never culls champions. Never rewrites an existing log row.
+    Returns counts. Never culls champions. May flip a parked log row to
+    qualified when stored aggregates now pass (all-windows veto dropped).
     """
     if not isinstance(payload, dict):
         raise ValueError("payload must be an object")
@@ -98,6 +104,8 @@ def ingest_discovery_payload(payload: dict) -> dict:
     skipped: list[dict] = []
     admitted: list[str] = []
     rejected_invalid: list[str] = []
+    requalified: list[str] = []
+    added_extended: list[str] = []
 
     with paper_state_lock("discovery"):
         log = load_discovery_log()
@@ -127,10 +135,19 @@ def ingest_discovery_payload(payload: dict) -> dict:
             if rec["qualified"] and _admit_qualified(st, rec, existing):
                 admitted.append(name)
 
+        log = load_discovery_log()
+        requal_rows, requal_names = requalify_parked_log(log, existing_names=existing)
+        if requal_names:
+            save_discovery_log(log)
+            for rec in requal_rows:
+                if _admit_qualified(st, rec, existing):
+                    requalified.append(rec["strategy"])
+                    if rec["strategy"] not in admitted:
+                        admitted.append(rec["strategy"])
+
         if admitted:
             save_pool(st)
 
-        added_extended: list[str] = []
         if raw_extended:
             names = [n for n in raw_extended if isinstance(n, str) and n]
             if names:
@@ -168,6 +185,7 @@ def ingest_discovery_payload(payload: dict) -> dict:
         "ingested": ingested,
         "skipped": skipped,
         "admitted": admitted,
+        "requalified": requalified,
         "rejected_invalid": rejected_invalid,
         "extended_added": added_extended,
         "source": payload.get("source") or "windows_worker",

@@ -666,6 +666,49 @@ class ProtocolAmendmentTests(unittest.TestCase):
         runbook = (REPO / "docs" / "WINDOWS_DISCOVERY.md").read_text()
         self.assertIn("192", runbook)
 
+    def test_amendment_2026_09_12_all_windows_veto_dropped(self):
+        from hedge_fund.trading.constants import (
+            MIN_BACKTEST_SHARPE,
+            MIN_BACKTEST_TRADES,
+            QUAL_TIMEFRAME,
+            RISK_POLICY,
+        )
+        from hedge_fund.trading.qualify import qualification_decision
+        from scripts.tournament_engine import qualification_decision as te_decision
+
+        text = (REPO / "PROTOCOL.md").read_text()
+        self.assertIn("all-windows OOS veto dropped", text)
+        self.assertIn("aggregate OOS only", text)
+        self.assertIn("all_windows_nonneg", text)
+        self.assertIn("not emit", text)
+        self.assertIn("window[i] failed/skipped/neg/empty", text)
+        self.assertIn("not all windows non-negative", text)
+        self.assertIn("Re-qualify from stored aggregates", text)
+        self.assertIn("dbl_bot_120", text)
+        self.assertIn("Still paper", text)
+        self.assertIn("beat buy-and-hold", text.lower())
+        self.assertEqual(QUAL_TIMEFRAME, "5m")
+        self.assertEqual(RISK_POLICY, "rm_v1")
+        self.assertEqual(MIN_BACKTEST_TRADES, 30)
+        self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
+        self.assertIs(te_decision, qualification_decision)
+
+        src = (REPO / "scripts" / "tournament_engine.py").read_text()
+        self.assertNotIn("not all windows non-negative", src)
+        self.assertNotIn("window[{i}]", src)
+        ingest = (REPO / "hedge_fund" / "trading" / "ingest.py").read_text()
+        self.assertIn("requalify_parked_log", ingest)
+        worker = (REPO / "scripts" / "discovery_worker.py").read_text()
+        self.assertIn("evaluate_strategy_record", worker)
+        self.assertNotIn("def qualification_decision", worker)
+
+        readme = (REPO / "README.md").read_text()
+        self.assertIn("all-windows non-negative OOS veto is dropped", readme)
+        self.assertIn("beat-B&H stay", readme)
+        html = (REPO / "hedge_fund" / "dashboard" / "report.py").read_text()
+        self.assertIn("single empty/neg window is logged as a diagnostic", html)
+        self.assertNotIn("Every window test PnL", html)
+
 
 class IsolatedRunnerTests(unittest.TestCase):
     def test_no_second_hardcoded_book(self):

@@ -3,8 +3,9 @@
 1. Walk-forward backtests on **5m** OHLCV (same tape as live TradingLoop).
    4h history must not admit champions.
 2. Hard qualification filter (hedge_fund.trading.constants): OOS-only score,
-   every window's test PnL >= 0, >= 30 OOS trades, OOS Sharpe >= 0.30,
-   OOS beats buy-and-hold and sma_stack after fees. Risk policy: rm_v1.
+   >= 30 OOS trades, OOS Sharpe >= 0.30, OOS beats buy-and-hold and
+   sma_stack after fees. A single skipped/empty/negative window is a
+   diagnostic (all_windows_nonneg), not a fail reason. Risk policy: rm_v1.
 3. No live-slot cap: every 5m-qualified name not already pooled or
    graduated is admitted. Static universe size (~40–120) is the compiled
    list bound; auto-refill appends a handful of never-tested names to
@@ -46,8 +47,6 @@ from hedge_fund.trading.discovery import (
 from hedge_fund.trading.constants import (
     DISCOVER_CYCLE_MAX_NAMES,
     DISCOVER_CYCLE_TIME_BUDGET_SECONDS,
-    MIN_BACKTEST_SHARPE,
-    MIN_BACKTEST_TRADES,
     PAPER_START_CASH,
     QUAL_N_WINDOWS,
     QUAL_STRIDE,
@@ -56,6 +55,10 @@ from hedge_fund.trading.constants import (
     QUAL_WINDOW_BARS,
     RISK_POLICY,
     TRADE_EVALUATION_LIMIT,
+)
+from hedge_fund.trading.qualify import (
+    oos_admission_score,
+    qualification_decision,
 )
 from hedge_fund.trading.refill import discovery_universe, maybe_refill_discovery
 from hedge_fund.trading.universe import untested_candidates
@@ -77,70 +80,6 @@ def log_discovery_evaluations(eval_records: list[dict]):
     from hedge_fund.trading.discovery import append_discovery_evaluations
 
     append_discovery_evaluations(eval_records)
-
-
-def oos_admission_score(tot_test_pnl: float, avg_sharpe: float) -> float:
-    """Admit ranking uses OOS/test only — train PnL never boosts the score."""
-    return tot_test_pnl + (avg_sharpe * 10.0)
-
-
-def qualification_decision(
-    windows: list[dict],
-    *,
-    expected_windows: int,
-    bh_oos_pnl: float | None,
-    sma_stack_oos_pnl: float | None,
-    min_sharpe: float = MIN_BACKTEST_SHARPE,
-    min_trades: int = MIN_BACKTEST_TRADES,
-) -> dict:
-    """Pure OOS gate. Failed/skipped windows fail 'all windows non-negative'."""
-    tot_test_pnl = sum(float(w.get("test_pnl") or 0.0) for w in windows)
-    tot_oos_trades = sum(int(w.get("test_trades") or 0) for w in windows)
-    sharpes = [float(w.get("sharpe") or 0.0) for w in windows] or [0.0]
-    avg_sharpe = sum(sharpes) / len(sharpes)
-    tot_train_pnl = sum(float(w.get("train_pnl") or 0.0) for w in windows)
-    reasons: list[str] = []
-
-    if len(windows) != expected_windows:
-        reasons.append(f"windows {len(windows)} != expected {expected_windows}")
-
-    all_windows_nonneg = True
-    for i, w in enumerate(windows):
-        skipped = bool(w.get("skipped") or w.get("failed"))
-        test_pnl = w.get("test_pnl")
-        test_trades = int(w.get("test_trades") or 0)
-        if skipped or test_pnl is None or test_trades < 1 or float(test_pnl) < 0:
-            all_windows_nonneg = False
-            reasons.append(f"window[{i}] failed/skipped/neg/empty")
-
-    if not all_windows_nonneg:
-        reasons.append("not all windows non-negative")
-    if tot_oos_trades < min_trades:
-        reasons.append(f"oos_trades {tot_oos_trades} < {min_trades}")
-    if avg_sharpe < min_sharpe:
-        reasons.append(f"oos_sharpe {avg_sharpe:.2f} < {min_sharpe}")
-    if bh_oos_pnl is None:
-        reasons.append("buy-and-hold missing")
-    elif tot_test_pnl <= bh_oos_pnl:
-        reasons.append(f"oos_pnl {tot_test_pnl:.2f} <= bh {bh_oos_pnl:.2f}")
-    if sma_stack_oos_pnl is None:
-        reasons.append("sma_stack missing")
-    elif tot_test_pnl <= sma_stack_oos_pnl:
-        reasons.append(f"oos_pnl {tot_test_pnl:.2f} <= sma_stack {sma_stack_oos_pnl:.2f}")
-
-    passed = not reasons
-    return {
-        "passed": passed,
-        "reasons": reasons,
-        "tot_test_pnl": tot_test_pnl,
-        "tot_train_pnl": tot_train_pnl,
-        "tot_oos_trades": tot_oos_trades,
-        "avg_sharpe": avg_sharpe,
-        "all_windows_nonneg": all_windows_nonneg,
-        "score": oos_admission_score(tot_test_pnl, avg_sharpe),
-        "bh_oos_pnl": bh_oos_pnl,
-        "sma_stack_oos_pnl": sma_stack_oos_pnl,
-    }
 
 
 def _load_qual_history(keep_bars: int | None = None) -> dict | None:
@@ -322,6 +261,7 @@ def evaluate_strategy_record(
         "bh_oos_pnl": None if bh_oos_pnl is None else round(bh_oos_pnl, 2),
         "sma_stack_oos_pnl": None if sma_stack_oos_pnl is None else round(sma_stack_oos_pnl, 2),
         "fail_reasons": decision["reasons"],
+        "all_windows_nonneg": decision["all_windows_nonneg"],
     }
     if decision["passed"]:
         record["score"] = round(decision["score"], 2)

@@ -2,8 +2,9 @@
 
 Paper only. The k8s cycle sidecar (1 CPU / 1.5GiB) no longer runs
 walk-forwards. This PC evaluates never-tested names with the **same**
-fail-once / auto-refill / OOS / `rm_v1` / 5m rules as
+fail-once / auto-refill / aggregate-OOS / `rm_v1` / 5m rules as
 `scripts/tournament_engine.py` and POSTs results to prod.
+A single empty/neg window is not a veto (beat-B&H and Sharpe ≥ 0.30 stay).
 
 Machine: i5-6600K / 16GB / GTX 1070. GPU is unused (no CUDA rewrite).
 Use 2 workers (safe) or 4 (all cores). Do not keep a kubectl tunnel.

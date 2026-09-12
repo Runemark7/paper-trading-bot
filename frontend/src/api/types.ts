@@ -158,6 +158,9 @@ export interface DiscoveryEvaluation {
   fail_reasons?: string[];
   timeframe?: string;
   risk_policy?: string;
+  all_windows_nonneg?: boolean | null;
+  bh_oos_pnl?: number | null;
+  sma_stack_oos_pnl?: number | null;
 }
 
 export interface DiscoveryInFlight {
