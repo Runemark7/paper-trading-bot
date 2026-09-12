@@ -1,12 +1,19 @@
 import { useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { fetchDiscoverySummary } from "../api/client";
 import type { DiscoveryEvaluation } from "../api/types";
 import { Badge, Card, Empty, Field, FieldGrid, MonoName, NameChip, PhoneCards, DesktopTable, fmt } from "../components/ui";
 import { fmtWhen } from "./format";
+import {
+  EMPTY_TESTED_FILTERS,
+  filterTestedRows,
+  testedFiltersActive,
+  type ResultFilter,
+  type TestedColumnFilters,
+} from "./discoveryFilters";
 
 const PAGE = 20;
-type TestedFilter = "all" | "qualified" | "rejected";
 
 function testedTone(ok: boolean): "pos" | "neg" {
   return ok ? "pos" : "neg";
@@ -27,22 +34,103 @@ function TestedRowFields({ d }: { d: DiscoveryEvaluation }) {
   );
 }
 
+function FilterInput({
+  label,
+  value,
+  onChange,
+  placeholder,
+}: {
+  label: string;
+  value: string;
+  onChange: (next: string) => void;
+  placeholder?: string;
+}) {
+  const id = `tested-filter-${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
+  return (
+    <label className="min-w-0 block" htmlFor={id}>
+      <span className="text-[11px] uppercase tracking-wider text-white/40">{label}</span>
+      <input
+        id={id}
+        type="text"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        aria-label={`Filter ${label}`}
+        className="mt-1 w-full min-h-11 rounded-md bg-[#121a38] px-2 text-xs text-white ring-1 ring-white/15 placeholder:text-white/30"
+      />
+    </label>
+  );
+}
+
+/** Short Champions-page pointer — full buckets live on /discovery. */
+export function DiscoveryTeaser() {
+  const q = useQuery({
+    queryKey: ["discovery-summary"],
+    queryFn: fetchDiscoverySummary,
+    refetchInterval: 15_000,
+  });
+  const counts = q.data?.counts;
+  const uniqueTested = counts?.unique_tested ?? counts?.tested;
+  const stuck = Boolean(q.data?.stuck || q.data?.in_flight?.stale);
+
+  return (
+    <Card title="Discovery" aside="full buckets on /discovery">
+      <p className="text-sm text-white/60 mb-3">
+        Last-known tested / in-flight / leftover buckets. The full list and
+        already-tested column filters live on the Discovery page — not a live job.
+      </p>
+      {q.isError && (
+        <div className="text-rose-300 text-sm mb-3">
+          Could not load /api/discovery/summary: {String(q.error)}
+        </div>
+      )}
+      {stuck && (
+        <div className="mb-3 rounded-md border border-amber-400/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
+          {q.data?.stuck_reason || q.data?.in_flight?.note || "discovery stuck / cycle overdue"}
+        </div>
+      )}
+      {counts ? (
+        <div className="flex flex-wrap gap-2 text-xs text-white/50 mb-3">
+          <Badge tone="pos">qualified {counts.tested_pass}</Badge>
+          <Badge tone="neg">rejected {counts.tested_fail}</Badge>
+          <Badge tone="wait">not tested {counts.untested}</Badge>
+          <Badge tone="neutral">unique {uniqueTested ?? "…"}</Badge>
+        </div>
+      ) : null}
+      <p className="text-xs text-white/45 mb-3">
+        Last eval {q.data?.last_tested_at ? fmtWhen(q.data.last_tested_at) : "never recorded"}
+        {q.data?.last_strategy ? (
+          <>
+            {" "}
+            · <MonoName className="text-xs">{q.data.last_strategy}</MonoName>
+          </>
+        ) : null}
+      </p>
+      <Link
+        to="/discovery"
+        className="inline-flex min-h-11 items-center px-3 py-2 text-xs bg-white/10 hover:bg-white/20 rounded text-white"
+      >
+        Open Discovery
+      </Link>
+    </Card>
+  );
+}
+
 export default function DiscoveryBuckets() {
   const q = useQuery({
     queryKey: ["discovery-summary"],
     queryFn: fetchDiscoverySummary,
     refetchInterval: 15_000,
   });
-  const [filter, setFilter] = useState<TestedFilter>("all");
+  const [filters, setFilters] = useState<TestedColumnFilters>(EMPTY_TESTED_FILTERS);
   const [shown, setShown] = useState(PAGE);
 
   const data = q.data;
   const tested = data?.tested ?? [];
-  const filtered = useMemo(() => {
-    if (filter === "qualified") return tested.filter((d) => d.qualified);
-    if (filter === "rejected") return tested.filter((d) => !d.qualified);
-    return tested;
-  }, [tested, filter]);
+  const filtered = useMemo(
+    () => filterTestedRows(tested, filters, fmtWhen, fmt),
+    [tested, filters],
+  );
   const visible = filtered.slice(0, shown);
   const flight = data?.in_flight;
   const queued = data?.queued ?? data?.untested ?? [];
@@ -50,6 +138,12 @@ export default function DiscoveryBuckets() {
   const uniqueTested = counts?.unique_tested ?? counts?.tested;
   const logRows = counts?.log_rows;
   const stuck = Boolean(data?.stuck || flight?.stale);
+  const filtersOn = testedFiltersActive(filters);
+
+  function setColumn<K extends keyof TestedColumnFilters>(key: K, value: TestedColumnFilters[K]) {
+    setFilters((prev) => ({ ...prev, [key]: value }));
+    setShown(PAGE);
+  }
 
   return (
     <Card
@@ -63,7 +157,7 @@ export default function DiscoveryBuckets() {
       <p className="text-sm text-white/60 mb-4">
         Last-known backtest evaluations (5m history, same tape as live). Not a live
         job. Walk-forwards run on the Windows discovery worker, not the k8s cycle
-        sidecar. Champions and graduated names stay in their sections above — they are
+        sidecar. Champions and graduated names stay on the Champions page — they are
         not leftover untested. Stamp in-flight is not process liveness. Unique
         tested is latest-eval-per-name, not how many log rows were ever written.
         Already tested · rejected is parked forever — fail once, never retested.
@@ -163,33 +257,99 @@ export default function DiscoveryBuckets() {
       <section className="mb-5 min-w-0">
         <div className="flex flex-col gap-2 mb-2 sm:flex-row sm:items-center sm:justify-between">
           <h3 className="text-xs uppercase tracking-wider text-white/40">Already tested</h3>
-          <div className="flex flex-wrap gap-1">
-            {(["all", "qualified", "rejected"] as TestedFilter[]).map((key) => (
-              <button
-                key={key}
-                type="button"
-                onClick={() => {
-                  setFilter(key);
-                  setShown(PAGE);
-                }}
-                className={`min-h-11 px-3 py-1.5 rounded text-xs capitalize ${
-                  filter === key ? "bg-white/15 text-white" : "bg-white/5 text-white/60 hover:bg-white/10"
-                }`}
-              >
-                {key}
-                {key === "all"
-                  ? ` (${tested.length})`
-                  : key === "qualified"
-                    ? ` (${counts?.tested_pass ?? 0})`
-                    : ` (${counts?.tested_fail ?? 0})`}
-              </button>
-            ))}
-          </div>
+          <p className="text-xs text-white/40">
+            {tested.length
+              ? `Showing ${visible.length} of ${filtered.length}${filtersOn ? ` (filtered from ${tested.length})` : ""}`
+              : null}
+          </p>
         </div>
         <p className="text-xs text-white/45 mb-2">
           Already tested · rejected means parked forever (fail once). Those names
           are not retested and do not return after a cooldown.
         </p>
+
+        {tested.length ? (
+          <div className="mb-3 rounded-lg border border-white/10 bg-white/[0.02] p-2 sm:p-3 space-y-2">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2 min-w-0">
+              <FilterInput
+                label="Name"
+                value={filters.strategy}
+                onChange={(v) => setColumn("strategy", v)}
+                placeholder="contains…"
+              />
+              <FilterInput
+                label="When"
+                value={filters.testedAt}
+                onChange={(v) => setColumn("testedAt", v)}
+                placeholder="date or relative…"
+              />
+              <div className="min-w-0 col-span-2 md:col-span-1">
+                <div className="text-[11px] uppercase tracking-wider text-white/40 mb-1">Result</div>
+                <div className="flex flex-wrap gap-1" role="group" aria-label="Filter Result">
+                  {(["all", "qualified", "rejected"] as ResultFilter[]).map((key) => (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => setColumn("result", key)}
+                      className={`min-h-11 px-3 py-1.5 rounded text-xs capitalize ${
+                        filters.result === key ? "bg-white/15 text-white" : "bg-white/5 text-white/60 hover:bg-white/10"
+                      }`}
+                    >
+                      {key}
+                      {key === "all"
+                        ? ` (${tested.length})`
+                        : key === "qualified"
+                          ? ` (${counts?.tested_pass ?? 0})`
+                          : ` (${counts?.tested_fail ?? 0})`}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <FilterInput
+                label="Sharpe"
+                value={filters.sharpe}
+                onChange={(v) => setColumn("sharpe", v)}
+                placeholder=">1.0 or 0.8"
+              />
+              <FilterInput
+                label="OOS trades"
+                value={filters.trades}
+                onChange={(v) => setColumn("trades", v)}
+                placeholder=">=30"
+              />
+              <FilterInput
+                label="Test P&L"
+                value={filters.testPnl}
+                onChange={(v) => setColumn("testPnl", v)}
+                placeholder="<0"
+              />
+              <FilterInput
+                label="Fail reasons"
+                value={filters.failReasons}
+                onChange={(v) => setColumn("failReasons", v)}
+                placeholder="contains…"
+              />
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-[11px] text-white/40">
+                Sharpe, trades, and P&amp;L accept &gt;, &gt;=, &lt;, &lt;=, or =. When matches the
+                UTC stamp or relative time.
+              </p>
+              {filtersOn ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFilters(EMPTY_TESTED_FILTERS);
+                    setShown(PAGE);
+                  }}
+                  className="min-h-11 px-3 py-1.5 text-xs bg-white/10 hover:bg-white/20 rounded text-white"
+                >
+                  Clear filters
+                </button>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
 
         {!tested.length ? (
           q.isError ? (
@@ -201,6 +361,8 @@ export default function DiscoveryBuckets() {
               discovery is running.
             </Empty>
           )
+        ) : !filtered.length ? (
+          <Empty>No already-tested rows match these column filters.</Empty>
         ) : (
           <>
             <PhoneCards>
@@ -225,6 +387,7 @@ export default function DiscoveryBuckets() {
                     <th className="text-right">Sharpe</th>
                     <th className="text-right">OOS trades</th>
                     <th className="text-right">Test P&L</th>
+                    <th className="text-left">Fail reasons</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -241,6 +404,9 @@ export default function DiscoveryBuckets() {
                       <td className="text-right font-mono">{d.trades ?? "—"}</td>
                       <td className={`text-right font-mono font-bold ${(d.test_pnl ?? 0) >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
                         {fmt(d.test_pnl)}
+                      </td>
+                      <td className="text-white/40 break-words">
+                        {!d.qualified && d.fail_reasons?.length ? d.fail_reasons.join("; ") : "—"}
                       </td>
                     </tr>
                   ))}

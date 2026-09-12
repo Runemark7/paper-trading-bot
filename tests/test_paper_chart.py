@@ -512,7 +512,7 @@ class ChartUiTests(unittest.TestCase):
         app = (REPO / "frontend" / "src" / "App.tsx").read_text()
         self.assertIn('to: "/chart"', app)
         self.assertIn('label: "Chart"', app)
-        self.assertIn("grid-cols-5", app)
+        self.assertIn("grid-cols-6", app)
         self.assertIn('path="/chart"', app)
         chart = (REPO / "frontend" / "src" / "pages" / "Chart.tsx").read_text()
         tape = (REPO / "frontend" / "src" / "chart" / "ChampionTape.tsx").read_text()

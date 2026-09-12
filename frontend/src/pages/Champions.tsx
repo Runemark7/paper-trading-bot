@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchChampions, fetchGraduated, api } from "../api/client";
-import DiscoveryBuckets from "../status/DiscoveryBuckets";
+import { DiscoveryTeaser } from "../status/DiscoveryBuckets";
 import type { OpenLot } from "../api/types";
 import ChampionTape from "../chart/ChampionTape";
 import { Card, fmt, Badge, Empty, MonoName, CopyableName, Field, FieldGrid, PhoneCards, DesktopTable } from "../components/ui";
@@ -168,9 +168,9 @@ export default function Champions() {
     <div className="space-y-6 min-w-0">
       <p className="text-sm text-white/55">
         Names on the paper book are isolated €10k accounts. Tap a champion to list
-        that account's open lots and a compact BTC/ETH chart. Discovery and graduation
-        below are last-known pipeline results — not a live job unless the sidecar stamp
-        says so.
+        that account's open lots and a compact BTC/ETH chart. Graduation below and
+        Discovery (own page) are last-known pipeline results — not a live job unless
+        the sidecar stamp says so.
       </p>
 
       <Card
@@ -416,7 +416,7 @@ export default function Champions() {
         )}
       </Card>
 
-      <DiscoveryBuckets />
+      <DiscoveryTeaser />
     </div>
   );
 }
