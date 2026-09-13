@@ -1,6 +1,7 @@
 """Causal HTF buyer-regime atoms: no lookahead on 5m resample, parser accepts names."""
 from __future__ import annotations
 
+import math
 import unittest
 
 import pandas as pd
@@ -108,6 +109,24 @@ class CausalIndexResampleTests(unittest.TestCase):
             htf_close_above_ma(spiked, i, bars_per=BARS_PER_H4, period=24, kind="ema"),
             htf_close_above_ma(closes, i, bars_per=BARS_PER_H4, period=24, kind="ema"),
         )
+
+    def test_full_series_index_matches_prefix_ma(self):
+        """htf_close_above_ma must match SMA/EMA on the completed prefix."""
+        from hedge_fund.signals.dynamic import ema, sma
+
+        closes = _uptrend_5m(40)
+        for i in (BARS_PER_H4 * 24 - 1, BARS_PER_H4 * 30, len(closes) - 1):
+            prefix = completed_htf_closes(closes, i, BARS_PER_H4)
+            if len(prefix) < 24:
+                continue
+            prefix_ema = ema(prefix, 24)
+            prefix_sma = sma(prefix, 24)
+            got_ema = htf_close_above_ma(closes, i, bars_per=BARS_PER_H4, period=24, kind="ema")
+            got_sma = htf_close_above_ma(closes, i, bars_per=BARS_PER_H4, period=24, kind="sma")
+            exp_ema = (not math.isnan(prefix_ema)) and prefix[-1] > prefix_ema
+            exp_sma = (not math.isnan(prefix_sma)) and prefix[-1] > prefix_sma
+            self.assertEqual(got_ema, exp_ema)
+            self.assertEqual(got_sma, exp_sma)
 
 
 class CausalCalendarResampleTests(unittest.TestCase):

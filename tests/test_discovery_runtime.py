@@ -9,7 +9,15 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from hedge_fund.signals.dynamic import _ema_series, clear_ema_cache, ema
+from hedge_fund.signals.dynamic import (
+    _ema_series,
+    _sma_series,
+    clear_ema_cache,
+    clear_sma_cache,
+    ema,
+    sma,
+)
+from hedge_fund.backtest.strategies import _atr_series, atr, clear_atr_cache
 from hedge_fund.signals.wavetrend import (
     _cached_wavetrend_series,
     clear_wavetrend_cache,
@@ -53,6 +61,45 @@ class EmaSeriesCacheTests(unittest.TestCase):
             naive = _naive_ema(closes, 21, i)
             self.assertEqual(series[i], naive)
             self.assertEqual(ema(closes, 21, i), naive)
+
+
+class SmaSeriesCacheTests(unittest.TestCase):
+    def tearDown(self):
+        clear_sma_cache()
+
+    def test_cached_sma_matches_window_sum(self):
+        closes = [100.0 + i * 0.05 for i in range(400)]
+        clear_sma_cache()
+        series = _sma_series(closes, 25)
+        for i in (24, 25, 50, 200, 399):
+            naive = sum(closes[i - 24 : i + 1]) / 25
+            self.assertEqual(series[i], naive)
+            self.assertEqual(sma(closes, 25, i), naive)
+
+
+class AtrSeriesCacheTests(unittest.TestCase):
+    def tearDown(self):
+        clear_atr_cache()
+
+    def test_cached_atr_matches_per_bar_window(self):
+        closes = [100.0 + i * 0.1 for i in range(80)]
+        highs = [c + 0.4 for c in closes]
+        lows = [c - 0.3 for c in closes]
+        period = 14
+        clear_atr_cache()
+        series = _atr_series(highs, lows, closes, period)
+        for i in (13, 14, 20, 40, 79):
+            if i < period:
+                self.assertTrue(math.isnan(series[i]))
+                self.assertTrue(math.isnan(atr(highs, lows, closes, period, i)))
+                continue
+            trs = []
+            for j in range(i - period + 1, i + 1):
+                h, l, pc = highs[j], lows[j], closes[j - 1]
+                trs.append(max(h - l, abs(h - pc), abs(l - pc)))
+            naive = sum(trs) / len(trs)
+            self.assertEqual(series[i], naive)
+            self.assertEqual(atr(highs, lows, closes, period, i), naive)
 
 
 class WaveTrendSeriesCacheTests(unittest.TestCase):

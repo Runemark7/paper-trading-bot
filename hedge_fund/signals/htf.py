@@ -20,8 +20,9 @@ BARS_PER_H4 = 48
 BARS_PER_H1 = 12
 TF_BARS = {"h4": BARS_PER_H4, "h1": BARS_PER_H1}
 
-_HTF_CACHE_MAX = 24
-_htf_close_cache: dict[tuple[int, int, int], list[float]] = {}
+# One farm batch: 8 windows × 2 symbols × 2 splits × {h1, h4}.
+_HTF_CACHE_MAX = 256
+_htf_close_cache: dict[tuple, list[float]] = {}
 
 
 def clear_htf_cache() -> None:
@@ -43,7 +44,9 @@ def htf_bucket_close_index(k: int, bars_per: int) -> int:
 def _htf_closes_all(closes: list[float], bars_per: int) -> list[float]:
     """All HTF closes implied by ``closes`` (complete buckets only)."""
     n = len(closes)
-    key = (id(closes), bars_per, n)
+    c0 = closes[0] if n else 0.0
+    c1 = closes[-1] if n else 0.0
+    key = (id(closes), bars_per, n, c0, c1)
     cached = _htf_close_cache.get(key)
     if cached is not None:
         return cached
@@ -77,21 +80,33 @@ def htf_close_above_ma(
     period: int,
     kind: str,
 ) -> bool:
-    """Last completed HTF close above SMA/EMA(period) of completed HTF closes."""
+    """Last completed HTF close above SMA/EMA(period) of completed HTF closes.
+
+    Uses the cached full HTF close series plus an index, not a new prefix
+    list every bar. SMA/EMA at ``n_complete - 1`` on the full series is
+    prefix-stable (same window / recurrence as the sliced prefix).
+    """
     if period <= 0 or bars_per <= 0:
         return False
-    htf = completed_htf_closes(closes, i, bars_per)
-    if len(htf) < period:
+    i = len(closes) - 1 if i is None else i
+    n_complete = completed_htf_count(i, bars_per)
+    if n_complete < period:
+        return False
+    htf = _htf_closes_all(closes, bars_per)
+    if n_complete > len(htf):
+        n_complete = len(htf)
+    if n_complete < period:
         return False
     from hedge_fund.signals.dynamic import ema, sma
 
+    idx = n_complete - 1
     if kind == "sma":
-        ma = sma(htf, period)
+        ma = sma(htf, period, idx)
     elif kind == "ema":
-        ma = ema(htf, period)
+        ma = ema(htf, period, idx)
     else:
         return False
-    return not math.isnan(ma) and htf[-1] > ma
+    return not math.isnan(ma) and htf[idx] > ma
 
 
 def h4_ema_abv(closes: list[float], period: int, i: int | None = None) -> bool:

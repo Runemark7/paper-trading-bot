@@ -113,6 +113,9 @@ def _load_qual_history(keep_bars: int | None = None) -> dict | None:
     return out or None
 
 
+_SPLIT_MEMO: dict[tuple[int, bool], tuple[list[float], list[float], list[float]]] = {}
+
+
 def _prepare_sample(w_sample: dict) -> dict:
     """Extract OHLC once per window; train/test share the arrays + a cut index."""
     prepared = {}
@@ -124,6 +127,9 @@ def _prepare_sample(w_sample: dict) -> dict:
 
 
 def _window_slices(data: dict, window_size: int, n_windows: int, stride: int) -> list[dict]:
+    # New list identities; drop caches so id() reuse cannot serve stale series.
+    bs.clear_qual_caches()
+    _SPLIT_MEMO.clear()
     min_available_bars = min(len(data[s]) for s in data)
     total_span = min(min_available_bars, window_size * n_windows)
     slices = []
@@ -144,19 +150,32 @@ def _ohlc(rows: list) -> tuple[list[float], list[float], list[float]]:
 
 
 def _split_tape(tape, train: bool) -> tuple[list[float], list[float], list[float]] | None:
-    """Train or test OHLC from a prepared tape or raw row list."""
+    """Train or test OHLC from a prepared tape or raw row list.
+
+    Prepared tuples are stable for a window-slice batch. Memoize the 70/30
+    copies so ATR/SMA/HTF caches keyed by ``id(closes)`` stay valid across
+    names (and are not poisoned when CPython reuses a freed list id).
+    """
     if isinstance(tape, tuple) and len(tape) == 4:
+        memo_key = (id(tape), train)
+        hit = _SPLIT_MEMO.get(memo_key)
+        if hit is not None:
+            return hit
         closes, highs, lows, cut = tape
-    elif isinstance(tape, list):
+        split = (closes[:cut], highs[:cut], lows[:cut]) if train else (
+            closes[cut:], highs[cut:], lows[cut:]
+        )
+        _SPLIT_MEMO[memo_key] = split
+        return split
+    if isinstance(tape, list):
         if not tape:
             return None
         closes, highs, lows = _ohlc(tape)
         cut = int(len(tape) * 0.70)
-    else:
-        return None
-    if train:
-        return closes[:cut], highs[:cut], lows[:cut]
-    return closes[cut:], highs[cut:], lows[cut:]
+        if train:
+            return closes[:cut], highs[:cut], lows[:cut]
+        return closes[cut:], highs[cut:], lows[cut:]
+    return None
 
 
 def _eval_slice(pred, sample: dict, train: bool) -> list:
