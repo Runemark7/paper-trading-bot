@@ -651,8 +651,9 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertEqual(DISCOVER_CYCLE_MAX_NAMES, 1)
         self.assertEqual(DISCOVERY_REFILL_BATCH_SIZE, 16)
         self.assertEqual(STRUCTURE_NS_THROUGH_96[-2:], (84, 96))
-        self.assertEqual(STRUCTURE_NS[-2:], (180, 192))
-        self.assertEqual(len(STRUCTURE_NS), 22)
+        self.assertEqual(STRUCTURE_NS, STRUCTURE_NS_THROUGH_96)
+        self.assertEqual(STRUCTURE_NS[-2:], (84, 96))
+        self.assertEqual(len(STRUCTURE_NS), 14)
         names = list(iter_recipe_names())
         self.assertGreater(len(names), 1500)
         self.assertLessEqual(len(names), 8000)
@@ -665,6 +666,7 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertIn("ema_stack", readme)
         runbook = (REPO / "docs" / "WINDOWS_DISCOVERY.md").read_text()
         self.assertIn("192", runbook)
+        self.assertIn("lookbacks through 96", runbook)
 
     def test_amendment_2026_09_12_all_windows_veto_dropped(self):
         from hedge_fund.trading.constants import (
@@ -1385,6 +1387,56 @@ class ProtocolAmendmentTests(unittest.TestCase):
         readme = (REPO / "README.md").read_text()
         self.assertIn("lookback_too_expensive", readme)
         self.assertIn("eval_timeout", readme)
+
+    def test_amendment_2026_09_13_mint_caps_structure_ns_at_96(self):
+        from hedge_fund.trading.constants import (
+            MIN_BACKTEST_SHARPE,
+            MIN_BACKTEST_TRADES,
+            QUAL_TIMEFRAME,
+            RISK_POLICY,
+        )
+        from hedge_fund.trading.discovery_guard import (
+            DEFAULT_STRUCTURE_LOOKBACK_MAX,
+            structure_lookbacks,
+        )
+        from hedge_fund.trading.refill import (
+            REGIME_STRUCTURE_NS,
+            STRUCTURE_NS,
+            STRUCTURE_NS_THROUGH_96,
+            iter_recipe_names,
+        )
+
+        text = (REPO / "PROTOCOL.md").read_text()
+        self.assertIn("mint no longer emits structure N>96", text)
+        self.assertIn("STRUCTURE_NS_THROUGH_96", text)
+        self.assertIn("lookback_too_expensive", text)
+        self.assertIn("OOS **thresholds** are unchanged", text)
+        self.assertIn("Still paper", text)
+        self.assertIn("Do not retest parked fails", text)
+        self.assertEqual(QUAL_TIMEFRAME, "5m")
+        self.assertEqual(RISK_POLICY, "rm_v1")
+        self.assertEqual(MIN_BACKTEST_TRADES, 30)
+        self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
+        self.assertEqual(DEFAULT_STRUCTURE_LOOKBACK_MAX, 96)
+        self.assertEqual(STRUCTURE_NS, STRUCTURE_NS_THROUGH_96)
+        self.assertEqual(max(STRUCTURE_NS), DEFAULT_STRUCTURE_LOOKBACK_MAX)
+        self.assertEqual(REGIME_STRUCTURE_NS, (12, 24, 48))
+        names = list(iter_recipe_names())
+        self.assertIn("don_hi_96", names)
+        self.assertIn("dbl_bot_48", names)
+        self.assertNotIn("don_hi_192", names)
+        self.assertNotIn("dbl_bot_168&ema_abv_50", names)
+        for name in names:
+            for _atom, n in structure_lookbacks(name):
+                self.assertLessEqual(n, 96, msg=name)
+        workflow = (REPO / "docs" / "WORKFLOW.md").read_text()
+        self.assertIn("no longer emits structure", workflow)
+        self.assertNotIn("Recipe may still emit lookback-168", workflow)
+        runbook = (REPO / "docs" / "WINDOWS_DISCOVERY.md").read_text()
+        self.assertIn("Mint no longer emits structure", runbook)
+        self.assertNotIn("Recipe still emits large", runbook)
+        readme = (REPO / "README.md").read_text()
+        self.assertIn("no longer emits structure", readme)
 
 
 class IsolatedRunnerTests(unittest.TestCase):

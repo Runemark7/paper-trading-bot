@@ -12,9 +12,14 @@ The static universe stays inside ``UNIVERSE_TARGET_MAX`` (~40–120). The
 sidecar is the pending queue: after a refill, never-tested extras are one
 ``DISCOVERY_REFILL_BATCH_SIZE`` handful, not thousands of clones. Recipe
 generation is string-only (no history load). 2026-09-12 first added unused
-Donchian / swing / near-level lookbacks through 96; the same-date later
-pass extends ``STRUCTURE_NS`` through 192 (9h–16h on 5m) and leftover
-TREND / ``ema_stack`` / 3-atom families already in ``parse_strategy``.
+Donchian / swing / near-level lookbacks through 96; a same-date later
+pass briefly extended ``STRUCTURE_NS`` through 192 (9h–16h on 5m) and
+leftover TREND / ``ema_stack`` / 3-atom families already in
+``parse_strategy``. 2026-09-13 later: mint no longer emits structure
+``N>96`` (``STRUCTURE_NS`` == ``STRUCTURE_NS_THROUGH_96``) so those
+names are not fail-parked as ``lookback_too_expensive``. Already-tested
+leftover 108–192 names stay parked. Worker fail-park remains the
+backstop. Dip/mom/HTF lookbacks that are not structure atoms stay.
 A same-date later pass broadens parser-allowed dip/mom lookbacks and
 ``%`` thresholds and adds continuation (trend-participation) ANDs so
 new names can stay in a strong B&H OOS window long enough to clear
@@ -194,18 +199,18 @@ TREND_FILTERS: tuple[str, ...] = (
 )
 
 # Multiples of 6 so near_duplicate_key is the identity for structure N.
-# 6 bars = 30m on 5m. After 72 the step is 12 (84=7h … 192=16h).
-# Distinct from a 1-bar param tweak.
-STRUCTURE_NS: tuple[int, ...] = (
-    6, 12, 18, 24, 30, 36, 42, 48, 54, 60, 66, 72, 84, 96,
-    108, 120, 132, 144, 156, 168, 180, 192,
-)
-
-# Frozen 2026-09-12 morning set (through 96). Tests park this to prove
-# the later lookback / leftover-AND pass still refills.
+# 6 bars = 30m on 5m. After 72 the step is 12 (84=7h, 96=8h).
+# Capped at DISCOVERY_STRUCTURE_LOOKBACK_MAX default 96 — don_hi /
+# don_lo / near_swing_* / dbl_bot (and dbl_top if present) with N>96
+# are fail-parked as lookback_too_expensive. Do not mint those names.
+# Distinct from a 1-bar param tweak. Dip/mom/HTF lookbacks are not
+# structure atoms and are not capped here.
+# Frozen 2026-09-12 morning set (through 96). Live mint uses the same
+# tuple so leftover-AND generators that iterate STRUCTURE_NS stop at 96.
 STRUCTURE_NS_THROUGH_96: tuple[int, ...] = (
     6, 12, 18, 24, 30, 36, 42, 48, 54, 60, 66, 72, 84, 96,
 )
+STRUCTURE_NS: tuple[int, ...] = STRUCTURE_NS_THROUGH_96
 
 # Trend tags for support / near-level ANDs (not every TREND_FILTERS × atom).
 # The 2026-09-12 morning pass left sma_abv_100 / 200 / rsi on don_hi only.

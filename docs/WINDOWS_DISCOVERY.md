@@ -86,8 +86,10 @@ the name, clears that name from in-flight, and moves on. Leftover
 lookback-168 structure names are pathological O(n·k) and burned this PC
 for ~2h with no completed evals. This is **ops/throughput, not a gate
 softening** — OOS thresholds stay 30 trades / Sharpe ≥ 0.30 / beat B&H /
-beat `sma_stack`. Set to `0` to disable. Recipe still emits large
-lookbacks; the worker parks them so dry refill can continue.
+beat `sma_stack`. Set to `0` to disable. Mint no longer emits structure
+`N>96`; leftover already-tested lookback-168/192 names stay parked.
+Worker fail-park remains the backstop for any leftover already-queued
+name so dry refill can continue.
 
 `DISCOVERY_EVAL_TIMEOUT_SECONDS` (default **600**) is a **coarse backstop
 only**. If a cheap-enough name still hangs, the worker fail-parks
@@ -192,7 +194,7 @@ the farm stays idle until Start.
 - No retest of a name that already has a discovery_log row (fail-once).
 - No WaveTrend clones, MFI, named candlesticks, or chart-pattern zoo.
   Auto-refill already walks the expanded Donchian / swing / near-level
-  recipe (lookbacks through 192, leftover TREND / ema_stack ANDs, wider
+  recipe (lookbacks through 96, leftover TREND / ema_stack ANDs, wider
   dip/mom bases and continuation ANDs, plus 1% grind bases and full
   short-MA 3-atoms, plus causal HTF buyer-regime ANDs —
   densified `h1_ema_abv_15` / `h1_ema_abv_18` / `h1_ema_abv_20` /
@@ -206,6 +208,6 @@ the farm stays idle until Start.
 - No culling champions.
 - Do not point `PAPER_STATE` at the cluster PVC.
 - Do not raise `DISCOVERY_STRUCTURE_LOOKBACK_MAX` / disable the timeout
-  to "give 168 another shot" — that is how this PC hung. Very large
-  structure lookbacks may hit the cap (or the 600s backstop) often;
-  that is intended. The recipe is not banned; fail-once is enough.
+  to "give 168 another shot" — that is how this PC hung. Mint no longer
+  emits structure `N>96`; leftover already-tested names stay parked.
+  Worker fail-park remains the backstop.
