@@ -221,7 +221,7 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
         self.assertEqual(DISCOVER_CYCLE_MAX_NAMES, 1)
         self.assertEqual(DISCOVER_CYCLE_TIME_BUDGET_SECONDS, 90)
-        self.assertEqual(DISCOVERY_LOG_CAP, 1000)
+        self.assertEqual(DISCOVERY_LOG_CAP, 10000)
         self.assertLess(DISCOVER_CYCLE_MAX_NAMES, 30)
         self.assertLess(DISCOVER_CYCLE_MAX_NAMES, 4)
         self.assertLess(DISCOVER_CYCLE_TIME_BUDGET_SECONDS, CYCLE_INTERVAL_SECONDS)
@@ -870,6 +870,28 @@ class ProtocolAmendmentTests(unittest.TestCase):
         workflow = (REPO / "docs" / "WORKFLOW.md").read_text()
         self.assertIn("BTC/USDT and ETH/USDT only", workflow)
         self.assertIn("Binance 5m BTC/ETH", workflow)
+
+    def test_amendment_2026_09_13_discovery_log_cap(self):
+        from hedge_fund.trading.constants import (
+            DISCOVERY_LOG_CAP,
+            MIN_BACKTEST_SHARPE,
+            MIN_BACKTEST_TRADES,
+            QUAL_N_WINDOWS,
+        )
+
+        self.assertEqual(DISCOVERY_LOG_CAP, 10000)
+        self.assertEqual(QUAL_N_WINDOWS, 8)
+        self.assertEqual(MIN_BACKTEST_TRADES, 30)
+        self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
+
+        protocol = (REPO / "PROTOCOL.md").read_text()
+        self.assertIn("DISCOVERY_LOG_CAP` = 10000", protocol)
+        self.assertIn("was 1000", protocol)
+        self.assertIn("Already tested", protocol)
+        self.assertIn("Paper only", protocol)
+        self.assertIn("OOS thresholds", protocol)
+        self.assertIn("QUAL_N_WINDOWS", protocol)
+        self.assertIn("fetch symbols unchanged", protocol)
 
 
 class IsolatedRunnerTests(unittest.TestCase):

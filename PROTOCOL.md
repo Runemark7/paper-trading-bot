@@ -102,6 +102,7 @@ over a meaningful sample, AND calibration is demonstrated independently of P&L.
 | 2026-09-12 | Walk-forward calendar coverage extends to 8 × ~90d of native 5m (`QUAL_N_WINDOWS` = 8, `QUAL_WINDOW_DAYS` = 90, ~720 calendar days) once multi-year `crypto_history_5m.json` exists. Per-window size stays 90d (honest chronological hold-outs, not one giant in-sample). OOS **thresholds** unchanged: 30 trades, Sharpe ≥ 0.30, beat B&H, beat `sma_stack`, all-windows diagnostic only, fail-once, 5m, `rm_v1`. Fetch default bars track the new span; page cap 2500. Slower evals on jensa; do not throttle live k8s. Still paper. |
 | 2026-09-12 | [docs/WORKFLOW.md](docs/WORKFLOW.md) is the canonical living map of mint / farm / eval / prod topology. Update those diagrams in the same PR that changes refill recipe shape, window count, ingest, farm location, or gate meaning. Paper only; OOS thresholds unchanged. |
 | 2026-09-12 | Fetch scripts default to BTC/USDT and ETH/USDT only. SOL/XRP are not fetched (discovery/qual tape is BTC+ETH). Override with `HIST_SYMBOLS`. `HIST_FETCH_PAGE_CAP` = 2500 and `QUAL_N_WINDOWS` = 8 unchanged. Paper only; OOS thresholds unchanged. |
+| 2026-09-13 | `/discovery` Already tested keeps more newest-first rows: `DISCOVERY_LOG_CAP` = 10000 (was 1000). Unique names remain a separate count. Paper only; OOS thresholds, `QUAL_N_WINDOWS`, and fetch symbols unchanged. |
 
 ### Amendment 2026-08-30 — what actually runs
 
