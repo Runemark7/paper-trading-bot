@@ -32,6 +32,7 @@ from hedge_fund.trading.refill import (
     MOM_FILTERS_WIDE,
     REGIME_ATOMS,
     REGIME_DIP_BASES,
+    REGIME_DIP_PRIORITY,
     REGIME_ENTRY_BASES,
     REGIME_MOM_BASES,
     REGIME_MOM_PRIORITY,
@@ -43,6 +44,7 @@ from hedge_fund.trading.refill import (
     SUPPORT_EXTRA_TRENDS,
     THREE_ATOM_EXTRA_TRENDS,
     TREND_FILTERS,
+    _REGIME_PREFIXES,
     discovery_universe,
     iter_recipe_names,
     load_extended_names,
@@ -72,6 +74,7 @@ _REGIME_MARKERS = (
     "h4_ema_abv_",
     "h4_sma_abv_",
     "h1_ema_abv_",
+    "h1_sma_abv_",
 )
 
 
@@ -290,11 +293,16 @@ class RecipeBoundsTests(unittest.TestCase):
                 "h1_ema_abv_20",
                 "h1_ema_abv_30",
                 "h1_ema_abv_36",
+                "h1_sma_abv_20",
+                "h1_sma_abv_24",
+                "h1_sma_abv_30",
                 "h4_ema_abv_12",
                 "h4_ema_abv_48",
                 "h4_sma_abv_24",
             ),
         )
+        self.assertNotIn("h1_sma_abv_18", REGIME_ATOMS)
+        self.assertIn("h1_sma_abv_", _REGIME_PREFIXES)
         self.assertEqual(
             MOM_FILTERS_HTF_DENSE,
             ("mom_18b_gt4pc", "mom_18b_gt6pc", "mom_12b_gt6pc"),
@@ -313,7 +321,19 @@ class RecipeBoundsTests(unittest.TestCase):
             set(REGIME_MOM_BASES),
             set(MOM_FILTERS + MOM_FILTERS_HTF_DENSE + GRIND_FILTERS),
         )
-        self.assertEqual(REGIME_DIP_BASES, DIP_FILTERS)
+        self.assertEqual(
+            REGIME_DIP_PRIORITY,
+            ("dip_24b_lt5pc", "dip_24b_lt6pc", "dip_18b_lt2pc"),
+        )
+        self.assertEqual(
+            REGIME_DIP_BASES[:3],
+            REGIME_DIP_PRIORITY,
+        )
+        self.assertEqual(
+            set(REGIME_DIP_BASES),
+            set(DIP_FILTERS) | set(REGIME_DIP_PRIORITY),
+        )
+        self.assertNotIn("dip_24b_lt4pc", REGIME_DIP_BASES)
         self.assertEqual(REGIME_ENTRY_BASES, REGIME_MOM_BASES + REGIME_DIP_BASES)
         self.assertEqual(DISCOVERY_REFILL_BATCH_SIZE, 16)
         self.assertLessEqual(DISCOVERY_REFILL_BATCH_SIZE, 24)
@@ -475,6 +495,10 @@ class RecipeBoundsTests(unittest.TestCase):
         self.assertIn("h1_ema_abv_20&mom_18b_gt2pc", names)
         self.assertIn("h1_ema_abv_30&mom_18b_gt2pc", names)
         self.assertIn("h1_ema_abv_36&mom_18b_gt2pc", names)
+        self.assertIn("h1_sma_abv_20&mom_18b_gt2pc", names)
+        self.assertIn("h1_sma_abv_24&mom_18b_gt2pc", names)
+        self.assertIn("h1_sma_abv_30&mom_18b_gt2pc", names)
+        self.assertNotIn("h1_sma_abv_18&mom_18b_gt2pc", names)
         self.assertIn("h1_ema_abv_24&mom_18b_gt4pc", names)
         self.assertIn("h4_ema_abv_12&mom_18b_gt2pc", names)
         self.assertIn("h4_ema_abv_48&mom_18b_gt4pc", names)
@@ -486,6 +510,8 @@ class RecipeBoundsTests(unittest.TestCase):
         self.assertNotIn("h1_ema_abv_15&mom_18b_gt4pc&near_swing_lo_24", names)
         self.assertNotIn("h1_ema_abv_18&mom_18b_gt2pc&don_hi_12", names)
         self.assertNotIn("h1_ema_abv_36&mom_18b_gt2pc&near_swing_lo_24", names)
+        self.assertNotIn("h1_sma_abv_24&mom_18b_gt2pc&don_hi_12", names)
+        self.assertNotIn("h1_sma_abv_20&dip_24b_lt5pc&near_swing_lo_24", names)
         self.assertEqual("h1_ema_abv_18&mom_18b_gt2pc".count("&"), 1)
         self.assertEqual("h1_ema_abv_36&mom_18b_gt2pc".count("&"), 1)
         self.assertTrue(
@@ -515,6 +541,22 @@ class RecipeBoundsTests(unittest.TestCase):
                 and any(d in n.split("&") for d in DIP_FILTERS)
             )
             self.assertLess(names.index(mom2), names.index(dip2), msg=regime)
+            self.assertLess(
+                names.index(f"{regime}&dip_24b_lt5pc"),
+                names.index(f"{regime}&dip_24b_lt6pc"),
+                msg=regime,
+            )
+            self.assertLess(
+                names.index(f"{regime}&dip_24b_lt6pc"),
+                names.index(f"{regime}&dip_18b_lt2pc"),
+                msg=regime,
+            )
+            self.assertLess(
+                names.index(f"{regime}&dip_18b_lt2pc"),
+                names.index(f"{regime}&dip_6b_lt2pc"),
+                msg=regime,
+            )
+            self.assertNotIn(f"{regime}&dip_24b_lt4pc", names)
             self.assertFalse(
                 any(
                     n.startswith(f"{regime}&")
@@ -534,7 +576,13 @@ class RecipeBoundsTests(unittest.TestCase):
         self.assertTrue(name_is_parseable("h1_ema_abv_18&mom_18b_gt2pc"))
         self.assertTrue(name_is_parseable("h1_ema_abv_36&mom_18b_gt2pc"))
         self.assertTrue(name_is_parseable("h1_ema_abv_24&mom_18b_gt4pc"))
-        self.assertFalse(name_is_parseable("h1_sma_abv_24&mom_18b_gt2pc"))
+        self.assertTrue(name_is_parseable("h1_sma_abv_20&mom_18b_gt2pc"))
+        self.assertTrue(name_is_parseable("h1_sma_abv_24&mom_18b_gt2pc"))
+        self.assertTrue(name_is_parseable("h1_sma_abv_30&dip_24b_lt5pc"))
+        self.assertTrue(name_is_parseable("h1_ema_abv_24&dip_24b_lt6pc"))
+        # Parser accepts the period; refill must not mint the collapsing 18 twin.
+        self.assertTrue(name_is_parseable("h1_sma_abv_18"))
+        self.assertNotIn("h1_sma_abv_18", REGIME_ATOMS)
 
     def test_htf_dense_atoms_parse_and_stay_distinct(self):
         parked_htf = {
@@ -547,6 +595,9 @@ class RecipeBoundsTests(unittest.TestCase):
             "h1_ema_abv_20",
             "h1_ema_abv_30",
             "h1_ema_abv_36",
+            "h1_sma_abv_20",
+            "h1_sma_abv_24",
+            "h1_sma_abv_30",
             "h4_ema_abv_12",
             "h4_ema_abv_48",
             "h4_sma_abv_24",
@@ -565,6 +616,24 @@ class RecipeBoundsTests(unittest.TestCase):
             near_duplicate_key("h1_ema_abv_18"),
             near_duplicate_key("h1_ema_abv_20"),
         )
+        self.assertEqual(
+            near_duplicate_key("h1_sma_abv_18"),
+            near_duplicate_key("h1_sma_abv_20"),
+        )
+        self.assertNotEqual(
+            near_duplicate_key("h1_sma_abv_20"),
+            near_duplicate_key("h1_ema_abv_20"),
+        )
+        self.assertEqual(
+            near_duplicate_key("dip_24b_lt4pc"),
+            near_duplicate_key("dip_24b_lt5pc"),
+        )
+        self.assertNotEqual(
+            near_duplicate_key("dip_24b_lt5pc"),
+            near_duplicate_key("dip_24b_lt6pc"),
+        )
+        self.assertNotIn("h1_sma_abv_18", REGIME_ATOMS)
+        self.assertNotIn("dip_24b_lt4pc", REGIME_DIP_BASES)
         parked_mom = {near_duplicate_key(n) for n in MOM_FILTERS}
         seen_mom = set(parked_mom)
         for atom in MOM_FILTERS_HTF_DENSE:
@@ -698,6 +767,25 @@ class RefillBatchTests(unittest.TestCase):
             seen.add(key)
         self.assertNotIn(champ, added)
         self.assertNotIn("sma_stack_7_25_50", added)
+
+    def test_sma_twins_and_priority_dips_skip_near_dupes(self):
+        uni = generate_universe()
+        taken = set(uni) | {
+            "h1_sma_abv_20&mom_18b_gt2pc",
+            "h1_ema_abv_24&dip_24b_lt5pc",
+        }
+        added = next_refill_batch(taken_names=taken, n=DISCOVERY_REFILL_BATCH_SIZE)
+        self.assertEqual(len(added), DISCOVERY_REFILL_BATCH_SIZE)
+        taken_keys = {near_duplicate_key(n) for n in taken}
+        for name in added:
+            self.assertNotIn(name, taken)
+            self.assertNotIn(near_duplicate_key(name), taken_keys, msg=name)
+            self.assertTrue(name_is_parseable(name), msg=name)
+        self.assertNotIn("h1_sma_abv_18&mom_18b_gt2pc", added)
+        self.assertNotIn("h1_ema_abv_24&dip_24b_lt4pc", added)
+        self.assertEqual(MIN_BACKTEST_TRADES, 30)
+        self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
+        self.assertEqual(QUAL_N_WINDOWS, 8)
 
     def test_refill_skips_when_eligible_already_feeds_the_slice(self):
         with tempfile.TemporaryDirectory() as tmp:
