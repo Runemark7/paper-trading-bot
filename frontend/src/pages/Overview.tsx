@@ -2,6 +2,7 @@ import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
 import { Card, Stat, fmt, fmtPct, Badge, Section, Empty, MonoName, Field, FieldGrid, PhoneCards, DesktopTable } from "../components/ui";
+import { championDetailPath } from "../status/championPath";
 import {
   accountLabel,
   cadenceLabel,
@@ -63,7 +64,9 @@ export default function Overview() {
             <div className="font-mono text-white min-w-0 space-y-1">
               {(run?.strategy.active ?? []).length
                 ? (run?.strategy.active ?? []).map((n) => (
-                    <MonoName key={n} className="block text-sm">{n}</MonoName>
+                    <Link key={n} to={championDetailPath(n)} className="block min-w-0 hover:text-white">
+                      <MonoName className="block text-sm">{n}</MonoName>
+                    </Link>
                   ))
                 : "—"}
             </div>

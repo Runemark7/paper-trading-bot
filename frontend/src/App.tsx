@@ -2,6 +2,7 @@ import { NavLink, Routes, Route, Navigate } from "react-router-dom";
 import Overview from "./pages/Overview";
 import Positions from "./pages/Positions";
 import Champions from "./pages/Champions";
+import ChampionDetail from "./pages/ChampionDetail";
 import Discovery from "./pages/Discovery";
 import Learning from "./pages/Learning";
 import ChartPage from "./pages/Chart";
@@ -63,6 +64,7 @@ export default function App() {
           <Route path="/chart" element={<ChartPage />} />
           <Route path="/positions" element={<Positions />} />
           <Route path="/champions" element={<Champions />} />
+          <Route path="/champions/*" element={<ChampionDetail />} />
           <Route path="/discovery" element={<Discovery />} />
           <Route path="/learning" element={<Learning />} />
           <Route path="*" element={<Navigate to="/" replace />} />

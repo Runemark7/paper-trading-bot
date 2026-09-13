@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchChampions, api } from "../api/client";
+import { Link } from "react-router-dom";
 import { Badge, Card, Empty, MonoName } from "../components/ui";
 import ChampionTape from "../chart/ChampionTape";
 import { defaultChampionName } from "../chart/numberTrades";
+import { championDetailPath } from "../status/championPath";
 import { openLotsByPair } from "../status/format";
 
 export default function ChartPage() {
@@ -65,7 +67,15 @@ export default function ChartPage() {
           )}
         </select>
         {champion ? (
-          <MonoName className="mt-1.5 block text-xs text-white/70">{champion}</MonoName>
+          <div className="mt-1.5 flex flex-wrap items-center gap-2 min-w-0">
+            <MonoName className="block text-xs text-white/70">{champion}</MonoName>
+            <Link
+              to={championDetailPath(champion)}
+              className="inline-flex min-h-11 items-center px-2.5 text-xs text-white/60 hover:text-white rounded bg-white/5 hover:bg-white/10"
+            >
+              Champion detail
+            </Link>
+          </div>
         ) : null}
       </label>
 

@@ -7,6 +7,12 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 FORMAT_TS = (REPO / "frontend" / "src" / "status" / "format.ts").read_text()
 CHAMPS_TSX = (REPO / "frontend" / "src" / "pages" / "Champions.tsx").read_text()
+DETAIL_TSX = (REPO / "frontend" / "src" / "pages" / "ChampionDetail.tsx").read_text()
+LOTS_TSX = (REPO / "frontend" / "src" / "status" / "ChampionLots.tsx").read_text()
+PATH_TS = (REPO / "frontend" / "src" / "status" / "championPath.ts").read_text()
+FILTERS_TS = REPO / "frontend" / "src" / "status" / "championFilters.ts"
+TABLE_CONTROLS = (REPO / "frontend" / "src" / "components" / "tableControls.tsx").read_text()
+APP_TSX = (REPO / "frontend" / "src" / "App.tsx").read_text()
 DISCOVERY_TSX = (REPO / "frontend" / "src" / "status" / "DiscoveryBuckets.tsx").read_text()
 OPEN_LOTS_PY = (REPO / "hedge_fund" / "trading" / "open_lots.py").read_text()
 
@@ -242,8 +248,8 @@ class PairLotSplitTests(unittest.TestCase):
         self.assertEqual(open_lots_by_pair(prev, "pair")["total"], prev["open_lots"])
 
 
-class ChampionsAccordionUiTests(unittest.TestCase):
-    def test_joins_live_rows_behind_an_accordion_not_always_open(self):
+class ChampionsListUiTests(unittest.TestCase):
+    def test_list_uses_discovery_table_and_navigates_to_detail(self):
         self.assertIn('queryKey: ["live"]', CHAMPS_TSX)
         self.assertIn("api.live", CHAMPS_TSX)
         self.assertIn("openLotsForChampion", CHAMPS_TSX)
@@ -258,49 +264,58 @@ class ChampionsAccordionUiTests(unittest.TestCase):
         self.assertNotIn("Discovery log (", CHAMPS_TSX)
         self.assertNotIn("slice(0, 40)", CHAMPS_TSX)
         self.assertNotIn("slice(0, 40)", DISCOVERY_TSX)
-        self.assertIn("expandedChampion", CHAMPS_TSX)
-        self.assertIn("setExpandedChampion(isOpen ? null : c.name)", CHAMPS_TSX)
-        self.assertIn("{isOpen &&", CHAMPS_TSX)
-        self.assertIn("aria-expanded", CHAMPS_TSX)
+        self.assertNotIn("expandedChampion", CHAMPS_TSX)
+        self.assertNotIn("aria-expanded", CHAMPS_TSX)
+        self.assertIn("PhoneCards", CHAMPS_TSX)
+        self.assertIn("DesktopTable", CHAMPS_TSX)
+        self.assertIn("applyChampionRows", CHAMPS_TSX)
+        self.assertIn("cycleChampionSort", CHAMPS_TSX)
+        self.assertIn('aria-label="Sort Champions"', CHAMPS_TSX)
+        self.assertIn("Clear filters", CHAMPS_TSX)
+        self.assertIn("championDetailPath(c.name)", CHAMPS_TSX)
         self.assertIn("min-h-11", CHAMPS_TSX)
-        self.assertIn("no open lots", CHAMPS_TSX)
-        self.assertIn('label="Condition" span', CHAMPS_TSX)
         self.assertIn("accountsMatch(name, c.name)", CHAMPS_TSX)
-        self.assertIn("ChampionTape", CHAMPS_TSX)
-        self.assertIn("championName={c.name}", CHAMPS_TSX)
+        self.assertNotIn("ChampionTape", CHAMPS_TSX)
+        self.assertIn('path="/champions/*"', APP_TSX)
+        self.assertIn("import ChampionDetail", APP_TSX)
+        self.assertIn("encodeURIComponent(name)", PATH_TS)
+        self.assertIn("decodeURIComponent(raw)", PATH_TS)
 
-    def test_collapsed_card_shows_btc_eth_lot_chips(self):
-        collapsed = CHAMPS_TSX.split("{isOpen &&")[0]
-        self.assertIn("openLotsByPair", collapsed)
-        self.assertIn("PairLotChips", collapsed)
-        self.assertIn("flex flex-wrap", collapsed)
-        self.assertIn("shrink-0", collapsed)
-        self.assertIn("BTC {btc}", collapsed)
-        self.assertIn("ETH {eth}", collapsed)
-        self.assertIn("split.btc", collapsed)
-        self.assertIn("split.eth", collapsed)
-        self.assertIn("split.total", collapsed)
-        self.assertIn("LotHealthSummaryChips", collapsed)
-        self.assertIn("ChampionSinceChip", collapsed)
-        self.assertIn('label="Champion since"', collapsed)
-        self.assertNotIn("open_lots_btc", collapsed)
-        self.assertNotIn("open_lots_eth", collapsed)
+    def test_list_row_shows_btc_eth_lot_chips(self):
+        list_body = CHAMPS_TSX.split("Graduated paper")[0]
+        self.assertIn("openLotsByPair", list_body)
+        self.assertIn("PairLotChips", list_body)
+        self.assertIn("flex flex-wrap", list_body)
+        self.assertIn("BTC {btc}", LOTS_TSX)
+        self.assertIn("ETH {eth}", LOTS_TSX)
+        self.assertIn("c.btc", list_body)
+        self.assertIn("c.eth", list_body)
+        self.assertIn("LotHealthSummaryChips", list_body)
+        self.assertIn("ChampionSinceChip", list_body)
+        self.assertIn('label="Champion since"', list_body)
+        self.assertNotIn("open_lots_btc", list_body)
+        self.assertNotIn("open_lots_eth", list_body)
 
-    def test_expanded_header_shows_started_date(self):
-        expanded = CHAMPS_TSX.split("{isOpen &&", 1)[1]
-        self.assertIn("Started {fmtChampionSince(c.champion_since)}", expanded)
-        self.assertIn("flex flex-wrap", expanded)
-        self.assertIn("CopyableName", expanded)
-        self.assertIn("name={c.name}", expanded)
-        champion_expand = expanded.split("Graduated paper")[0]
-        self.assertIn('Strategy', champion_expand)
+    def test_detail_page_shows_summary_lots_tape_and_closed(self):
+        self.assertIn("← Champions", DETAIL_TSX)
+        self.assertIn('to="/champions"', DETAIL_TSX)
+        self.assertIn("CopyableName", DETAIL_TSX)
+        self.assertIn("name={name}", DETAIL_TSX)
+        self.assertIn("Started {fmtChampionSince(champ?.champion_since)}", DETAIL_TSX)
+        self.assertIn("ChampionOpenLotsCard", DETAIL_TSX)
+        self.assertIn("ChampionTape", DETAIL_TSX)
+        self.assertIn("championName={name}", DETAIL_TSX)
+        self.assertIn("closedTradesForChampion", DETAIL_TSX)
+        self.assertIn("no open lots", LOTS_TSX)
+        self.assertIn('label="Condition" span', LOTS_TSX)
+        self.assertIn("Strategy", DETAIL_TSX)
 
     def test_graduated_section_does_not_invent_live_lots(self):
         grad = CHAMPS_TSX[CHAMPS_TSX.index("Graduated paper") :]
         self.assertNotIn("lotsForChampion", grad)
         self.assertNotIn("ChampionLotList", grad)
         self.assertNotIn("qLive", grad)
-        self.assertNotIn("ExpandedChampionLots", grad)
+        self.assertNotIn("ChampionOpenLots", grad)
         self.assertNotIn("ChampionTape", grad)
         self.assertNotIn("PairLotChips", grad)
         self.assertNotIn("openLotsByPair", grad)
@@ -329,13 +344,148 @@ class DiscoveryBucketsUiTests(unittest.TestCase):
         self.assertIn("fetchDiscoverySummary", DISCOVERY_TSX)
         self.assertIn("OOS trades", DISCOVERY_TSX)
         self.assertIn("applyTestedRows", DISCOVERY_TSX)
-        self.assertIn('aria-label={`Filter ${label}`}', DISCOVERY_TSX)
+        self.assertIn('aria-label={`Filter ${label}`}', TABLE_CONTROLS)
         self.assertIn('aria-label="Filter Result"', DISCOVERY_TSX)
         self.assertIn("Clear filters", DISCOVERY_TSX)
         self.assertIn("Fail reasons", DISCOVERY_TSX)
         self.assertIn("No already-tested rows match these column filters.", DISCOVERY_TSX)
         self.assertNotIn("Discovery log (", DISCOVERY_TSX)
         self.assertNotIn("Train P&L", DISCOVERY_TSX)
+
+
+SAMPLE_CHAMPS = [
+    {
+        "name": "dip_24b_and_wt_cross",
+        "closed": 12,
+        "pnl": 140.5,
+        "wins": 8,
+        "open_lots": 3,
+        "champion_since": "2026-09-01T12:00:00Z",
+        "btc": 2,
+        "eth": 1,
+        "openLots": 3,
+        "liveLotsKnown": True,
+        "lots": [],
+    },
+    {
+        "name": "mom_48b_sma & twin",
+        "closed": 4,
+        "pnl": -20.0,
+        "wins": 1,
+        "open_lots": 1,
+        "champion_since": "2026-08-15T08:00:00Z",
+        "btc": 0,
+        "eth": 1,
+        "openLots": 1,
+        "liveLotsKnown": True,
+        "lots": [],
+    },
+    {
+        "name": "sma_abv_20",
+        "closed": 40,
+        "pnl": 15.0,
+        "wins": 22,
+        "open_lots": 0,
+        "champion_since": None,
+        "btc": 0,
+        "eth": 0,
+        "openLots": 0,
+        "liveLotsKnown": True,
+        "lots": [],
+    },
+]
+
+
+def _empty_champ_filters(**overrides) -> dict:
+    base = {
+        "name": "",
+        "since": "",
+        "btc": "",
+        "eth": "",
+        "openLots": "",
+        "closed": "",
+        "wins": "",
+        "pnl": "",
+    }
+    base.update(overrides)
+    return base
+
+
+def _champ_names(filters: dict, sort: dict | None = None) -> list[str]:
+    import json
+    import subprocess
+
+    sort = sort or {"key": "pnl", "dir": "desc"}
+    script = f"""
+import {{ applyChampionRows }} from {json.dumps(FILTERS_TS.as_posix())};
+const rows = {json.dumps(SAMPLE_CHAMPS)};
+const filters = {json.dumps(filters)};
+const sort = {json.dumps(sort)};
+const out = applyChampionRows(rows, filters, sort, (iso) => iso || "", (n) => n == null ? "—" : String(n));
+console.log(JSON.stringify(out.map((r) => r.name)));
+"""
+    proc = subprocess.run(
+        ["node", "--experimental-strip-types", "--input-type=module", "-e", script],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        raise AssertionError(f"champion filter harness failed:\n{proc.stderr or proc.stdout}")
+    return json.loads(proc.stdout.strip().splitlines()[-1])
+
+
+class ChampionFilterLogicTests(unittest.TestCase):
+    def test_name_ampersand_and_numeric_filters(self):
+        self.assertEqual(
+            _champ_names(_empty_champ_filters(name="&")),
+            ["mom_48b_sma & twin"],
+        )
+        self.assertEqual(
+            _champ_names(_empty_champ_filters(btc=">=1")),
+            ["dip_24b_and_wt_cross"],
+        )
+        self.assertEqual(
+            _champ_names(_empty_champ_filters(eth=">=1")),
+            ["dip_24b_and_wt_cross", "mom_48b_sma & twin"],
+        )
+        self.assertEqual(
+            _champ_names(_empty_champ_filters(pnl="<0")),
+            ["mom_48b_sma & twin"],
+        )
+
+    def test_default_sort_is_highest_pnl(self):
+        self.assertEqual(
+            _champ_names(_empty_champ_filters()),
+            ["dip_24b_and_wt_cross", "sma_abv_20", "mom_48b_sma & twin"],
+        )
+
+    def test_path_encodes_ampersand_and_slash(self):
+        import json
+        import subprocess
+
+        path_ts = REPO / "frontend" / "src" / "status" / "championPath.ts"
+        script = f"""
+import {{ championDetailPath, decodeChampionName }} from {json.dumps(path_ts.as_posix())};
+const names = ["mom_48b_sma & twin", "foo/bar", "a:b"];
+console.log(JSON.stringify(names.map((n) => [championDetailPath(n), decodeChampionName(championDetailPath(n).slice("/champions/".length))])));
+"""
+        proc = subprocess.run(
+            ["node", "--experimental-strip-types", "--input-type=module", "-e", script],
+            cwd=REPO,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if proc.returncode != 0:
+            raise AssertionError(f"path harness failed:\n{proc.stderr or proc.stdout}")
+        pairs = json.loads(proc.stdout.strip().splitlines()[-1])
+        self.assertEqual(pairs[0][0], "/champions/mom_48b_sma%20%26%20twin")
+        self.assertEqual(pairs[0][1], "mom_48b_sma & twin")
+        self.assertEqual(pairs[1][0], "/champions/foo%2Fbar")
+        self.assertEqual(pairs[1][1], "foo/bar")
+        self.assertEqual(pairs[2][1], "a:b")
 
 
 if __name__ == "__main__":
