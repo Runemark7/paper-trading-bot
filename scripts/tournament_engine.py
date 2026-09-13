@@ -56,6 +56,10 @@ from hedge_fund.trading.constants import (
     RISK_POLICY,
     TRADE_EVALUATION_LIMIT,
 )
+from hedge_fund.trading.discovery_guard import (
+    lookback_too_expensive_reason,
+    ops_fail_record,
+)
 from hedge_fund.trading.qualify import (
     oos_admission_score,
     qualification_decision,
@@ -252,6 +256,9 @@ def evaluate_strategy_record(
     Returns a discovery_log record, or None if the name does not parse.
     Same OOS gates as ``discover_and_qualify``. Picklable for ProcessPool.
     """
+    expensive = lookback_too_expensive_reason(name)
+    if expensive:
+        return ops_fail_record(name, expensive)
     try:
         pred = parse_strategy(name)
     except Exception:

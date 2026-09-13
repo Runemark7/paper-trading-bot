@@ -74,7 +74,25 @@ PAPER_DISCOVERY_INGEST_TOKEN=the-same-token-as-the-k8s-secret
 PAPER_DISCOVERY_INGEST_URL=https://trading.runevibe.se/api/discovery/ingest
 PAPER_STATE_DIR=./state
 DISCOVERY_WORKERS=2
+DISCOVERY_STRUCTURE_LOOKBACK_MAX=96
+DISCOVERY_EVAL_TIMEOUT_SECONDS=600
 ```
+
+`DISCOVERY_STRUCTURE_LOOKBACK_MAX` (default **96**) is the **primary** farm
+ops guard: before walk-forward, the worker parses `don_hi` / `don_lo` /
+`near_swing_*` / `dbl_bot_*` lookbacks. If any exceeds the cap it immediately
+POSTs `qualified=false` with `lookback_too_expensive N>96`, fail-once parks
+the name, clears that name from in-flight, and moves on. Leftover
+lookback-168 structure names are pathological O(n·k) and burned this PC
+for ~2h with no completed evals. This is **ops/throughput, not a gate
+softening** — OOS thresholds stay 30 trades / Sharpe ≥ 0.30 / beat B&H /
+beat `sma_stack`. Set to `0` to disable. Recipe still emits large
+lookbacks; the worker parks them so dry refill can continue.
+
+`DISCOVERY_EVAL_TIMEOUT_SECONDS` (default **600**) is a **coarse backstop
+only**. If a cheap-enough name still hangs, the worker fail-parks
+`eval_timeout after 600s`, recycles the multiprocessing pool, and
+continues. Set to `0` to disable.
 
 4. Start the farm:
 
@@ -187,3 +205,7 @@ the farm stays idle until Start.
   plus `MOM_FILTERS_HTF_DENSE`).
 - No culling champions.
 - Do not point `PAPER_STATE` at the cluster PVC.
+- Do not raise `DISCOVERY_STRUCTURE_LOOKBACK_MAX` / disable the timeout
+  to "give 168 another shot" — that is how this PC hung. Very large
+  structure lookbacks may hit the cap (or the 600s backstop) often;
+  that is intended. The recipe is not banned; fail-once is enough.

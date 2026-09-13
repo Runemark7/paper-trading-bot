@@ -14,6 +14,7 @@ from hedge_fund.trading.constants import (
     MIN_BACKTEST_TRADES,
     QUAL_N_WINDOWS,
 )
+from hedge_fund.trading.discovery_guard import is_ops_park_record
 
 WINDOW_VETO_REASON = "not all windows non-negative"
 WINDOW_SLOT_REASON_PREFIX = "window["
@@ -196,6 +197,8 @@ def requalify_parked_log(
         if row.get("qualified"):
             continue
         if name in existing_names:
+            continue
+        if is_ops_park_record(row):
             continue
         decision = qualification_from_record(row, expected_windows=expected_windows)
         if not decision["passed"]:

@@ -21,6 +21,8 @@ services:
       PAPER_DISCOVERY_INGEST_TOKEN: ${PAPER_DISCOVERY_INGEST_TOKEN}
       PAPER_DISCOVERY_BASE_URL: ${PAPER_DISCOVERY_BASE_URL:-https://trading.runevibe.se}
       DISCOVERY_WORKERS: ${DISCOVERY_WORKERS:-2}
+      DISCOVERY_STRUCTURE_LOOKBACK_MAX: ${DISCOVERY_STRUCTURE_LOOKBACK_MAX:-96}
+      DISCOVERY_EVAL_TIMEOUT_SECONDS: ${DISCOVERY_EVAL_TIMEOUT_SECONDS:-600}
     volumes:
       - ${PAPER_STATE_DIR:-./state}:/app/state
     entrypoint: ["python", "/app/scripts/discovery_worker.py"]
