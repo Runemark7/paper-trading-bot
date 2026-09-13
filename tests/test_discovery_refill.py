@@ -463,26 +463,47 @@ class RecipeBoundsTests(unittest.TestCase):
         self.assertIn("h4_ema_abv_12&mom_18b_gt2pc", names)
         self.assertIn("h4_ema_abv_48&mom_18b_gt4pc", names)
         self.assertIn("h4_sma_abv_24&mom_12b_gt6pc", names)
-        # 3-atom regime × entry × light structure.
-        self.assertIn("h4_ema_abv_24&dip_12b_lt2pc&near_swing_lo_12", names)
-        self.assertIn("h4_sma_abv_50&mom_36b_gt2pc&don_hi_24", names)
-        self.assertIn("h1_ema_abv_24&mom_18b_gt2pc&don_hi_12", names)
-        self.assertIn("h1_ema_abv_15&mom_18b_gt4pc&near_swing_lo_24", names)
+        # HTF×mom (and HTF×dip) are 2-atom only — no structure AND.
+        self.assertNotIn("h4_ema_abv_24&dip_12b_lt2pc&near_swing_lo_12", names)
+        self.assertNotIn("h4_sma_abv_50&mom_36b_gt2pc&don_hi_24", names)
+        self.assertNotIn("h1_ema_abv_24&mom_18b_gt2pc&don_hi_12", names)
+        self.assertNotIn("h1_ema_abv_15&mom_18b_gt4pc&near_swing_lo_24", names)
         self.assertTrue(
             any("h4_ema_abv_24" in n and ("mom_12b_gt2pc" in n or "sma_abv_20" in n) for n in names)
         )
         htf = _snapshot_htf_regime()
         self.assertEqual(names[: len(htf)], htf)
+        self.assertTrue(all(n.count("&") == 1 for n in htf), msg="HTF regime path must stay 2-atom")
+        self.assertFalse(
+            any(
+                any(tok.startswith(("don_hi_", "near_swing_lo_")) for tok in n.split("&"))
+                for n in htf
+            )
+        )
         self.assertLess(names.index("h4_ema_abv_24&sma_abv_20"), names.index("dip_6b_lt2pc&don_lo_6"))
-        # Per regime: HTF×mom (2-atom and 3-atom) before HTF×dip.
+        # Per regime: HTF×mom 2-atom before HTF×dip; no HTF×mom×structure.
+        mom_bases = MOM_FILTERS + MOM_FILTERS_HTF_DENSE + GRIND_FILTERS
         for regime in REGIME_ATOMS:
-            mom2 = next(n for n in names if n.startswith(f"{regime}&") and n.count("&") == 1 and any(m in n.split("&") for m in MOM_FILTERS + MOM_FILTERS_HTF_DENSE + GRIND_FILTERS))
-            dip2 = next(n for n in names if n.startswith(f"{regime}&") and n.count("&") == 1 and any(d in n.split("&") for d in DIP_FILTERS))
-            mom3 = next(n for n in names if n.startswith(f"{regime}&") and n.count("&") == 2 and any(m in n.split("&") for m in MOM_FILTERS + MOM_FILTERS_HTF_DENSE + GRIND_FILTERS))
-            dip3 = next(n for n in names if n.startswith(f"{regime}&") and n.count("&") == 2 and any(d in n.split("&") for d in DIP_FILTERS))
+            mom2 = next(
+                n for n in names
+                if n.startswith(f"{regime}&") and n.count("&") == 1
+                and any(m in n.split("&") for m in mom_bases)
+            )
+            dip2 = next(
+                n for n in names
+                if n.startswith(f"{regime}&") and n.count("&") == 1
+                and any(d in n.split("&") for d in DIP_FILTERS)
+            )
             self.assertLess(names.index(mom2), names.index(dip2), msg=regime)
-            self.assertLess(names.index(mom3), names.index(dip3), msg=regime)
-            self.assertLess(names.index(mom2), names.index(mom3), msg=regime)
+            self.assertFalse(
+                any(
+                    n.startswith(f"{regime}&")
+                    and "&mom_" in n
+                    and any(tok.startswith(("don_hi_", "near_swing_lo_")) for tok in n.split("&"))
+                    for n in names
+                ),
+                msg=regime,
+            )
         blob = " ".join(names)
         for needle in ("engulfing", "hammer", "doji", "wt_cross", "mfi_", "dbl_top_", "daily(", "h1("):
             self.assertNotIn(needle, blob)

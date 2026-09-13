@@ -1073,10 +1073,8 @@ class ProtocolAmendmentTests(unittest.TestCase):
             names.index("h1_ema_abv_24&mom_18b_gt4pc"),
             names.index("h1_ema_abv_24&dip_6b_lt2pc"),
         )
-        self.assertLess(
-            names.index("h1_ema_abv_24&mom_18b_gt2pc&don_hi_12"),
-            names.index("h1_ema_abv_24&dip_6b_lt2pc&don_hi_12"),
-        )
+        self.assertNotIn("h1_ema_abv_24&mom_18b_gt2pc&don_hi_12", names)
+        self.assertNotIn("h1_ema_abv_24&dip_6b_lt2pc&don_hi_12", names)
         self.assertLess(
             names.index("h1_ema_abv_15&mom_18b_gt2pc"),
             names.index("h1_ema_abv_15&dip_6b_lt2pc"),
@@ -1095,11 +1093,14 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertIn("MOM_FILTERS_HTF_DENSE", text)
         self.assertIn("h1_ema_abv_15", text)
         self.assertIn("mom_18b_gt4pc", text)
+        self.assertIn("2-atom only", text)
         self.assertIn("OOS **thresholds** are unchanged", text)
         self.assertIn("No named candlesticks", text)
         workflow = (REPO / "docs" / "WORKFLOW.md").read_text()
         self.assertIn("mom-before-dip", workflow)
         self.assertIn("h1_ema_abv_15", workflow)
+        self.assertIn("2-atom only", workflow)
+        self.assertIn("no structure AND", workflow.lower())
 
     def test_amendment_2026_09_13_champion_retain_cull(self):
         from hedge_fund.trading.constants import (
