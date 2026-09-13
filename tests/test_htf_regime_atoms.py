@@ -161,6 +161,9 @@ class ParseStrategyAcceptsTests(unittest.TestCase):
             "h1_ema_abv_20",
             "h1_ema_abv_30",
             "h1_ema_abv_36",
+            "h1_sma_abv_20",
+            "h1_sma_abv_24",
+            "h1_sma_abv_30",
             "h4_ema_abv_12",
             "h4_ema_abv_48",
             "h4_sma_abv_24",
@@ -229,6 +232,7 @@ class ParseStrategyAcceptsTests(unittest.TestCase):
         self.assertNotIn("h4_ema_abv_", blob)
         self.assertNotIn("h4_sma_abv_", blob)
         self.assertNotIn("h1_ema_abv_", blob)
+        self.assertNotIn("h1_sma_abv_", blob)
         self.assertNotIn("daily(", blob)
         self.assertNotIn("h1(", blob)
 
