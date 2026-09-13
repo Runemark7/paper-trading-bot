@@ -247,14 +247,36 @@ class BacktestResult:
     error: str | None = None
 
 
+# Trade-count Sharpe (mean/stdev * sqrt(n)). Real OOS windows stay well
+# below this. Tiny-variance series used to emit finite |Sharpe| ~ 1e13–1e15
+# (prod: dbl_bot_168 / dbl_bot_168&don_lo_168) and poison Discovery UI /
+# averages. Degenerate cases return 0.0 — the same sentinel used when
+# stdev is 0, and when the other backtest engine has std<=0.
+SHARPE_ABS_CAP = 1e3
+
+
 def _sharpe(pnl_pcts):
+    """Trade-count Sharpe, or 0.0 when the series is degenerate.
+
+    Returns 0.0 (never inf / NaN / astronomical) when there are fewer
+    than two returns, stdev is zero or not finite, any input is not
+    finite, or |mean/stdev * sqrt(n)| exceeds ``SHARPE_ABS_CAP``.
+    Tiny-but-nonzero stdev is treated as zero-variance: clamping the
+    huge ratio would still pass the OOS Sharpe floor and poison
+    averages, so we zero it.
+    """
     if len(pnl_pcts) < 2:
+        return 0.0
+    if not all(math.isfinite(x) for x in pnl_pcts):
         return 0.0
     m = statistics.mean(pnl_pcts)
     sd = statistics.stdev(pnl_pcts)
-    if sd == 0:
+    if sd == 0.0 or not math.isfinite(m) or not math.isfinite(sd):
         return 0.0
-    return m / sd * math.sqrt(len(pnl_pcts))
+    value = m / sd * math.sqrt(len(pnl_pcts))
+    if not math.isfinite(value) or abs(value) > SHARPE_ABS_CAP:
+        return 0.0
+    return float(value)
 
 
 def backtest(closes, highs, lows, strategy, start_cash=10_000.0,
