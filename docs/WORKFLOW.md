@@ -14,7 +14,7 @@ this file is the living topology.
 
 | Piece | Where | What it does |
 |---|---|---|
-| **Mint** | `hedge_fund/trading/refill.py` on the farm | Bounded DIP/MOM + structure AND recipe, plus densified HTF buyer-regime ANDs (`h1_ema_abv_{15,20,24,30}` / `h4_ema_abv_{12,24,48}` / `h4_sma_abv_{24,50}`). HTF×mom mint is **2-atom only** (`regime&mom`, including `MOM_FILTERS_HTF_DENSE`) — no structure AND on that family (or on HTF×dip). Recipe emits HTF×mom before HTF×dip — mom-before-dip. When never-tested leftovers run dry, the next handful is appended to `state/discovery_extended.json`. Static `generate_universe()` stays inside the ~40–120 compiled-list band. |
+| **Mint** | `hedge_fund/trading/refill.py` on the farm | Bounded DIP/MOM + structure AND recipe, plus densified HTF buyer-regime ANDs (`h1_ema_abv_{15,18,20,24,30,36}` / `h4_ema_abv_{12,24,48}` / `h4_sma_abv_{24,50}`). HTF×mom mint is **2-atom only** (`regime&mom`, including `MOM_FILTERS_HTF_DENSE`) — no structure AND on that family (or on HTF×dip). Recipe emits HTF×mom before HTF×dip — mom-before-dip — and `mom_18b_gt2pc` first among regime mom bases. When never-tested leftovers run dry, the next handful is appended to `state/discovery_extended.json`. Static `generate_universe()` stays inside the ~40–120 compiled-list band. |
 | **Farm** | Alexander's Windows PC (`jensa`) | `scripts/discovery_worker.py` evaluates names against local `state/crypto_history_5m.json` (Binance 5m, **BTC/USDT and ETH/USDT only**). Same fail-once / auto-refill / aggregate-OOS / `rm_v1` / 5m rules as `scripts/tournament_engine.py`. |
 | **Eval** | `parse_strategy` → walk-forward → backtest → gate | Name string → AND atoms on native 5m → 8 chronological ~90d windows → `rm_v1` paper backtest → aggregate OOS in `hedge_fund/trading/qualify.py`. |
 | **Ingest** | `POST /api/discovery/ingest` | Token-gated. Pass → champion + isolated paper book on k8s. Fail → parked forever (fail-once). Ingest never culls existing champions. |
@@ -125,20 +125,24 @@ wrappers stay refused. Topology is unchanged: mint → farm → gate.
 
 Atoms (discoverable, not one oracle): shipped v1 `h4_ema_abv_24`,
 `h4_sma_abv_50`, `h1_ema_abv_24`, plus densified periods
-`h1_ema_abv_15` / `h1_ema_abv_20` / `h1_ema_abv_30` /
-`h4_ema_abv_12` / `h4_ema_abv_48` / `h4_sma_abv_24` (kept distinct
-under `near_duplicate_key`). Long-only book: HTF sellers → no new
-long (flat), not short. When HTF says buyers and 5m is in a dip,
-that is buy-the-dip; disagree → HTF wins (no long). Recipe emits
-HTF×mom **2-atom only** (no `don_hi` / `near_swing_lo` AND on that
-family, and not on HTF×dip) **before** HTF×dip — mom-before-dip —
-then leftover mean-reversion. Short-continuation dense mom
-(`mom_18b_gt4pc` / `mom_18b_gt6pc` / `mom_12b_gt6pc`) ANDs onto
-every HTF tag. OOS gates are unchanged.
+`h1_ema_abv_15` / `h1_ema_abv_18` / `h1_ema_abv_20` /
+`h1_ema_abv_30` / `h1_ema_abv_36` /
+`h4_ema_abv_12` / `h4_ema_abv_48` / `h4_sma_abv_24`.
+`h1_ema_abv_36` stays distinct under `near_duplicate_key`;
+`h1_ema_abv_18` shares canon with `h1_ema_abv_20` (18→20) but
+the exact 18-period name is still in the recipe. Long-only book:
+HTF sellers → no new long (flat), not short. When HTF says buyers
+and 5m is in a dip, that is buy-the-dip; disagree → HTF wins
+(no long). Recipe emits HTF×mom **2-atom only** (no `don_hi` /
+`near_swing_lo` AND on that family, and not on HTF×dip) **before**
+HTF×dip — mom-before-dip — with `mom_18b_gt2pc` first among
+regime mom bases, then leftover mean-reversion. Short-continuation
+dense mom (`mom_18b_gt4pc` / `mom_18b_gt6pc` / `mom_12b_gt6pc`)
+ANDs onto every HTF tag. OOS gates are unchanged.
 
 ```mermaid
 flowchart TB
-  shipped["SHIPPED v1 + densify:\nh1_ema_abv_15/20/24/30\nh4_ema_abv_12/24/48\nh4_sma_abv_24/50"]
+  shipped["SHIPPED v1 + densify:\nh1_ema_abv_15/18/20/24/30/36\nh4_ema_abv_12/24/48\nh4_sma_abv_24/50"]
   order["mom-before-dip:\nHTF x mom 2-atom only\nthen HTF x dip 2-atom"]
   mintOnly["AND into refill recipe only\nnew names in discovery_extended.json"]
   sameEval["Same 5m walk-forward + rm_v1\n8 x 90d"]

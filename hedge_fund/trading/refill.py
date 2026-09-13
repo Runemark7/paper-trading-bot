@@ -29,7 +29,9 @@ Same-date later: densify HTF periods around the first natural
 OOS admit and emit HTF×mom (incl. a short-continuation dense
 mom set) before HTF×dip. Same-date later: HTF×mom (and HTF×dip)
 are 2-atom only — no ``don_hi`` / ``near_swing_lo`` AND on that
-family. Still no named candlesticks. OOS gates unchanged.
+family. Same-date later: densify ``h1_ema_abv_18`` / ``h1_ema_abv_36``
+around the admit island and emit ``mom_18b_gt2pc`` first on the
+regime path. Still no named candlesticks. OOS gates unchanged.
 """
 from __future__ import annotations
 
@@ -113,15 +115,18 @@ GRIND_FILTERS: tuple[str, ...] = CONTINUATION_TRENDS
 # Causal HTF buyer-regime (parse_strategy). Small set — not a candlestick zoo.
 # Long-only: sellers' HTF → atom False → no new long (flat).
 # Extra periods stay distinct under near_duplicate_key / _round_period
-# vs the shipped three (24→25, sma_50, h1/24→25). Skip 10 (collides
-# with 12→10) and ema_50 (collides with ema_48→50).
+# vs the shipped three (24→25, sma_50, h1/24→25), except 18→20
+# (same canon as 20; still minted). Skip 10 (collides with 12→10)
+# and ema_50 (collides with ema_48→50).
 REGIME_ATOMS: tuple[str, ...] = (
     "h4_ema_abv_24",
     "h4_sma_abv_50",
     "h1_ema_abv_24",
     "h1_ema_abv_15",
+    "h1_ema_abv_18",
     "h1_ema_abv_20",
     "h1_ema_abv_30",
+    "h1_ema_abv_36",
     "h4_ema_abv_12",
     "h4_ema_abv_48",
     "h4_sma_abv_24",
@@ -131,14 +136,27 @@ REGIME_ATOMS: tuple[str, ...] = (
 # mom_18b_gt3pc is the same canon as gt4 — emit the canon only.
 # Do not emit lbs that round onto parked 18b_gt2 (15/16/20).
 # 12b_gt4 / 24b_gt4 collide with legacy 12b_gt3 / 24b_gt5.
+# h1_ema_abv_18 → 20 (same canon as 20); still in the recipe so the
+# exact 18-period name evaluates. next_refill_batch skips it when
+# 20&same_entry is already taken. h1_ema_abv_36 → 35 (distinct).
 MOM_FILTERS_HTF_DENSE: tuple[str, ...] = (
     "mom_18b_gt4pc",
     "mom_18b_gt6pc",
     "mom_12b_gt6pc",
 )
-# Mom / grind / continuation first so dry refill prefers HTF×mom
-# over HTF×dip (dip 3-atoms were chewing the farm after #48).
-REGIME_MOM_BASES: tuple[str, ...] = MOM_FILTERS + MOM_FILTERS_HTF_DENSE + GRIND_FILTERS
+# Regime-path mom order: winning-neighborhood first so dry refill
+# emits HTF×mom_18b_gt2pc before leftover mom / dense / grind.
+# Public MOM_FILTERS (leftover structure families) stay as-is.
+REGIME_MOM_PRIORITY: tuple[str, ...] = (
+    "mom_18b_gt2pc",
+    "mom_12b_gt2pc",
+    "mom_24b_gt2pc",
+)
+REGIME_MOM_BASES: tuple[str, ...] = REGIME_MOM_PRIORITY + tuple(
+    m
+    for m in (MOM_FILTERS + MOM_FILTERS_HTF_DENSE + GRIND_FILTERS)
+    if m not in REGIME_MOM_PRIORITY
+)
 REGIME_DIP_BASES: tuple[str, ...] = DIP_FILTERS
 # Existing 5m entry bases the HTF tag ANDs onto (mom-first ∪ dip).
 REGIME_ENTRY_BASES: tuple[str, ...] = REGIME_MOM_BASES + REGIME_DIP_BASES
@@ -457,9 +475,11 @@ def _regime_ands() -> Iterator[str]:
     Same-date later: denser HTF periods + short-continuation mom.
     Same-date later: 2-atom only. Structure ANDs on HTF×mom (and
     HTF×dip) destroy the mild-continuation edge that clears the
-    frozen gate. Emit ``regime&mom`` then ``regime&dip`` — no
-    ``regime&entry&don_hi`` / ``near_swing_lo``. Dry refill mints
-    never-tested HTF×mom 2-atoms ahead of HTF×dip.
+    frozen gate. Same-date later: ``h1_ema_abv_18`` / ``36`` and
+    ``mom_18b_gt2pc`` first among regime mom bases. Emit
+    ``regime&mom`` then ``regime&dip`` — no ``regime&entry&don_hi``
+    / ``near_swing_lo``. Dry refill mints never-tested HTF×mom
+    2-atoms ahead of HTF×dip.
     HTF False → no new long (flat). No named candlesticks.
     """
     yield from _regime_pair_ands(REGIME_MOM_BASES)
