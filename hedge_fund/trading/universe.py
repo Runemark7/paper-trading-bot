@@ -26,7 +26,9 @@ and continuation ANDs, then the 2026-09-13 pass adds 1% grind bases
 and full short-MA 3-atoms (farm picks them up; this static list stays put).
 Amendment 2026-09-13 later: parser accepts causal HTF buyer-regime atoms
 (``h4_ema_abv_24`` / ``h4_sma_abv_50`` / ``h1_ema_abv_24``); the refill
-recipe ANDs them onto existing 5m bases. This static list stays put.
+recipe ANDs them onto existing 5m bases. Same-date later: densified HTF
+periods and mom-before-dip order live in ``refill.py``. This static list
+stays put.
 Trend / breakout /
 momentum stay as sma_stack/sma_abv, don_hi_*, mom_* — not a second stack.
 Near-duplicate keys collapse tiny param tweaks.

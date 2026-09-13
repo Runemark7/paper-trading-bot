@@ -27,10 +27,13 @@ from hedge_fund.trading.refill import (
     LEVEL_TRENDS,
     MOM_FILTERS,
     MOM_FILTERS_GRIND,
+    MOM_FILTERS_HTF_DENSE,
     MOM_FILTERS_LEGACY,
     MOM_FILTERS_WIDE,
     REGIME_ATOMS,
+    REGIME_DIP_BASES,
     REGIME_ENTRY_BASES,
+    REGIME_MOM_BASES,
     REGIME_STRUCTURE_NS,
     REGIME_STRUCTURE_TAGS,
     STACK_TREND,
@@ -214,7 +217,7 @@ class RecipeBoundsTests(unittest.TestCase):
     def test_recipe_is_finite_and_not_tens_of_thousands(self):
         names = list(iter_recipe_names())
         self.assertGreater(len(names), 1500)
-        self.assertLessEqual(len(names), 5500)
+        self.assertLessEqual(len(names), 8000)
         self.assertEqual(len(STRUCTURE_NS), 22)
         self.assertEqual(STRUCTURE_NS_THROUGH_96[-2:], (84, 96))
         self.assertIn(84, STRUCTURE_NS)
@@ -275,16 +278,36 @@ class RecipeBoundsTests(unittest.TestCase):
         )
         self.assertEqual(CONTINUATION_TRENDS, ("sma_abv_20", "ema_abv_20"))
         self.assertEqual(GRIND_FILTERS, CONTINUATION_TRENDS)
-        self.assertEqual(REGIME_ATOMS, ("h4_ema_abv_24", "h4_sma_abv_50", "h1_ema_abv_24"))
+        self.assertEqual(
+            REGIME_ATOMS,
+            (
+                "h4_ema_abv_24",
+                "h4_sma_abv_50",
+                "h1_ema_abv_24",
+                "h1_ema_abv_15",
+                "h1_ema_abv_20",
+                "h1_ema_abv_30",
+                "h4_ema_abv_12",
+                "h4_ema_abv_48",
+                "h4_sma_abv_24",
+            ),
+        )
+        self.assertEqual(
+            MOM_FILTERS_HTF_DENSE,
+            ("mom_18b_gt4pc", "mom_18b_gt6pc", "mom_12b_gt6pc"),
+        )
         self.assertEqual(REGIME_STRUCTURE_NS, (12, 24, 48))
         self.assertEqual(REGIME_STRUCTURE_TAGS, ("don_hi", "near_swing_lo"))
-        self.assertEqual(REGIME_ENTRY_BASES, DIP_FILTERS + MOM_FILTERS + GRIND_FILTERS)
+        self.assertEqual(REGIME_MOM_BASES, MOM_FILTERS + MOM_FILTERS_HTF_DENSE + GRIND_FILTERS)
+        self.assertEqual(REGIME_DIP_BASES, DIP_FILTERS)
+        self.assertEqual(REGIME_ENTRY_BASES, REGIME_MOM_BASES + REGIME_DIP_BASES)
         self.assertEqual(DISCOVERY_REFILL_BATCH_SIZE, 16)
         self.assertLessEqual(DISCOVERY_REFILL_BATCH_SIZE, 24)
         self.assertGreaterEqual(DISCOVERY_REFILL_BATCH_SIZE, 8)
         # Frozen OOS gate — recipe expansion must not touch these.
         self.assertEqual(MIN_BACKTEST_TRADES, 30)
         self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
+        self.assertEqual(QUAL_N_WINDOWS, 8)
         # Later passes sit on top of 09-11 / morning near-level, not a rewrite.
         self.assertGreater(len(names), len(_snapshot_2026_09_11_recipe(STRUCTURE_NS)))
         self.assertGreater(len(names), len(_snapshot_2026_09_12_morning()))
@@ -432,21 +455,81 @@ class RecipeBoundsTests(unittest.TestCase):
         self.assertIn("h4_ema_abv_24&mom_12b_gt2pc", names)
         self.assertIn("h4_sma_abv_50&dip_12b_lt2pc", names)
         self.assertIn("h1_ema_abv_24&ema_abv_20", names)
+        # Densified HTF × winning-neighborhood mom (parser-allowed, distinct).
+        self.assertIn("h1_ema_abv_15&mom_18b_gt2pc", names)
+        self.assertIn("h1_ema_abv_20&mom_18b_gt2pc", names)
+        self.assertIn("h1_ema_abv_30&mom_18b_gt2pc", names)
+        self.assertIn("h1_ema_abv_24&mom_18b_gt4pc", names)
+        self.assertIn("h4_ema_abv_12&mom_18b_gt2pc", names)
+        self.assertIn("h4_ema_abv_48&mom_18b_gt4pc", names)
+        self.assertIn("h4_sma_abv_24&mom_12b_gt6pc", names)
         # 3-atom regime × entry × light structure.
         self.assertIn("h4_ema_abv_24&dip_12b_lt2pc&near_swing_lo_12", names)
         self.assertIn("h4_sma_abv_50&mom_36b_gt2pc&don_hi_24", names)
+        self.assertIn("h1_ema_abv_24&mom_18b_gt2pc&don_hi_12", names)
+        self.assertIn("h1_ema_abv_15&mom_18b_gt4pc&near_swing_lo_24", names)
         self.assertTrue(
             any("h4_ema_abv_24" in n and ("mom_12b_gt2pc" in n or "sma_abv_20" in n) for n in names)
         )
         htf = _snapshot_htf_regime()
         self.assertEqual(names[: len(htf)], htf)
         self.assertLess(names.index("h4_ema_abv_24&sma_abv_20"), names.index("dip_6b_lt2pc&don_lo_6"))
+        # Per regime: HTF×mom (2-atom and 3-atom) before HTF×dip.
+        for regime in REGIME_ATOMS:
+            mom2 = next(n for n in names if n.startswith(f"{regime}&") and n.count("&") == 1 and any(m in n.split("&") for m in MOM_FILTERS + MOM_FILTERS_HTF_DENSE + GRIND_FILTERS))
+            dip2 = next(n for n in names if n.startswith(f"{regime}&") and n.count("&") == 1 and any(d in n.split("&") for d in DIP_FILTERS))
+            mom3 = next(n for n in names if n.startswith(f"{regime}&") and n.count("&") == 2 and any(m in n.split("&") for m in MOM_FILTERS + MOM_FILTERS_HTF_DENSE + GRIND_FILTERS))
+            dip3 = next(n for n in names if n.startswith(f"{regime}&") and n.count("&") == 2 and any(d in n.split("&") for d in DIP_FILTERS))
+            self.assertLess(names.index(mom2), names.index(dip2), msg=regime)
+            self.assertLess(names.index(mom3), names.index(dip3), msg=regime)
+            self.assertLess(names.index(mom2), names.index(mom3), msg=regime)
         blob = " ".join(names)
         for needle in ("engulfing", "hammer", "doji", "wt_cross", "mfi_", "dbl_top_", "daily(", "h1("):
             self.assertNotIn(needle, blob)
         # Wrappers stay refused; token atoms are not wrappers.
         self.assertFalse(name_is_refused("h4_ema_abv_24&dip_12b_lt2pc"))
         self.assertTrue(name_is_refused("h1(sma_abv_50)"))
+        self.assertTrue(name_is_parseable("h1_ema_abv_15&mom_18b_gt2pc"))
+        self.assertTrue(name_is_parseable("h1_ema_abv_24&mom_18b_gt4pc"))
+        self.assertFalse(name_is_parseable("h1_sma_abv_24&mom_18b_gt2pc"))
+
+    def test_htf_dense_atoms_parse_and_stay_distinct(self):
+        parked_htf = {
+            near_duplicate_key("h4_ema_abv_24"),
+            near_duplicate_key("h4_sma_abv_50"),
+            near_duplicate_key("h1_ema_abv_24"),
+        }
+        new_htf = (
+            "h1_ema_abv_15",
+            "h1_ema_abv_20",
+            "h1_ema_abv_30",
+            "h4_ema_abv_12",
+            "h4_ema_abv_48",
+            "h4_sma_abv_24",
+        )
+        seen = set(parked_htf)
+        for atom in new_htf:
+            self.assertTrue(name_is_parseable(atom), msg=atom)
+            parse_strategy(atom)
+            key = near_duplicate_key(atom)
+            self.assertNotIn(key, seen, msg=atom)
+            seen.add(key)
+        parked_mom = {near_duplicate_key(n) for n in MOM_FILTERS}
+        seen_mom = set(parked_mom)
+        for atom in MOM_FILTERS_HTF_DENSE:
+            self.assertTrue(name_is_parseable(atom), msg=atom)
+            parse_strategy(atom)
+            key = near_duplicate_key(atom)
+            self.assertNotIn(key, seen_mom, msg=atom)
+            seen_mom.add(key)
+        # gt3pc is the same canon as the emitted gt4; 16b/20b collapse onto 18b_gt2.
+        self.assertEqual(near_duplicate_key("mom_18b_gt3pc"), near_duplicate_key("mom_18b_gt4pc"))
+        self.assertEqual(near_duplicate_key("mom_16b_gt2pc"), near_duplicate_key("mom_18b_gt2pc"))
+        self.assertEqual(near_duplicate_key("mom_20b_gt2pc"), near_duplicate_key("mom_18b_gt2pc"))
+        self.assertEqual(near_duplicate_key("h4_ema_abv_10"), near_duplicate_key("h4_ema_abv_12"))
+        self.assertEqual(near_duplicate_key("h4_ema_abv_50"), near_duplicate_key("h4_ema_abv_48"))
+        self.assertNotIn("mom_16b_gt2pc", MOM_FILTERS_HTF_DENSE)
+        self.assertNotIn("mom_18b_gt3pc", MOM_FILTERS_HTF_DENSE)
 
     def test_wide_bases_do_not_near_dup_legacy_filters(self):
         legacy_keys = {near_duplicate_key(n) for n in DIP_FILTERS_LEGACY + MOM_FILTERS_LEGACY}
@@ -458,6 +541,10 @@ class RecipeBoundsTests(unittest.TestCase):
             key = near_duplicate_key(name)
             self.assertNotIn(key, legacy_keys, msg=f"{name} collapses onto {key}")
             self.assertNotIn(key, wide_keys, msg=f"{name} collapses onto {key}")
+        parked_mom = {near_duplicate_key(n) for n in MOM_FILTERS}
+        for name in MOM_FILTERS_HTF_DENSE:
+            key = near_duplicate_key(name)
+            self.assertNotIn(key, parked_mom, msg=f"{name} collapses onto {key}")
         prior = _snapshot_2026_09_12_leftover()
         prior_keys = {near_duplicate_key(n) for n in prior}
         novel = 0

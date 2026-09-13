@@ -25,7 +25,10 @@ distinct) and expands short-MA 3-atoms onto every WIDE mom/dip ×
 ``don_hi`` / ``near_swing_hi``. Same-date later: causal HTF
 buyer-regime atoms (``h4_ema_abv_24`` / ``h4_sma_abv_50`` /
 ``h1_ema_abv_24``) AND onto those DIP/MOM/WIDE/GRIND bases.
-Still no named candlesticks. OOS gates unchanged.
+Same-date later: densify HTF periods around the first natural
+OOS admit and emit HTF×mom (incl. a short-continuation dense
+mom set) before HTF×dip. Still no named candlesticks. OOS gates
+unchanged.
 """
 from __future__ import annotations
 
@@ -108,13 +111,36 @@ GRIND_FILTERS: tuple[str, ...] = CONTINUATION_TRENDS
 
 # Causal HTF buyer-regime (parse_strategy). Small set — not a candlestick zoo.
 # Long-only: sellers' HTF → atom False → no new long (flat).
+# Extra periods stay distinct under near_duplicate_key / _round_period
+# vs the shipped three (24→25, sma_50, h1/24→25). Skip 10 (collides
+# with 12→10) and ema_50 (collides with ema_48→50).
 REGIME_ATOMS: tuple[str, ...] = (
     "h4_ema_abv_24",
     "h4_sma_abv_50",
     "h1_ema_abv_24",
+    "h1_ema_abv_15",
+    "h1_ema_abv_20",
+    "h1_ema_abv_30",
+    "h4_ema_abv_12",
+    "h4_ema_abv_48",
+    "h4_sma_abv_24",
 )
-# Existing 5m entry bases the HTF tag ANDs onto (legacy ∪ wide ∪ grind).
-REGIME_ENTRY_BASES: tuple[str, ...] = DIP_FILTERS + MOM_FILTERS + GRIND_FILTERS
+# Short-continuation mom around the first admit (12–24b / gt2–gt4).
+# near_duplicate_key: lb rounds to 6, thr to even. gt3pc→gt4pc so
+# mom_18b_gt3pc is the same canon as gt4 — emit the canon only.
+# Do not emit lbs that round onto parked 18b_gt2 (15/16/20).
+# 12b_gt4 / 24b_gt4 collide with legacy 12b_gt3 / 24b_gt5.
+MOM_FILTERS_HTF_DENSE: tuple[str, ...] = (
+    "mom_18b_gt4pc",
+    "mom_18b_gt6pc",
+    "mom_12b_gt6pc",
+)
+# Mom / grind / continuation first so dry refill prefers HTF×mom
+# over HTF×dip (dip 3-atoms were chewing the farm after #48).
+REGIME_MOM_BASES: tuple[str, ...] = MOM_FILTERS + MOM_FILTERS_HTF_DENSE + GRIND_FILTERS
+REGIME_DIP_BASES: tuple[str, ...] = DIP_FILTERS
+# Existing 5m entry bases the HTF tag ANDs onto (mom-first ∪ dip).
+REGIME_ENTRY_BASES: tuple[str, ...] = REGIME_MOM_BASES + REGIME_DIP_BASES
 # Light support / breakout tags — not every STRUCTURE_NS.
 REGIME_STRUCTURE_NS: tuple[int, ...] = (12, 24, 48)
 REGIME_STRUCTURE_TAGS: tuple[str, ...] = ("don_hi", "near_swing_lo")
@@ -417,22 +443,33 @@ def _grind_participation_ands(n: int) -> Iterator[str]:
         yield f"{dip}&near_swing_hi_{n}"
 
 
-def _regime_ands() -> Iterator[str]:
-    """2026-09-13: HTF buyer-regime AND existing 5m DIP/MOM/WIDE/GRIND.
-
-    Emit ``regime&entry`` then ``regime&entry&structure`` (don_hi /
-    near_swing_lo at a light N set) so the next dry refill picks them
-    ahead of leftover mean-reversion. HTF False → no new long (flat).
-    No named candlesticks, no volume folklore.
-    """
+def _regime_pair_ands(entries: tuple[str, ...]) -> Iterator[str]:
     for regime in REGIME_ATOMS:
-        for entry in REGIME_ENTRY_BASES:
+        for entry in entries:
             yield f"{regime}&{entry}"
+
+
+def _regime_triple_ands(entries: tuple[str, ...]) -> Iterator[str]:
     for regime in REGIME_ATOMS:
-        for entry in REGIME_ENTRY_BASES:
+        for entry in entries:
             for n in REGIME_STRUCTURE_NS:
                 for tag in REGIME_STRUCTURE_TAGS:
                     yield f"{regime}&{entry}&{tag}_{n}"
+
+
+def _regime_ands() -> Iterator[str]:
+    """2026-09-13: HTF buyer-regime AND existing 5m DIP/MOM/WIDE/GRIND.
+
+    Same-date later: denser HTF periods + short-continuation mom.
+    Mom / grind 2-atoms for every regime, then dip 2-atoms, then the
+    same split for 3-atoms (``don_hi`` / ``near_swing_lo``). Dry refill
+    therefore mints HTF×mom (and HTF×mom×structure) ahead of HTF×dip.
+    HTF False → no new long (flat). No named candlesticks.
+    """
+    yield from _regime_pair_ands(REGIME_MOM_BASES)
+    yield from _regime_pair_ands(REGIME_DIP_BASES)
+    yield from _regime_triple_ands(REGIME_MOM_BASES)
+    yield from _regime_triple_ands(REGIME_DIP_BASES)
 
 
 def _trend_participation_ands(n: int) -> Iterator[str]:
@@ -466,12 +503,12 @@ def iter_recipe_names() -> Iterator[str]:
     """Deterministic bounded stream. Not a full cartesian of every atom.
 
     HTF buyer-regime families are first so a dry refill mints
-    ``regime&entry`` / ``regime&entry&structure`` ahead of leftover
-    mean-reversion. Grind 1% 2-atoms and wide / short-MA continuation
-    follow, then legacy 2026-09-11 families, the 2026-09-12 near-level
-    pass, then leftover TREND / ema_stack / 3-atom families.
-    Dip×support and short-horizon mom stay on the frozen 3×3.
-    No WaveTrend, no MFI.
+    ``regime&mom`` / ``regime&mom&structure`` ahead of HTF×dip and
+    leftover mean-reversion. Grind 1% 2-atoms and wide / short-MA
+    continuation follow, then legacy 2026-09-11 families, the
+    2026-09-12 near-level pass, then leftover TREND / ema_stack /
+    3-atom families. Dip×support and short-horizon mom stay on the
+    frozen 3×3. No WaveTrend, no MFI.
     """
     yield from _regime_ands()
     for n in STRUCTURE_NS:

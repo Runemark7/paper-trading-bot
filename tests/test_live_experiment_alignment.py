@@ -567,7 +567,7 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertIn(84, STRUCTURE_NS)
         self.assertIn(96, STRUCTURE_NS)
         self.assertIn("through 96", text)
-        self.assertLessEqual(len(list(iter_recipe_names())), 5500)
+        self.assertLessEqual(len(list(iter_recipe_names())), 8000)
         self.assertLessEqual(len(generate_universe()), UNIVERSE_TARGET_MAX)
         readme = (REPO / "README.md").read_text()
         self.assertIn("near-level", readme)
@@ -655,7 +655,7 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertEqual(len(STRUCTURE_NS), 22)
         names = list(iter_recipe_names())
         self.assertGreater(len(names), 1500)
-        self.assertLessEqual(len(names), 5500)
+        self.assertLessEqual(len(names), 8000)
         uni = generate_universe()
         self.assertLessEqual(len(uni), UNIVERSE_TARGET_MAX)
         added = next_refill_batch(taken_names=uni, n=DISCOVERY_REFILL_BATCH_SIZE)
@@ -756,7 +756,7 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertEqual(CONTINUATION_TRENDS, ("sma_abv_20", "ema_abv_20"))
         names = list(iter_recipe_names())
         self.assertGreater(len(names), 1500)
-        self.assertLessEqual(len(names), 5500)
+        self.assertLessEqual(len(names), 8000)
         self.assertIn("mom_36b_gt2pc&don_hi_12", names)
         self.assertIn("dip_12b_lt2pc&near_swing_hi_24", names)
         self.assertIn("sma_abv_20&don_hi_12", names)
@@ -947,7 +947,7 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertEqual(CONTINUATION_TRENDS, ("sma_abv_20", "ema_abv_20"))
         names = list(iter_recipe_names())
         self.assertGreater(len(names), 1500)
-        self.assertLessEqual(len(names), 5500)
+        self.assertLessEqual(len(names), 8000)
         self.assertIn("mom_30b_gt1pc&don_hi_12", names)
         self.assertIn("dip_42b_lt1pc&near_swing_hi_24", names)
         self.assertIn("mom_12b_gt2pc&near_swing_hi_12&ema_abv_20", names)
@@ -998,7 +998,10 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertEqual(QUAL_N_WINDOWS, 8)
         self.assertEqual(DISCOVERY_LOG_CAP, 10000)
         self.assertEqual(DISCOVERY_REFILL_BATCH_SIZE, 16)
-        self.assertEqual(REGIME_ATOMS, ("h4_ema_abv_24", "h4_sma_abv_50", "h1_ema_abv_24"))
+        self.assertEqual(
+            REGIME_ATOMS[:3],
+            ("h4_ema_abv_24", "h4_sma_abv_50", "h1_ema_abv_24"),
+        )
         self.assertEqual(GRIND_FILTERS, ("sma_abv_20", "ema_abv_20"))
 
         for atom in REGIME_ATOMS:
@@ -1010,7 +1013,7 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertIn("h4_ema_abv_24&mom_12b_gt2pc", names)
         self.assertLess(names.index("h4_ema_abv_24&sma_abv_20"), names.index("dip_6b_lt2pc&don_lo_6"))
         self.assertGreater(len(names), 1500)
-        self.assertLessEqual(len(names), 5500)
+        self.assertLessEqual(len(names), 8000)
         uni = generate_universe()
         self.assertLessEqual(len(uni), UNIVERSE_TARGET_MAX)
         added = next_refill_batch(taken_names=uni, n=DISCOVERY_REFILL_BATCH_SIZE)
@@ -1040,6 +1043,63 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertIn("QUAL_N_WINDOWS", readme)
         runbook = (REPO / "docs" / "WINDOWS_DISCOVERY.md").read_text()
         self.assertIn("h4_ema_abv_24", runbook)
+
+    def test_amendment_2026_09_13_htf_dense_mom_before_dip(self):
+        from hedge_fund.trading.constants import (
+            MIN_BACKTEST_SHARPE,
+            MIN_BACKTEST_TRADES,
+            QUAL_N_WINDOWS,
+        )
+        from hedge_fund.trading.refill import (
+            MOM_FILTERS_HTF_DENSE,
+            REGIME_ATOMS,
+            REGIME_DIP_BASES,
+            REGIME_MOM_BASES,
+            iter_recipe_names,
+            name_is_parseable,
+        )
+
+        self.assertEqual(MIN_BACKTEST_TRADES, 30)
+        self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
+        self.assertEqual(QUAL_N_WINDOWS, 8)
+        self.assertIn("h1_ema_abv_15", REGIME_ATOMS)
+        self.assertIn("h1_ema_abv_20", REGIME_ATOMS)
+        self.assertIn("h1_ema_abv_30", REGIME_ATOMS)
+        self.assertEqual(MOM_FILTERS_HTF_DENSE, ("mom_18b_gt4pc", "mom_18b_gt6pc", "mom_12b_gt6pc"))
+        for atom in (*REGIME_ATOMS, *MOM_FILTERS_HTF_DENSE):
+            self.assertTrue(name_is_parseable(atom), msg=atom)
+        names = list(iter_recipe_names())
+        self.assertLess(
+            names.index("h1_ema_abv_24&mom_18b_gt4pc"),
+            names.index("h1_ema_abv_24&dip_6b_lt2pc"),
+        )
+        self.assertLess(
+            names.index("h1_ema_abv_24&mom_18b_gt2pc&don_hi_12"),
+            names.index("h1_ema_abv_24&dip_6b_lt2pc&don_hi_12"),
+        )
+        self.assertLess(
+            names.index("h1_ema_abv_15&mom_18b_gt2pc"),
+            names.index("h1_ema_abv_15&dip_6b_lt2pc"),
+        )
+        self.assertEqual(names.index("h4_ema_abv_24&" + REGIME_MOM_BASES[0]), 0)
+        first_dip = next(n for n in names if any(n.endswith("&" + d) or f"&{d}&" in n for d in REGIME_DIP_BASES[:1]))
+        self.assertGreater(names.index(first_dip), names.index("h4_ema_abv_24&mom_18b_gt4pc"))
+        self.assertLessEqual(len(names), 8000)
+        blob = " ".join(names)
+        for needle in ("wt_cross", "mfi_", "engulfing", "hammer", "doji"):
+            self.assertNotIn(needle, blob)
+
+        text = (REPO / "PROTOCOL.md").read_text()
+        self.assertIn("HTF densify", text)
+        self.assertIn("mom-before-dip", text)
+        self.assertIn("MOM_FILTERS_HTF_DENSE", text)
+        self.assertIn("h1_ema_abv_15", text)
+        self.assertIn("mom_18b_gt4pc", text)
+        self.assertIn("OOS **thresholds** are unchanged", text)
+        self.assertIn("No named candlesticks", text)
+        workflow = (REPO / "docs" / "WORKFLOW.md").read_text()
+        self.assertIn("mom-before-dip", workflow)
+        self.assertIn("h1_ema_abv_15", workflow)
 
 
 class IsolatedRunnerTests(unittest.TestCase):
