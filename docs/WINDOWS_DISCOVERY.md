@@ -173,6 +173,7 @@ the farm stays idle until Start.
   Auto-refill already walks the expanded Donchian / swing / near-level
   recipe (lookbacks through 192, leftover TREND / ema_stack ANDs, wider
   dip/mom bases and continuation ANDs, plus 1% grind bases and full
-  short-MA 3-atoms).
+  short-MA 3-atoms, plus causal HTF buyer-regime ANDs —
+  `h4_ema_abv_24` / `h4_sma_abv_50` / `h1_ema_abv_24`).
 - No culling champions.
 - Do not point `PAPER_STATE` at the cluster PVC.

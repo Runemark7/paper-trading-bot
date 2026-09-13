@@ -907,6 +907,7 @@ class ProtocolAmendmentTests(unittest.TestCase):
             CONTINUATION_TRENDS,
             DIP_FILTERS_GRIND,
             MOM_FILTERS_GRIND,
+            _regime_ands,
             iter_recipe_names,
             next_refill_batch,
         )
@@ -956,7 +957,11 @@ class ProtocolAmendmentTests(unittest.TestCase):
         )
         uni = generate_universe()
         self.assertLessEqual(len(uni), UNIVERSE_TARGET_MAX)
-        added = next_refill_batch(taken_names=uni, n=DISCOVERY_REFILL_BATCH_SIZE)
+        # HTF regime family is first; grind 1% is the next mint after those.
+        added = next_refill_batch(
+            taken_names=set(uni) | set(_regime_ands()),
+            n=DISCOVERY_REFILL_BATCH_SIZE,
+        )
         self.assertEqual(len(added), DISCOVERY_REFILL_BATCH_SIZE)
         self.assertTrue(any("gt1pc" in n or "lt1pc" in n for n in added))
         readme = (REPO / "README.md").read_text()
@@ -965,6 +970,76 @@ class ProtocolAmendmentTests(unittest.TestCase):
         runbook = (REPO / "docs" / "WINDOWS_DISCOVERY.md").read_text()
         self.assertIn("1% grind", runbook)
         self.assertIn("short-MA 3-atoms", runbook)
+
+    def test_amendment_2026_09_13_htf_buyer_regime(self):
+        from hedge_fund.trading.constants import (
+            DISCOVERY_LOG_CAP,
+            DISCOVERY_REFILL_BATCH_SIZE,
+            MIN_BACKTEST_SHARPE,
+            MIN_BACKTEST_TRADES,
+            QUAL_N_WINDOWS,
+            QUAL_TIMEFRAME,
+            RISK_POLICY,
+        )
+        from hedge_fund.signals.dynamic import parse_strategy
+        from hedge_fund.trading.refill import (
+            GRIND_FILTERS,
+            REGIME_ATOMS,
+            iter_recipe_names,
+            name_is_parseable,
+            next_refill_batch,
+        )
+        from hedge_fund.trading.universe import UNIVERSE_TARGET_MAX, generate_universe
+
+        self.assertEqual(QUAL_TIMEFRAME, "5m")
+        self.assertEqual(RISK_POLICY, "rm_v1")
+        self.assertEqual(MIN_BACKTEST_TRADES, 30)
+        self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
+        self.assertEqual(QUAL_N_WINDOWS, 8)
+        self.assertEqual(DISCOVERY_LOG_CAP, 10000)
+        self.assertEqual(DISCOVERY_REFILL_BATCH_SIZE, 16)
+        self.assertEqual(REGIME_ATOMS, ("h4_ema_abv_24", "h4_sma_abv_50", "h1_ema_abv_24"))
+        self.assertEqual(GRIND_FILTERS, ("sma_abv_20", "ema_abv_20"))
+
+        for atom in REGIME_ATOMS:
+            parse_strategy(atom)
+            self.assertTrue(name_is_parseable(f"{atom}&sma_abv_20"))
+
+        names = list(iter_recipe_names())
+        self.assertIn("h4_ema_abv_24&sma_abv_20", names)
+        self.assertIn("h4_ema_abv_24&mom_12b_gt2pc", names)
+        self.assertLess(names.index("h4_ema_abv_24&sma_abv_20"), names.index("dip_6b_lt2pc&don_lo_6"))
+        self.assertGreater(len(names), 1500)
+        self.assertLessEqual(len(names), 5500)
+        uni = generate_universe()
+        self.assertLessEqual(len(uni), UNIVERSE_TARGET_MAX)
+        added = next_refill_batch(taken_names=uni, n=DISCOVERY_REFILL_BATCH_SIZE)
+        self.assertEqual(len(added), DISCOVERY_REFILL_BATCH_SIZE)
+        self.assertTrue(all(n.startswith(("h4_", "h1_")) for n in added), added)
+        self.assertTrue(any("h4_" in n and ("gt2pc" in n or "lt2pc" in n or "sma_abv_20" in n or "lt1pc" in n) for n in added))
+
+        text = (REPO / "PROTOCOL.md").read_text()
+        self.assertIn("Amendment 2026-09-13 — causal HTF buyer-regime atoms", text)
+        self.assertIn("h4_ema_abv_24", text)
+        self.assertIn("h4_sma_abv_50", text)
+        self.assertIn("h1_ema_abv_24", text)
+        self.assertIn("Mint/parser only", text)
+        self.assertIn("completed HTF bars", text)
+        self.assertIn("OOS **thresholds** are unchanged", text)
+        self.assertIn("QUAL_N_WINDOWS` = 8", text)
+        self.assertIn("No named candlesticks", text)
+
+        workflow = (REPO / "docs" / "WORKFLOW.md").read_text()
+        self.assertIn("shipped v1", workflow)
+        self.assertIn("h4_ema_abv_24", workflow)
+        self.assertNotIn("planned, not shipped", workflow.lower())
+        self.assertIn("mint → farm → gate", workflow)
+
+        readme = (REPO / "README.md").read_text()
+        self.assertIn("h4_ema_abv_24", readme)
+        self.assertIn("QUAL_N_WINDOWS", readme)
+        runbook = (REPO / "docs" / "WINDOWS_DISCOVERY.md").read_text()
+        self.assertIn("h4_ema_abv_24", runbook)
 
 
 class IsolatedRunnerTests(unittest.TestCase):

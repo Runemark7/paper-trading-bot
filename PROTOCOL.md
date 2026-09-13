@@ -104,6 +104,7 @@ over a meaningful sample, AND calibration is demonstrated independently of P&L.
 | 2026-09-12 | Fetch scripts default to BTC/USDT and ETH/USDT only. SOL/XRP are not fetched (discovery/qual tape is BTC+ETH). Override with `HIST_SYMBOLS`. `HIST_FETCH_PAGE_CAP` = 2500 and `QUAL_N_WINDOWS` = 8 unchanged. Paper only; OOS thresholds unchanged. |
 | 2026-09-13 | `/discovery` Already tested keeps more newest-first rows: `DISCOVERY_LOG_CAP` = 10000 (was 1000). Unique names remain a separate count. Paper only; OOS thresholds, `QUAL_N_WINDOWS`, and fetch symbols unchanged. |
 | 2026-09-13 | Same-date later: refill mint adds parser-allowed 1% grind bases (`DIP_FILTERS_GRIND` / `MOM_FILTERS_GRIND`) at lookbacks unused by legacy/wide so `near_duplicate_key` stays distinct, and expands short-MA 3-atoms onto every WIDE mom/dip × `don_hi` / `near_swing_hi`. Farm still 0 natural pass; beat-B&H ~100% (bh_oos ≈ 192). Fail-once stays. No named candlesticks. Static list unchanged. Paper only; OOS gates unchanged. |
+| 2026-09-13 | Causal HTF buyer-regime atoms (`h4_ema_abv_24`, `h4_sma_abv_50`, `h1_ema_abv_24`) resample completed 4h/1h bars from the native 5m series and AND onto existing 5m DIP/MOM/WIDE/GRIND bases in the refill recipe. Long-only: HTF sellers → no new long (flat). Mint/parser only. `daily()`/`h1()`/`m5()` wrappers stay refused. Paper only; OOS thresholds and `QUAL_N_WINDOWS` unchanged. |
 
 ### Amendment 2026-08-30 — what actually runs
 
@@ -624,5 +625,31 @@ This amendment does not rewrite original §§ 1–8 or prior amendments. Qual/li
 **Superseded on this date** (prior text kept above for history):
 
 - Same-date "wider dip/mom mint bases and continuation ANDs" insofar as 3-atoms froze at gt2pc/lt2pc × `don_hi` × `sma_abv_20` and the recipe omitted 1% grind lookbacks. Fail-once, farm ingest, cycle budget, OOS gates, and the static 40–120 compiled-list band are not superseded.
+
+### Amendment 2026-09-13 — causal HTF buyer-regime atoms (mint/parser)
+
+This amendment does not rewrite original §§ 1–8 or prior amendments. Qual/live remain 5m, risk policy remains `rm_v1`. OOS **thresholds** are unchanged: `MIN_BACKTEST_TRADES` = 30, `MIN_BACKTEST_SHARPE` = 0.30, must beat buy-and-hold, must beat `sma_stack`, all-windows non-negative is diagnostic only, fail-once never-retest stays. `QUAL_N_WINDOWS` = 8, `DISCOVERY_LOG_CAP` = 10000, `DISCOVERY_REFILL_BATCH_SIZE` = 16 stay. Discovery walk-forwards stay on the Windows farm (`scripts/discovery_worker.py` → `/api/discovery/ingest`); cluster `live_cycle` keeps discovery off (`DISCOVERY_ON_CYCLE=0`). **Still paper.** `GRADUATED_PAPER` meaning is unchanged. Do not cull existing champions. Do not retest parked fails.
+
+**Why.** Alexander's trading education + the prior HTF EMA ask: a long-only book should not open new longs when sellers control the slow tape (flat, not short). Regime is itself discoverable — several atoms, not one hardcoded oracle. When HTF says buyers and 5m is in a dip, that is buy-the-dip; if they disagree, HTF wins (no long).
+
+**What was added** (`parse_strategy` in `hedge_fund/signals/dynamic.py`, causal resample in `hedge_fund/signals/htf.py` + `hedge_fund/data/resample.py`, recipe in `hedge_fund.trading.refill.iter_recipe_names`). Mint/parser only. Completed HTF bars from the native 5m series (48 five-minute bars = 4h, 12 = 1h). Forming-bar 5m closes are not the HTF close. Small atom set:
+
+- `h4_ema_abv_24` — last completed 4h close above EMA(24) of completed 4h closes
+- `h4_sma_abv_50` — last completed 4h close above SMA(50) of completed 4h closes
+- `h1_ema_abv_24` — same idea on 1h (cheap extra)
+
+Refill family ANDs each REGIME atom onto existing DIP/MOM/WIDE/GRIND bases (`DIP_FILTERS` ∪ `MOM_FILTERS` ∪ `GRIND_FILTERS`) and a light structure set (`don_hi` / `near_swing_lo` at N ∈ {12,24,48}). Stream order: all `regime&entry` then all `regime&entry&structure` first, then same-date grind 1% 2-atoms, then wide / short-MA continuation, then leftover mean-reversion. `near_duplicate_key` keeps the `h4_` / `h1_` prefix so they do not collapse onto 5m `ema_abv_*`. `_ALLOWED_ATOM_RES` accepts the new tokens. `daily()` / `h1()` / `m5()` wrappers stay refused.
+
+**Static list unchanged.** `generate_universe()` / `NEW_STRUCTURE_ANDS` stay inside `UNIVERSE_TARGET_MIN` / `UNIVERSE_TARGET_MAX` (~40–120). The farm picks new names from the recipe via `discovery_extended.json`.
+
+**Skipped.** Exact names and `near_duplicate_key` collisions against champions, graduated, the static universe, already-emitted extended names, and any `discovery_log.json` row (pass or fail). Refused families stay out: no H&S / flags / triangles / engulfing / hammer / doji / morning_star / evening_star / candlestick encyclopedia / chart_patterns zoo; no Market Cipher scrape; no new `wt_*` WaveTrend spam; no MFI; no `dbl_top` longs; no `daily()`/`h1()`/`m5()` wrappers.
+
+**Topology.** Still mint → farm → gate. [docs/WORKFLOW.md](docs/WORKFLOW.md) §3 is shipped v1 (was planned). Live `kline_limit` stays 300: an HTF MA that needs more completed HTF bars than that fetch holds is False (no new long). Discovery/qual windows have the full 5m span.
+
+**What did not change.** Sharpe 0.30, 30 OOS trades, beat B&H, beat `sma_stack`, 5m, `rm_v1`, all-windows diagnostic only, fail-once, `QUAL_N_WINDOWS` = 8.
+
+**Superseded on this date** (prior text kept above for history):
+
+- 2026-09-12 [docs/WORKFLOW.md](docs/WORKFLOW.md) text insofar as HTF bias was planned / not shipped. Same-date grind 1% mint insofar as grind / continuation families were first in the recipe stream (they now follow HTF). Fail-once, farm ingest, cycle budget, OOS **thresholds**, `QUAL_N_WINDOWS`, grind 1% bases, and the static 40–120 compiled-list band are not superseded.
 
 

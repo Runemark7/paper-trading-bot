@@ -8,6 +8,9 @@ Structure atoms (Donchian / swing S&R / double bottom-top) and WaveTrend
 atoms also accept ``highs=`` and ``lows=`` from the same bar series — live
 klines already have OHLC. Missing highs/lows raises rather than using close
 as a high/low proxy (WaveTrend source is HLC3).
+HTF buyer-regime atoms (``h4_ema_abv_24``, ``h4_sma_abv_50``,
+``h1_ema_abv_24``) resample the same 5m close series to completed 4h/1h
+bars only — close-only, no lookahead, not ``h1(...)`` wrappers.
 """
 from __future__ import annotations
 
@@ -337,6 +340,21 @@ def parse_strategy(expr: str | Callable | dict) -> Predicate:
         from hedge_fund.signals.wavetrend import wt_cross_down_ob
 
         return lambda c, i=None, highs=None, lows=None, **_k: wt_cross_down_ob(c, highs, lows, i)
+
+    # 8g. Causal HTF buyer-regime from the native 5m series (completed bars
+    # only). Not daily()/h1()/4h() wrappers — those stay refused. Long-only:
+    # False means flat, not short.
+    m_htf = re.match(r"^(h4|h1)_(ema|sma)_abv_(\d+)$", expr_clean)
+    if m_htf:
+        from hedge_fund.signals.htf import BARS_PER_H1, BARS_PER_H4, htf_close_above_ma
+
+        tf, kind, period = m_htf.group(1), m_htf.group(2), int(m_htf.group(3))
+        bars_per = BARS_PER_H4 if tf == "h4" else BARS_PER_H1
+        return _close_pred(
+            lambda c, i=None, _bp=bars_per, _p=period, _k=kind: htf_close_above_ma(
+                c, i, bars_per=_bp, period=_p, kind=_k
+            )
+        )
 
     # 9. Composite patterns: sma200_rsi50, sma100_mom12_2
     m_sma_rsi = re.match(r"^sma(\d+)_rsi(\d+)$", expr_clean)

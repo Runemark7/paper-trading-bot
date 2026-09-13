@@ -14,7 +14,7 @@ this file is the living topology.
 
 | Piece | Where | What it does |
 |---|---|---|
-| **Mint** | `hedge_fund/trading/refill.py` on the farm | Bounded DIP/MOM + structure AND recipe. When never-tested leftovers run dry, the next handful is appended to `state/discovery_extended.json`. Static `generate_universe()` stays inside the ~40–120 compiled-list band. |
+| **Mint** | `hedge_fund/trading/refill.py` on the farm | Bounded DIP/MOM + structure AND recipe, plus HTF buyer-regime ANDs (`h4_ema_abv_24` / `h4_sma_abv_50` / `h1_ema_abv_24`). When never-tested leftovers run dry, the next handful is appended to `state/discovery_extended.json`. Static `generate_universe()` stays inside the ~40–120 compiled-list band. |
 | **Farm** | Alexander's Windows PC (`jensa`) | `scripts/discovery_worker.py` evaluates names against local `state/crypto_history_5m.json` (Binance 5m, **BTC/USDT and ETH/USDT only**). Same fail-once / auto-refill / aggregate-OOS / `rm_v1` / 5m rules as `scripts/tournament_engine.py`. |
 | **Eval** | `parse_strategy` → walk-forward → backtest → gate | Name string → AND atoms on native 5m → 8 chronological ~90d windows → `rm_v1` paper backtest → aggregate OOS in `hedge_fund/trading/qualify.py`. |
 | **Ingest** | `POST /api/discovery/ingest` | Token-gated. Pass → champion + isolated paper book on k8s. Fail → parked forever (fail-once). Existing champions are never culled. |
@@ -48,7 +48,7 @@ Honesty contract: [PROTOCOL.md](../PROTOCOL.md).
 
 ```mermaid
 flowchart TB
-  recipe["Mint: hedge_fund/trading/refill.py\nDIP/MOM + structure ANDs"]
+  recipe["Mint: hedge_fund/trading/refill.py\nDIP/MOM + structure + HTF regime ANDs"]
   ext["state/discovery_extended.json"]
   recipe --> ext
 
@@ -59,7 +59,7 @@ flowchart TB
   ext --> worker
   hist --> worker
 
-  parse["parse_strategy(name) in dynamic.py\nAND atoms on native 5m"]
+  parse["parse_strategy(name) in dynamic.py\nAND atoms on native 5m\n+ causal HTF regime from 5m"]
   wf["Walk-forward 8 x 90d"]
   bt["Backtest rm_v1"]
   gate["Aggregate OOS gate\nhedge_fund/trading/qualify.py"]
@@ -115,26 +115,33 @@ logged (`all_windows_nonneg`) and does not veto. One fail parks the name.
 
 ---
 
-## 3. Where HTF bias would fit (planned, not shipped)
+## 3. HTF buyer-regime atoms (shipped v1)
 
-Higher-timeframe bias is **not in the parser or the recipe today**.
-`refill.py` still refuses `daily()` / `h1()` / `m5()` wrappers. If it
-ships, it is a **mint recipe** change only — AND an extra atom into new
-names. It is not a gate change.
+Higher-timeframe buyer-regime is **mint/parser only**. Causal 4h/1h
+closes are resampled from the native 5m series; predicates use
+**completed** HTF bars only (no lookahead). `daily()` / `h1()` / `m5()`
+wrappers stay refused. Topology is unchanged: mint → farm → gate.
+
+Atoms (discoverable, not one oracle): `h4_ema_abv_24`, `h4_sma_abv_50`,
+`h1_ema_abv_24`. Long-only book: HTF sellers → no new long (flat), not
+short. When HTF says buyers and 5m is in a dip, that is buy-the-dip;
+disagree → HTF wins (no long). Recipe emits `regime&entry` and
+`regime&entry&structure` ahead of leftover mean-reversion. OOS gates
+are unchanged.
 
 ```mermaid
 flowchart TB
-  planned["PLANNED not shipped:\natom e.g. h4_ema_abv_24"]
+  shipped["SHIPPED v1:\nh4_ema_abv_24 / h4_sma_abv_50 / h1_ema_abv_24"]
   mintOnly["AND into refill recipe only\nnew names in discovery_extended.json"]
-  sameEval["Same 5m walk-forward + rm_v1"]
+  sameEval["Same 5m walk-forward + rm_v1\n8 x 90d"]
   sameGate["Same frozen OOS gates\nin qualify.py"]
 
-  planned --> mintOnly --> sameEval --> sameGate
+  shipped --> mintOnly --> sameEval --> sameGate
 ```
 
-Caption: An HTF tag such as `h4_ema_abv_24` would be one more AND atom
-at mint time. Sharpe / trades / beat-B&H / beat-`sma_stack` / fail-once
-stay as they are. Do not implement from this diagram.
+Caption: An HTF tag is one more AND atom at mint time. Sharpe / trades /
+beat-B&H / beat-`sma_stack` / fail-once / `QUAL_N_WINDOWS` stay as they
+are. Still mint → farm → gate.
 
 ---
 

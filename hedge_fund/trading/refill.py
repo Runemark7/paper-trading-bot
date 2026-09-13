@@ -22,7 +22,10 @@ trades + Sharpe without softening the gate — still no named candlesticks.
 A 2026-09-13 pass adds shallower ``gt1pc`` / ``lt1pc`` grind bases
 (lookbacks unused by legacy/wide so ``near_duplicate_key`` stays
 distinct) and expands short-MA 3-atoms onto every WIDE mom/dip ×
-``don_hi`` / ``near_swing_hi``.
+``don_hi`` / ``near_swing_hi``. Same-date later: causal HTF
+buyer-regime atoms (``h4_ema_abv_24`` / ``h4_sma_abv_50`` /
+``h1_ema_abv_24``) AND onto those DIP/MOM/WIDE/GRIND bases.
+Still no named candlesticks. OOS gates unchanged.
 """
 from __future__ import annotations
 
@@ -96,10 +99,25 @@ DIP_FILTERS: tuple[str, ...] = DIP_FILTERS_LEGACY + DIP_FILTERS_WIDE + DIP_FILTE
 MOM_FILTERS: tuple[str, ...] = MOM_FILTERS_LEGACY + MOM_FILTERS_WIDE + MOM_FILTERS_GRIND
 
 # Shorter MAs stay above price longer in a bull OOS than sma_abv_200.
+# GRIND_FILTERS is the same pair — HTF recipe names them grind (stay-in-trend).
 CONTINUATION_TRENDS: tuple[str, ...] = (
     "sma_abv_20",
     "ema_abv_20",
 )
+GRIND_FILTERS: tuple[str, ...] = CONTINUATION_TRENDS
+
+# Causal HTF buyer-regime (parse_strategy). Small set — not a candlestick zoo.
+# Long-only: sellers' HTF → atom False → no new long (flat).
+REGIME_ATOMS: tuple[str, ...] = (
+    "h4_ema_abv_24",
+    "h4_sma_abv_50",
+    "h1_ema_abv_24",
+)
+# Existing 5m entry bases the HTF tag ANDs onto (legacy ∪ wide ∪ grind).
+REGIME_ENTRY_BASES: tuple[str, ...] = DIP_FILTERS + MOM_FILTERS + GRIND_FILTERS
+# Light support / breakout tags — not every STRUCTURE_NS.
+REGIME_STRUCTURE_NS: tuple[int, ...] = (12, 24, 48)
+REGIME_STRUCTURE_TAGS: tuple[str, ...] = ("don_hi", "near_swing_lo")
 TREND_FILTERS: tuple[str, ...] = (
     "sma_abv_50",
     "sma_abv_100",
@@ -164,6 +182,8 @@ _ALLOWED_ATOM_RES: tuple[re.Pattern[str], ...] = (
     re.compile(r"^don_(hi|lo)_\d+$"),
     re.compile(r"^near_swing_(hi|lo)_\d+$"),
     re.compile(r"^dbl_bot_\d+$"),
+    re.compile(r"^h4_(ema|sma)_abv_\d+$"),
+    re.compile(r"^h1_ema_abv_\d+$"),
 )
 
 _STRUCTURE_PREFIXES: tuple[str, ...] = (
@@ -172,6 +192,12 @@ _STRUCTURE_PREFIXES: tuple[str, ...] = (
     "near_swing_hi_",
     "near_swing_lo_",
     "dbl_bot_",
+)
+
+_REGIME_PREFIXES: tuple[str, ...] = (
+    "h4_ema_abv_",
+    "h4_sma_abv_",
+    "h1_ema_abv_",
 )
 
 
@@ -281,6 +307,19 @@ def _has_structure_atom(name: str) -> bool:
     )
 
 
+def _has_regime_atom(name: str) -> bool:
+    return any(
+        tok.startswith(p)
+        for tok in name.split("&")
+        for p in _REGIME_PREFIXES
+    )
+
+
+def _is_refillable_name(name: str) -> bool:
+    """Dry refill accepts structure tags and/or HTF regime ANDs."""
+    return _has_structure_atom(name) or _has_regime_atom(name)
+
+
 def _legacy_structure_ands(n: int) -> Iterator[str]:
     """2026-09-11 recipe families. Frozen 3×3 dip/mom; still in the stream."""
     for dip in DIP_FILTERS_LEGACY:
@@ -378,6 +417,24 @@ def _grind_participation_ands(n: int) -> Iterator[str]:
         yield f"{dip}&near_swing_hi_{n}"
 
 
+def _regime_ands() -> Iterator[str]:
+    """2026-09-13: HTF buyer-regime AND existing 5m DIP/MOM/WIDE/GRIND.
+
+    Emit ``regime&entry`` then ``regime&entry&structure`` (don_hi /
+    near_swing_lo at a light N set) so the next dry refill picks them
+    ahead of leftover mean-reversion. HTF False → no new long (flat).
+    No named candlesticks, no volume folklore.
+    """
+    for regime in REGIME_ATOMS:
+        for entry in REGIME_ENTRY_BASES:
+            yield f"{regime}&{entry}"
+    for regime in REGIME_ATOMS:
+        for entry in REGIME_ENTRY_BASES:
+            for n in REGIME_STRUCTURE_NS:
+                for tag in REGIME_STRUCTURE_TAGS:
+                    yield f"{regime}&{entry}&{tag}_{n}"
+
+
 def _trend_participation_ands(n: int) -> Iterator[str]:
     """2026-09-12 later + 2026-09-13 full short-MA 3-atoms.
 
@@ -408,15 +465,15 @@ def _trend_participation_ands(n: int) -> Iterator[str]:
 def iter_recipe_names() -> Iterator[str]:
     """Deterministic bounded stream. Not a full cartesian of every atom.
 
-    Grind 1% 2-atoms are first (all lookbacks) so a mid-drain farm
-    (eligible leftovers from the 3×3 recipe, or a farm still chewing
-    #42 WIDE 2-atoms) mints higher-participation names on the next dry
-    refill instead of more mean-reversion clones. Wide / short-MA
-    continuation follows, then legacy 2026-09-11 families, the
-    2026-09-12 near-level pass, then leftover TREND / ema_stack /
-    3-atom families. Dip×support and short-horizon mom stay on the
-    frozen 3×3. No WaveTrend, no MFI.
+    HTF buyer-regime families are first so a dry refill mints
+    ``regime&entry`` / ``regime&entry&structure`` ahead of leftover
+    mean-reversion. Grind 1% 2-atoms and wide / short-MA continuation
+    follow, then legacy 2026-09-11 families, the 2026-09-12 near-level
+    pass, then leftover TREND / ema_stack / 3-atom families.
+    Dip×support and short-horizon mom stay on the frozen 3×3.
+    No WaveTrend, no MFI.
     """
+    yield from _regime_ands()
     for n in STRUCTURE_NS:
         yield from _grind_participation_ands(n)
     for n in STRUCTURE_NS:
@@ -446,7 +503,7 @@ def next_refill_batch(
             break
         if not name_is_parseable(cand):
             continue
-        if not _has_structure_atom(cand):
+        if not _is_refillable_name(cand):
             continue
         if cand in taken:
             continue
