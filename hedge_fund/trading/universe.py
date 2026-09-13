@@ -22,7 +22,8 @@ clones. Amendment 2026-09-12 expands that recipe with unused Donchian /
 near-swing / near-level ANDs, then the same-date later pass extends
 lookbacks through 192 and leftover TREND / ema_stack / 3-atom families,
 then the same-date later pass broadens dip/mom lookbacks/% thresholds
-and continuation ANDs (farm picks them up; this static list stays put).
+and continuation ANDs, then the 2026-09-13 pass adds 1% grind bases
+and full short-MA 3-atoms (farm picks them up; this static list stays put).
 Trend / breakout /
 momentum stay as sma_stack/sma_abv, don_hi_*, mom_* — not a second stack.
 Near-duplicate keys collapse tiny param tweaks.

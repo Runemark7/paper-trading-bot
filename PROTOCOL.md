@@ -103,6 +103,7 @@ over a meaningful sample, AND calibration is demonstrated independently of P&L.
 | 2026-09-12 | [docs/WORKFLOW.md](docs/WORKFLOW.md) is the canonical living map of mint / farm / eval / prod topology. Update those diagrams in the same PR that changes refill recipe shape, window count, ingest, farm location, or gate meaning. Paper only; OOS thresholds unchanged. |
 | 2026-09-12 | Fetch scripts default to BTC/USDT and ETH/USDT only. SOL/XRP are not fetched (discovery/qual tape is BTC+ETH). Override with `HIST_SYMBOLS`. `HIST_FETCH_PAGE_CAP` = 2500 and `QUAL_N_WINDOWS` = 8 unchanged. Paper only; OOS thresholds unchanged. |
 | 2026-09-13 | `/discovery` Already tested keeps more newest-first rows: `DISCOVERY_LOG_CAP` = 10000 (was 1000). Unique names remain a separate count. Paper only; OOS thresholds, `QUAL_N_WINDOWS`, and fetch symbols unchanged. |
+| 2026-09-13 | Same-date later: refill mint adds parser-allowed 1% grind bases (`DIP_FILTERS_GRIND` / `MOM_FILTERS_GRIND`) at lookbacks unused by legacy/wide so `near_duplicate_key` stays distinct, and expands short-MA 3-atoms onto every WIDE mom/dip × `don_hi` / `near_swing_hi`. Farm still 0 natural pass; beat-B&H ~100% (bh_oos ≈ 192). Fail-once stays. No named candlesticks. Static list unchanged. Paper only; OOS gates unchanged. |
 
 ### Amendment 2026-08-30 — what actually runs
 
@@ -596,5 +597,32 @@ This amendment does not rewrite original §§ 1–8 or prior amendments. Qual/li
 **Superseded on this date** (prior text kept above for history):
 
 - 2026-09-02 / later "Windows remain 3 × ~90 calendar days" insofar as they froze `QUAL_N_WINDOWS` = 3 and ~270d of tape. Per-window 90d, `QUAL_WINDOW_BARS` = 25920, `QUAL_STRIDE` = 1, and the OOS **thresholds** are not superseded.
+
+### Amendment 2026-09-13 — grind 1% mint bases and full short-MA 3-atoms
+
+This amendment does not rewrite original §§ 1–8 or prior amendments. Qual/live remain 5m, risk policy remains `rm_v1`. OOS gates are unchanged: aggregate OOS only, 30 OOS trades, Sharpe ≥ 0.30, beat buy-and-hold, beat `sma_stack`. All-windows non-negative is diagnostic only. Fail-once never-retest from the 2026-09-10 amendment stays — a fail parks that name forever; each auto-refilled name gets **one shot**. Auto-refill (`DISCOVERY_REFILL_BATCH_SIZE` = 16, `discovery_extended.json`) stays. Discovery walk-forwards stay on the Windows farm (`scripts/discovery_worker.py` → `/api/discovery/ingest`); cluster `live_cycle` keeps discovery off. Cycle remains 24/7. No live-slot cap. **Still paper.** `GRADUATED_PAPER` meaning is unchanged. Do not cull existing champions. Do not retest parked fails.
+
+**Why.** Prod 2026-09-13 (~05:28Z): farm running on jensa; `regimes_tested` = 8 on all rows; `tested_pass` = 0 / unique_tested ≈ 1374; bh_oos ≈ 192.27 on rejects. Fail mix (unique): beat-B&H **100%**, Sharpe below ~98.6%, trades below ~40.8%, sma_stack ~13%. PR #42 WIDE (`DIP_FILTERS_WIDE` / `MOM_FILTERS_WIDE` + continuation) is in the queue and being evaluated; still **0** names with oos_pnl > 192.27. Near-misses that clear Sharpe ≥ 0.30 and trades ≥ 30 still fail beat-B&H only (`mom_36b_gt4pc&near_swing_hi_6`, `mom_18b_gt2pc&near_swing_hi_30`). Best oos_pnl overall only ~+57. High-Sharpe `mom_6b_gt2pc&near_swing_hi_*` under-trade (7–14). #42 improved Sharpe+trades near-misses but not beat-B&H on the deep bullish tape. Bottleneck is still mint/search quality under the frozen gate — not a request to lower bars. Parser regex already allows `mom_\\d+b_gt\\d+pc` and `dip_\\d+b_lt\\d+pc`. `near_duplicate_key` maps `gt1pc`/`lt1pc` onto `gt2pc`/`lt2pc`, so 1% bases need lookbacks unused by legacy/wide (6/12/18/24/36/48/72).
+
+**What was added** (`hedge_fund.trading.refill.iter_recipe_names`). Still a bounded stream — a few thousand names, not tens of thousands of near-clones. Grind 1% / continuation families stay first so a mid-drain farm mints them on the next dry refill. Legacy 2026-09-11 families, morning near-level, leftover TREND / `ema_stack` / 3-atom families, and #42 WIDE 2-atoms stay in the stream. `STRUCTURE_NS` is unchanged (`{6…192}`). New mint bases and AND families, atoms already in `parse_strategy` / `_ALLOWED_ATOM_RES` only:
+
+- `DIP_FILTERS_GRIND`: `dip_30b_lt1pc`, `dip_42b_lt1pc`, `dip_60b_lt1pc` (shallower 1% at unused lookbacks; `near_duplicate_key` does not collapse onto legacy or WIDE)
+- `MOM_FILTERS_GRIND`: `mom_30b_gt1pc`, `mom_42b_gt1pc`, `mom_60b_gt1pc`, `mom_84b_gt1pc` (1% grind, unused lookbacks 30/42/60/84)
+- Grind 2-atoms first: 1% mom/dip × `don_hi_N` / `near_swing_hi_N` (pullback-then-breakout, not dip×support)
+- Full WIDE 3-atoms: every WIDE mom/dip × `don_hi_N` / `near_swing_hi_N` × `sma_abv_20` / `ema_abv_20` (was only gt2pc/lt2pc × `don_hi` × `sma_abv_20`)
+
+**Why this should help under the frozen gate.** Beat-B&H is the near-universal fail on a +192 B&H OOS: mean-reversion sits out the trend and tight 2% / 3-atom stacks under-participate. Shallower 1% grind and more short-MA continuation ANDs stay in the upside longer. 2-atoms (and looser 3-atoms) aim at the trades ≥ 30 floor. Sharpe is still the honest 0.30 bar — we do not mint a pattern zoo to game it. No HTF `daily()` / `h1()` / `m5()` wrappers (parser refuses them; refill still refuses them).
+
+**Static list unchanged.** `generate_universe()` / `NEW_STRUCTURE_ANDS` stay inside `UNIVERSE_TARGET_MIN` / `UNIVERSE_TARGET_MAX` (~40–120). The farm picks new names from the recipe via `discovery_extended.json`, one `DISCOVERY_REFILL_BATCH_SIZE` handful at a time.
+
+**Skipped.** Exact names and `near_duplicate_key` collisions against champions, graduated, the static universe, already-emitted extended names, and any `discovery_log.json` row (pass or fail). Refused families stay out: no H&S / flags / triangles / engulfing / hammer / doji / morning_star / evening_star / candlestick encyclopedia / chart_patterns zoo; no Market Cipher scrape; no new `wt_*` WaveTrend spam; no MFI until honest 5m volume; no `dbl_top` longs; no `daily()`/`h1()`/`m5()` wrappers.
+
+**When the recipe is exhausted.** Refill returns nothing. Discovery idles honestly (eligible=0) until the recipe is amended again. That is not a silent retest of parked fails.
+
+**How to evaluate after merge.** Natural `tested_pass` / unique tested, plus the fail-reason mix (beat-B&H, Sharpe, trades, beat `sma_stack`). Do not change gate constants to move those numbers.
+
+**Superseded on this date** (prior text kept above for history):
+
+- Same-date "wider dip/mom mint bases and continuation ANDs" insofar as 3-atoms froze at gt2pc/lt2pc × `don_hi` × `sma_abv_20` and the recipe omitted 1% grind lookbacks. Fail-once, farm ingest, cycle budget, OOS gates, and the static 40–120 compiled-list band are not superseded.
 
 
