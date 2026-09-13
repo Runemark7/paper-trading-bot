@@ -152,7 +152,17 @@ class ParseStrategyAcceptsTests(unittest.TestCase):
     def test_named_atoms_parse_and_fire_on_buyer_tape(self):
         closes = _uptrend_5m(60)
         i = len(closes) - 1
-        for name in ("h4_ema_abv_24", "h4_sma_abv_50", "h1_ema_abv_24"):
+        for name in (
+            "h4_ema_abv_24",
+            "h4_sma_abv_50",
+            "h1_ema_abv_24",
+            "h1_ema_abv_15",
+            "h1_ema_abv_20",
+            "h1_ema_abv_30",
+            "h4_ema_abv_12",
+            "h4_ema_abv_48",
+            "h4_sma_abv_24",
+        ):
             pred = parse_strategy(name)
             self.assertTrue(eval_predicate(pred, closes, i), msg=name)
 
