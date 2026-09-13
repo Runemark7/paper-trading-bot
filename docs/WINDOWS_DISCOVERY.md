@@ -174,7 +174,9 @@ the farm stays idle until Start.
   recipe (lookbacks through 192, leftover TREND / ema_stack ANDs, wider
   dip/mom bases and continuation ANDs, plus 1% grind bases and full
   short-MA 3-atoms, plus causal HTF buyer-regime ANDs —
-  densified `h1_ema_abv_{15,20,24,30}` / `h4_ema_abv_{12,24,48}` /
-  `h4_sma_abv_{24,50}`, mom-before-dip, plus `MOM_FILTERS_HTF_DENSE`).
+  densified `h1_ema_abv_15` / `h1_ema_abv_20` / `h1_ema_abv_24` /
+  `h1_ema_abv_30` / `h4_ema_abv_12` / `h4_ema_abv_24` /
+  `h4_ema_abv_48` / `h4_sma_abv_24` / `h4_sma_abv_50`,
+  mom-before-dip, plus `MOM_FILTERS_HTF_DENSE`).
 - No culling champions.
 - Do not point `PAPER_STATE` at the cluster PVC.
