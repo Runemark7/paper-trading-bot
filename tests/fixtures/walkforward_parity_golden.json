@@ -1,0 +1,545 @@
+{
+  "meta": {
+    "n_windows": 8,
+    "window_bars": 960,
+    "stride": 1,
+    "live_window_bars": 25920,
+    "timeframe": "5m",
+    "risk_policy": "rm_v1",
+    "symbols": [
+      "BTC/USDT",
+      "ETH/USDT"
+    ],
+    "seed": 20260913,
+    "note": "Reduced per-window bar count for CI. Same evaluate_strategy_record / evaluate_windows / rm_v1 / 70-30 split / QUAL_N_WINDOWS=8 path as discovery_worker. Live windows stay 8 \u00d7 25920."
+  },
+  "bh_oos_pnl": 2661.45,
+  "sma_stack_oos_pnl": -2467.79,
+  "bh_oos_pnl_raw": 2661.4517212825886,
+  "sma_stack_oos_pnl_raw": -2467.788130928482,
+  "strategies": [
+    {
+      "name": "h1_ema_abv_24&mom_18b_gt2pc",
+      "record": {
+        "strategy": "h1_ema_abv_24&mom_18b_gt2pc",
+        "timeframe": "5m",
+        "risk_policy": "rm_v1",
+        "train_pnl": 339.94,
+        "test_pnl": -16.0,
+        "sharpe": 0.0,
+        "win_rate_pct": 0.0,
+        "trades": 1,
+        "regimes_tested": 8,
+        "qualified": false,
+        "bh_oos_pnl": 2661.45,
+        "sma_stack_oos_pnl": -2467.79,
+        "fail_reasons": [
+          "oos_trades 1 < 30",
+          "oos_sharpe 0.00 < 0.3",
+          "oos_pnl -16.00 <= bh 2661.45"
+        ],
+        "all_windows_nonneg": false
+      },
+      "windows": [
+        {
+          "train_pnl": -24.56029150393806,
+          "test_pnl": 0.0,
+          "test_trades": 0,
+          "trades": 0,
+          "wins": 0,
+          "sharpe": 0.0,
+          "skipped": true,
+          "failed": true
+        },
+        {
+          "train_pnl": -86.12223977135545,
+          "test_pnl": 0.0,
+          "test_trades": 0,
+          "trades": 0,
+          "wins": 0,
+          "sharpe": 0.0,
+          "skipped": true,
+          "failed": true
+        },
+        {
+          "train_pnl": -169.55513254817197,
+          "test_pnl": 0.0,
+          "test_trades": 0,
+          "trades": 0,
+          "wins": 0,
+          "sharpe": 0.0,
+          "skipped": true,
+          "failed": true
+        },
+        {
+          "train_pnl": 0.0,
+          "test_pnl": 0.0,
+          "test_trades": 0,
+          "trades": 0,
+          "wins": 0,
+          "sharpe": 0.0,
+          "skipped": true,
+          "failed": true
+        },
+        {
+          "train_pnl": -60.89611554073781,
+          "test_pnl": 0.0,
+          "test_trades": 0,
+          "trades": 0,
+          "wins": 0,
+          "sharpe": 0.0,
+          "skipped": true,
+          "failed": true
+        },
+        {
+          "train_pnl": 334.43826129664194,
+          "test_pnl": -16.0,
+          "test_trades": 1,
+          "trades": 1,
+          "wins": 0,
+          "sharpe": 0.0,
+          "skipped": false,
+          "failed": false
+        },
+        {
+          "train_pnl": 371.64493108419447,
+          "test_pnl": 0.0,
+          "test_trades": 0,
+          "trades": 0,
+          "wins": 0,
+          "sharpe": 0.0,
+          "skipped": true,
+          "failed": true
+        },
+        {
+          "train_pnl": -25.010911785273493,
+          "test_pnl": 0.0,
+          "test_trades": 0,
+          "trades": 0,
+          "wins": 0,
+          "sharpe": 0.0,
+          "skipped": true,
+          "failed": true
+        }
+      ]
+    },
+    {
+      "name": "h1_ema_abv_15&mom_12b_gt2pc",
+      "record": {
+        "strategy": "h1_ema_abv_15&mom_12b_gt2pc",
+        "timeframe": "5m",
+        "risk_policy": "rm_v1",
+        "train_pnl": -116.7,
+        "test_pnl": 122.41,
+        "sharpe": 0.33,
+        "win_rate_pct": 75.0,
+        "trades": 12,
+        "regimes_tested": 8,
+        "qualified": false,
+        "bh_oos_pnl": 2661.45,
+        "sma_stack_oos_pnl": -2467.79,
+        "fail_reasons": [
+          "oos_trades 12 < 30",
+          "oos_pnl 122.41 <= bh 2661.45"
+        ],
+        "all_windows_nonneg": false
+      },
+      "windows": [
+        {
+          "train_pnl": -24.56029150393806,
+          "test_pnl": 0.0,
+          "test_trades": 0,
+          "trades": 0,
+          "wins": 0,
+          "sharpe": 0.0,
+          "skipped": true,
+          "failed": true
+        },
+        {
+          "train_pnl": 0.0,
+          "test_pnl": -5.9562879085551685,
+          "test_trades": 6,
+          "trades": 6,
+          "wins": 5,
+          "sharpe": 1.6806830365636931,
+          "skipped": false,
+          "failed": false
+        },
+        {
+          "train_pnl": 0.0,
+          "test_pnl": 0.0,
+          "test_trades": 0,
+          "trades": 0,
+          "wins": 0,
+          "sharpe": 0.0,
+          "skipped": true,
+          "failed": true
+        },
+        {
+          "train_pnl": 0.0,
+          "test_pnl": 0.0,
+          "test_trades": 0,
+          "trades": 0,
+          "wins": 0,
+          "sharpe": 0.0,
+          "skipped": true,
+          "failed": true
+        },
+        {
+          "train_pnl": 0.0,
+          "test_pnl": 160.37606676764153,
+          "test_trades": 4,
+          "trades": 4,
+          "wins": 3,
+          "sharpe": 1.312347471691366,
+          "skipped": false,
+          "failed": false
+        },
+        {
+          "train_pnl": -28.984064453208703,
+          "test_pnl": -32.008189386686354,
+          "test_trades": 2,
+          "trades": 2,
+          "wins": 1,
+          "sharpe": -0.3814377653955449,
+          "skipped": false,
+          "failed": false
+        },
+        {
+          "train_pnl": -33.74064928160806,
+          "test_pnl": 0.0,
+          "test_trades": 0,
+          "trades": 0,
+          "wins": 0,
+          "sharpe": 0.0,
+          "skipped": true,
+          "failed": true
+        },
+        {
+          "train_pnl": -29.410143027660524,
+          "test_pnl": 0.0,
+          "test_trades": 0,
+          "trades": 0,
+          "wins": 0,
+          "sharpe": 0.0,
+          "skipped": true,
+          "failed": true
+        }
+      ]
+    },
+    {
+      "name": "h4_ema_abv_12&mom_12b_gt2pc",
+      "record": {
+        "strategy": "h4_ema_abv_12&mom_12b_gt2pc",
+        "timeframe": "5m",
+        "risk_policy": "rm_v1",
+        "train_pnl": -58.3,
+        "test_pnl": 0.0,
+        "sharpe": 0.0,
+        "win_rate_pct": 0.0,
+        "trades": 0,
+        "regimes_tested": 8,
+        "qualified": false,
+        "bh_oos_pnl": 2661.45,
+        "sma_stack_oos_pnl": -2467.79,
+        "fail_reasons": [
+          "oos_trades 0 < 30",
+          "oos_sharpe 0.00 < 0.3",
+          "oos_pnl 0.00 <= bh 2661.45"
+        ],
+        "all_windows_nonneg": false
+      },
+      "windows": [
+        {
+          "train_pnl": -24.56029150393806,
+          "test_pnl": 0.0,
+          "test_trades": 0,
+          "trades": 0,
+          "wins": 0,
+          "sharpe": 0.0,
+          "skipped": true,
+          "failed": true
+        },
+        {
+          "train_pnl": 0.0,
+          "test_pnl": 0.0,
+          "test_trades": 0,
+          "trades": 0,
+          "wins": 0,
+          "sharpe": 0.0,
+          "skipped": true,
+          "failed": true
+        },
+        {
+          "train_pnl": 0.0,
+          "test_pnl": 0.0,
+          "test_trades": 0,
+          "trades": 0,
+          "wins": 0,
+          "sharpe": 0.0,
+          "skipped": true,
+          "failed": true
+        },
+        {
+          "train_pnl": 0.0,
+          "test_pnl": 0.0,
+          "test_trades": 0,
+          "trades": 0,
+          "wins": 0,
+          "sharpe": 0.0,
+          "skipped": true,
+          "failed": true
+        },
+        {
+          "train_pnl": 0.0,
+          "test_pnl": 0.0,
+          "test_trades": 0,
+          "trades": 0,
+          "wins": 0,
+          "sharpe": 0.0,
+          "skipped": true,
+          "failed": true
+        },
+        {
+          "train_pnl": 0.0,
+          "test_pnl": 0.0,
+          "test_trades": 0,
+          "trades": 0,
+          "wins": 0,
+          "sharpe": 0.0,
+          "skipped": true,
+          "failed": true
+        },
+        {
+          "train_pnl": -33.74064928160806,
+          "test_pnl": 0.0,
+          "test_trades": 0,
+          "trades": 0,
+          "wins": 0,
+          "sharpe": 0.0,
+          "skipped": true,
+          "failed": true
+        },
+        {
+          "train_pnl": 0.0,
+          "test_pnl": 0.0,
+          "test_trades": 0,
+          "trades": 0,
+          "wins": 0,
+          "sharpe": 0.0,
+          "skipped": true,
+          "failed": true
+        }
+      ]
+    },
+    {
+      "name": "mom_12b_gt2pc&don_hi_24",
+      "record": {
+        "strategy": "mom_12b_gt2pc&don_hi_24",
+        "timeframe": "5m",
+        "risk_policy": "rm_v1",
+        "train_pnl": -120.85,
+        "test_pnl": 116.6,
+        "sharpe": 0.3,
+        "win_rate_pct": 66.7,
+        "trades": 12,
+        "regimes_tested": 8,
+        "qualified": false,
+        "bh_oos_pnl": 2661.45,
+        "sma_stack_oos_pnl": -2467.79,
+        "fail_reasons": [
+          "oos_trades 12 < 30",
+          "oos_pnl 116.60 <= bh 2661.45"
+        ],
+        "all_windows_nonneg": false
+      },
+      "windows": [
+        {
+          "train_pnl": -24.56029150393806,
+          "test_pnl": 0.0,
+          "test_trades": 0,
+          "trades": 0,
+          "wins": 0,
+          "sharpe": 0.0,
+          "skipped": true,
+          "failed": true
+        },
+        {
+          "train_pnl": 0.0,
+          "test_pnl": -42.74278385533762,
+          "test_trades": 7,
+          "trades": 7,
+          "wins": 4,
+          "sharpe": 1.0877505379997796,
+          "skipped": false,
+          "failed": false
+        },
+        {
+          "train_pnl": 0.0,
+          "test_pnl": 0.0,
+          "test_trades": 0,
+          "trades": 0,
+          "wins": 0,
+          "sharpe": 0.0,
+          "skipped": true,
+          "failed": true
+        },
+        {
+          "train_pnl": 0.0,
+          "test_pnl": 0.0,
+          "test_trades": 0,
+          "trades": 0,
+          "wins": 0,
+          "sharpe": 0.0,
+          "skipped": true,
+          "failed": true
+        },
+        {
+          "train_pnl": 0.0,
+          "test_pnl": 168.34640879658764,
+          "test_trades": 4,
+          "trades": 4,
+          "wins": 3,
+          "sharpe": 1.3197680845748454,
+          "skipped": false,
+          "failed": false
+        },
+        {
+          "train_pnl": -29.848274202260654,
+          "test_pnl": -8.998944061806469,
+          "test_trades": 1,
+          "trades": 1,
+          "wins": 1,
+          "sharpe": 0.0,
+          "skipped": false,
+          "failed": false
+        },
+        {
+          "train_pnl": -36.00360063142216,
+          "test_pnl": 0.0,
+          "test_trades": 0,
+          "trades": 0,
+          "wins": 0,
+          "sharpe": 0.0,
+          "skipped": true,
+          "failed": true
+        },
+        {
+          "train_pnl": -30.43986760029111,
+          "test_pnl": 0.0,
+          "test_trades": 0,
+          "trades": 0,
+          "wins": 0,
+          "sharpe": 0.0,
+          "skipped": true,
+          "failed": true
+        }
+      ]
+    },
+    {
+      "name": "sma_stack",
+      "record": {
+        "strategy": "sma_stack",
+        "timeframe": "5m",
+        "risk_policy": "rm_v1",
+        "train_pnl": 467.6,
+        "test_pnl": -2467.79,
+        "sharpe": 0.06,
+        "win_rate_pct": 39.5,
+        "trades": 463,
+        "regimes_tested": 8,
+        "qualified": false,
+        "bh_oos_pnl": 2661.45,
+        "sma_stack_oos_pnl": -2467.79,
+        "fail_reasons": [
+          "oos_sharpe 0.06 < 0.3",
+          "oos_pnl -2467.79 <= bh 2661.45",
+          "oos_pnl -2467.79 <= sma_stack -2467.79"
+        ],
+        "all_windows_nonneg": false
+      },
+      "windows": [
+        {
+          "train_pnl": -1654.584936101799,
+          "test_pnl": -701.5806149844248,
+          "test_trades": 70,
+          "trades": 70,
+          "wins": 23,
+          "sharpe": 0.5326375584294318,
+          "skipped": false,
+          "failed": false
+        },
+        {
+          "train_pnl": -334.7669999118698,
+          "test_pnl": 710.0275558102512,
+          "test_trades": 67,
+          "trades": 67,
+          "wins": 27,
+          "sharpe": 2.06940165698871,
+          "skipped": false,
+          "failed": false
+        },
+        {
+          "train_pnl": -602.0550589101222,
+          "test_pnl": -895.1243619095803,
+          "test_trades": 38,
+          "trades": 38,
+          "wins": 7,
+          "sharpe": -5.095950676157145,
+          "skipped": false,
+          "failed": false
+        },
+        {
+          "train_pnl": 571.058303081627,
+          "test_pnl": -282.7668911784058,
+          "test_trades": 65,
+          "trades": 65,
+          "wins": 29,
+          "sharpe": 1.6252782528638514,
+          "skipped": false,
+          "failed": false
+        },
+        {
+          "train_pnl": 321.09665345078974,
+          "test_pnl": -498.9707723417232,
+          "test_trades": 88,
+          "trades": 88,
+          "wins": 45,
+          "sharpe": 1.573836432086702,
+          "skipped": false,
+          "failed": false
+        },
+        {
+          "train_pnl": 1589.1358878668289,
+          "test_pnl": -66.5981086031552,
+          "test_trades": 27,
+          "trades": 27,
+          "wins": 13,
+          "sharpe": 1.1383511397763386,
+          "skipped": false,
+          "failed": false
+        },
+        {
+          "train_pnl": 180.60637494809635,
+          "test_pnl": -680.8532826844221,
+          "test_trades": 31,
+          "trades": 31,
+          "wins": 6,
+          "sharpe": -3.57681285242953,
+          "skipped": false,
+          "failed": false
+        },
+        {
+          "train_pnl": 397.1116381758584,
+          "test_pnl": -51.92165503702199,
+          "test_trades": 77,
+          "trades": 77,
+          "wins": 33,
+          "sharpe": 2.175098902008904,
+          "skipped": false,
+          "failed": false
+        }
+      ]
+    }
+  ]
+}
