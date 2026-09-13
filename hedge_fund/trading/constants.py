@@ -68,7 +68,7 @@ TRADE_EVALUATION_LIMIT = 80
 # generate_universe() stays inside UNIVERSE_TARGET_MAX.
 DISCOVER_CYCLE_MAX_NAMES = 1
 DISCOVER_CYCLE_TIME_BUDGET_SECONDS = 90  # one eval; leave most of 300s for live + API
-DISCOVERY_LOG_CAP = 1000  # newest-first rows; unique names are a separate count
+DISCOVERY_LOG_CAP = 10000  # newest-first rows; unique names are a separate count
 DISCOVERY_REFILL_BATCH_SIZE = 16  # one handful per dry drain; sidecar pending queue
 # No new evals for this long, with leftover work remaining → stuck/overdue copy.
 DISCOVERY_QUIET_SECONDS = 2 * 3600
