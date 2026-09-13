@@ -56,15 +56,21 @@ export function lotsForChampionSymbol(
   return lotsFromLive(live, symbol).filter((l) => accountsMatch(l.account, championName));
 }
 
+export function closedTradesForChampion(
+  trades: TradeRow[] | undefined,
+  championName: string,
+): TradeRow[] {
+  if (!championName) return [];
+  return (trades ?? []).filter((t) => Boolean(t.exit_ts) && accountsMatch(t.account, championName));
+}
+
 export function closedTradesForChampionSymbol(
   trades: TradeRow[] | undefined,
   championName: string,
   symbol: ChartSymbol | string,
 ): TradeRow[] {
   if (!championName) return [];
-  return (trades ?? []).filter(
-    (t) => t.symbol === symbol && Boolean(t.exit_ts) && accountsMatch(t.account, championName),
-  );
+  return closedTradesForChampion(trades, championName).filter((t) => t.symbol === symbol);
 }
 
 /** ISO times we already have for this champion+symbol. Skip nulls — do not invent. */

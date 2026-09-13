@@ -8,6 +8,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 UI = (REPO / "frontend" / "src" / "components" / "ui.tsx").read_text()
 CHAMPS = (REPO / "frontend" / "src" / "pages" / "Champions.tsx").read_text()
+DETAIL = (REPO / "frontend" / "src" / "pages" / "ChampionDetail.tsx").read_text()
 DISCOVERY = (REPO / "frontend" / "src" / "status" / "DiscoveryBuckets.tsx").read_text()
 CHART = (REPO / "frontend" / "src" / "pages" / "Chart.tsx").read_text()
 OVERVIEW = (REPO / "frontend" / "src" / "pages" / "Overview.tsx").read_text()
@@ -40,14 +41,15 @@ class FullStrategyNameUiTests(unittest.TestCase):
         self.assertIn('aria-label={`Copy strategy name ${name}`}', UI)
         self.assertIn("select-all", UI)
 
-    def test_champion_card_wraps_name_and_expanded_is_copyable(self):
-        self.assertIn("CopyableName", CHAMPS)
-        collapsed = CHAMPS.split("{isOpen &&")[0]
-        self.assertIn('MonoName className="block w-full', collapsed)
-        self.assertIn("{c.name}", collapsed)
-        expanded = CHAMPS.split("{isOpen &&", 1)[1].split("Graduated paper")[0]
-        self.assertIn("<CopyableName name={c.name}", expanded)
-        self.assertNotIn("slice(0,", expanded)
+    def test_champion_list_wraps_name_and_detail_is_copyable(self):
+        list_body = CHAMPS.split("Graduated paper")[0]
+        self.assertIn('MonoName className="block w-full', list_body)
+        self.assertIn("{c.name}", list_body)
+        self.assertIn("championDetailPath(c.name)", list_body)
+        self.assertNotIn("slice(0, 40)", list_body)
+        self.assertIn("CopyableName", DETAIL)
+        self.assertIn("<CopyableName name={name}", DETAIL)
+        self.assertNotIn("slice(0, 40)", DETAIL)
 
     def test_discovery_tested_and_queued_keep_full_names(self):
         self.assertIn("NameChip", DISCOVERY)
@@ -58,11 +60,13 @@ class FullStrategyNameUiTests(unittest.TestCase):
 
     def test_chart_picker_shows_full_name_outside_the_select(self):
         self.assertIn("title={champion || undefined}", CHART)
-        self.assertIn("<MonoName className=\"mt-1.5 block text-xs text-white/70\">{champion}</MonoName>", CHART)
+        self.assertIn("<MonoName className=\"block text-xs text-white/70\">{champion}</MonoName>", CHART)
+        self.assertIn("championDetailPath(champion)", CHART)
         self.assertNotIn("title={champion ? `${champion} · 5m`", CHART)
 
     def test_overview_and_positions_account_cells_use_mononame(self):
-        self.assertIn("<MonoName key={n} className=\"block text-sm\">{n}</MonoName>", OVERVIEW)
+        self.assertIn("<MonoName className=\"block text-sm\">{n}</MonoName>", OVERVIEW)
+        self.assertIn("championDetailPath(n)", OVERVIEW)
         self.assertIn("<MonoName className=\"text-xs\">{accountLabel(p.account)}</MonoName>", OVERVIEW)
         self.assertIn("<MonoName className=\"text-xs\">{accountLabel(lot.account)}</MonoName>", POSITIONS)
 

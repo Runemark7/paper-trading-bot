@@ -676,16 +676,14 @@ class ChampionScopedChartTests(unittest.TestCase):
         self.assertIn("no stop/TP", tape)
         self.assertIn("Labels sit", tape)
 
-    def test_champions_expanded_card_mounts_one_tape_not_twenty(self):
+    def test_champions_list_does_not_mount_tapes_detail_does(self):
         champs = (REPO / "frontend" / "src" / "pages" / "Champions.tsx").read_text()
-        self.assertIn("ChampionTape", champs)
-        self.assertIn("championName={c.name}", champs)
-        self.assertIn("compact", champs)
-        open_idx = champs.index("{isOpen &&")
-        tape_idx = champs.index("<ChampionTape", open_idx)
-        self.assertGreater(tape_idx, open_idx)
-        collapsed_render = champs.split("{isOpen &&")[0]
-        self.assertNotIn("<ChampionTape", collapsed_render)
+        detail = (REPO / "frontend" / "src" / "pages" / "ChampionDetail.tsx").read_text()
+        self.assertNotIn("ChampionTape", champs)
+        list_body = champs.split("Graduated paper")[0]
+        self.assertNotIn("<ChampionTape", list_body)
+        self.assertIn("<ChampionTape championName={name}", detail)
+        self.assertNotIn("compact", detail)
         grad = champs[champs.index("Graduated paper") :]
         self.assertNotIn("ChampionTape", grad)
 

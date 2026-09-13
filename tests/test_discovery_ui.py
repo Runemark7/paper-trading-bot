@@ -14,6 +14,7 @@ FARM_TSX = (REPO / "frontend" / "src" / "status" / "FarmControl.tsx").read_text(
 CLIENT_TS = (REPO / "frontend" / "src" / "api" / "client.ts").read_text()
 TYPES_TS = (REPO / "frontend" / "src" / "api" / "types.ts").read_text()
 FILTERS_TS = REPO / "frontend" / "src" / "status" / "discoveryFilters.ts"
+TABLE_CONTROLS = (REPO / "frontend" / "src" / "components" / "tableControls.tsx").read_text()
 CHAMPS = (REPO / "frontend" / "src" / "pages" / "Champions.tsx").read_text()
 OVERVIEW = (REPO / "frontend" / "src" / "pages" / "Overview.tsx").read_text()
 
@@ -143,7 +144,7 @@ class DiscoveryPageContractTests(unittest.TestCase):
             'label="Fail reasons"',
         ):
             self.assertIn(label, DISCOVERY_TSX, label)
-        self.assertIn('aria-label={`Filter ${label}`}', DISCOVERY_TSX)
+        self.assertIn('aria-label={`Filter ${label}`}', TABLE_CONTROLS)
         self.assertIn("applyTestedRows", DISCOVERY_TSX)
         self.assertIn("PhoneCards", DISCOVERY_TSX)
         self.assertIn("DesktopTable", DISCOVERY_TSX)
@@ -158,8 +159,8 @@ class DiscoveryPageContractTests(unittest.TestCase):
         self.assertIn("Reset sort", DISCOVERY_TSX)
         self.assertIn("cycleTestedSort", DISCOVERY_TSX)
         self.assertIn("SortTh", DISCOVERY_TSX)
-        self.assertIn("aria-sort", DISCOVERY_TSX)
-        self.assertIn('aria-label={`Sort by ${label}`}', DISCOVERY_TSX)
+        self.assertIn("aria-sort", TABLE_CONTROLS)
+        self.assertIn('aria-label={`Sort by ${label}`}', TABLE_CONTROLS)
         self.assertIn("highest / lowest", DISCOVERY_TSX)
         src = FILTERS_TS.read_text()
         self.assertIn("export function sortTestedRows", src)

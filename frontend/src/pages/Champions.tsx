@@ -1,156 +1,60 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { fetchChampions, fetchGraduated, api } from "../api/client";
 import { DiscoveryTeaser } from "../status/DiscoveryBuckets";
-import type { OpenLot } from "../api/types";
-import ChampionTape from "../chart/ChampionTape";
-import { Card, fmt, Badge, Empty, MonoName, CopyableName, Field, FieldGrid, PhoneCards, DesktopTable } from "../components/ui";
-import { LotHealthChips, LotHealthSummaryChips } from "../status/LotHealth";
 import {
-  accountSlug,
+  Badge,
+  Card,
+  Empty,
+  Field,
+  FieldGrid,
+  MonoName,
+  PhoneCards,
+  DesktopTable,
+  fmt,
+} from "../components/ui";
+import { FilterInput, SortTh } from "../components/tableControls";
+import { ChampionSinceChip, PairLotChips } from "../status/ChampionLots";
+import { LotHealthSummaryChips } from "../status/LotHealth";
+import {
+  applyChampionRows,
+  CHAMPION_SORT_COLUMNS,
+  championFiltersActive,
+  championSortDirLabels,
+  championSortSummary,
+  cycleChampionSort,
+  DEFAULT_CHAMPION_SORT,
+  EMPTY_CHAMPION_FILTERS,
+  initialChampionSortDir,
+  isDefaultChampionSort,
+  type ChampionColumnFilters,
+  type ChampionListRow,
+  type ChampionSort,
+  type ChampionSortKey,
+} from "../status/championFilters";
+import { championDetailPath } from "../status/championPath";
+import {
   accountsMatch,
   certaintyLabel,
   fmtChampionSince,
   fmtWhen,
-  lotUnrealized,
   openLotsByPair,
   openLotsForChampion,
 } from "../status/format";
 
-function ChampionSinceChip({ since }: { since?: string | null }) {
-  const label = fmtChampionSince(since);
-  return (
-    <span
-      className="inline-flex max-w-full min-w-0 items-center rounded-md bg-white/10 px-1.5 py-0.5 text-[11px] font-medium text-white/80 break-words whitespace-normal [overflow-wrap:anywhere]"
-      aria-label={`Champion since ${label}`}
-    >
-      Champion since {label}
-    </span>
-  );
-}
-
-/** Always-visible BTC vs ETH lot counts. Short chips so they wrap on a phone. */
-function PairLotChips({ btc, eth }: { btc: number | string; eth: number | string }) {
-  return (
-    <div
-      className="flex flex-wrap items-center gap-1 min-w-0"
-      aria-label={`Open lots BTC ${btc} ETH ${eth}`}
-    >
-      <span className="inline-flex shrink-0 items-center rounded-md bg-white/10 px-1.5 py-0.5 text-[11px] font-medium tabular-nums text-white/80">
-        BTC {btc}
-      </span>
-      <span className="inline-flex shrink-0 items-center rounded-md bg-white/10 px-1.5 py-0.5 text-[11px] font-medium tabular-nums text-white/80">
-        ETH {eth}
-      </span>
-    </div>
-  );
-}
-
-function ChampionLotList({ lots }: { lots: OpenLot[] }) {
-  return (
-    <>
-      <p className="text-xs text-white/45 leading-relaxed min-w-0 break-words">
-        Each row is one lot. Signal is the latest 5m predicate (on vs would exit). Path is
-        where now sits between this lot&apos;s stop and 2:1 TP — mid is the middle of that
-        range, not a third strategy state.
-      </p>
-      <PhoneCards>
-        {lots.map((lot, i) => {
-          const pnl = lotUnrealized(lot);
-          return (
-            <li
-              key={`${lot.account ?? ""}-${lot.symbol}-${lot.lot_id}-${i}`}
-              className="rounded-lg border border-white/10 p-3 space-y-2 min-w-0 overflow-hidden"
-            >
-              <div className="flex items-baseline justify-between gap-2 min-w-0">
-                <span className="font-medium min-w-0 truncate">{lot.symbol}</span>
-                <span className={`shrink-0 ${(pnl ?? 0) >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
-                  {pnl != null ? fmt(pnl) : "—"}
-                </span>
-              </div>
-              <LotHealthChips lot={lot} extra />
-              <FieldGrid>
-                <Field label="Condition" span mono>
-                  {lot.condition ?? "—"}
-                </Field>
-                <Field label="Entry">{fmt(lot.entry)}</Field>
-                <Field label="Stop">{fmt(lot.stop)}</Field>
-                <Field label="Now">{lot.current != null ? fmt(lot.current) : "—"}</Field>
-                <Field label="P&L">
-                  <span className={(pnl ?? 0) >= 0 ? "text-emerald-400" : "text-rose-400"}>
-                    {pnl != null ? fmt(pnl) : "—"}
-                  </span>
-                </Field>
-              </FieldGrid>
-            </li>
-          );
-        })}
-      </PhoneCards>
-      <DesktopTable>
-        <table className="w-full text-sm">
-          <thead className="text-white/40 text-xs uppercase">
-            <tr>
-              <th className="text-left py-2">Symbol</th>
-              <th className="text-left">Health</th>
-              <th className="text-left">Condition</th>
-              <th className="text-right">Entry</th>
-              <th className="text-right">Stop</th>
-              <th className="text-right">Now</th>
-              <th className="text-right">P&L</th>
-            </tr>
-          </thead>
-          <tbody>
-            {lots.map((lot, i) => {
-              const pnl = lotUnrealized(lot);
-              return (
-                <tr
-                  key={`${lot.account ?? ""}-${lot.symbol}-${lot.lot_id}-${i}`}
-                  className="border-t border-white/5"
-                >
-                  <td className="py-2 font-medium">{lot.symbol}</td>
-                  <td className="py-2">
-                    <LotHealthChips lot={lot} extra />
-                  </td>
-                  <td className="text-white/60 font-mono text-xs break-all">{lot.condition ?? "—"}</td>
-                  <td className="text-right">{fmt(lot.entry)}</td>
-                  <td className="text-right">{fmt(lot.stop)}</td>
-                  <td className="text-right">{lot.current != null ? fmt(lot.current) : "—"}</td>
-                  <td className={`text-right ${(pnl ?? 0) >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
-                    {pnl != null ? fmt(pnl) : "—"}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </DesktopTable>
-    </>
-  );
-}
-
-function ExpandedChampionLots({
-  lots,
-  liveReady,
-  knownCount,
-}: {
-  lots: OpenLot[];
-  liveReady: boolean;
-  knownCount: number;
-}) {
-  if (lots.length) return <ChampionLotList lots={lots} />;
-  if (liveReady || knownCount === 0) {
-    return <p className="text-sm text-white/50">no open lots</p>;
-  }
-  return null;
-}
+const PAGE = 20;
 
 export default function Champions() {
+  const navigate = useNavigate();
   const qChamps = useQuery({ queryKey: ["champions"], queryFn: fetchChampions, refetchInterval: 30_000 });
   const qLive = useQuery({ queryKey: ["live"], queryFn: api.live, refetchInterval: 30_000 });
   const qGrad = useQuery({ queryKey: ["graduated"], queryFn: fetchGraduated, refetchInterval: 30_000 });
   const status = useQuery({ queryKey: ["status"], queryFn: api.status, refetchInterval: 15_000 });
 
-  const [expandedChampion, setExpandedChampion] = useState<string | null>(null);
+  const [filters, setFilters] = useState<ChampionColumnFilters>(EMPTY_CHAMPION_FILTERS);
+  const [sort, setSort] = useState<ChampionSort>(DEFAULT_CHAMPION_SORT);
+  const [shown, setShown] = useState(PAGE);
   const [expandedStrat, setExpandedStrat] = useState<string | null>(null);
 
   const champs = qChamps.data?.active_champions ?? [];
@@ -160,17 +64,61 @@ export default function Champions() {
   const prog = status.data?.in_progress;
   const rowLots = champs.reduce((n, c) => n + (c.open_lots ?? 0), 0);
   const openLots = qChamps.data?.open_lots ?? run?.open_lots ?? run?.positions_open ?? rowLots;
-  const liveReady = qLive.data !== undefined || qLive.isError;
-  const leftoverLots = Object.entries(qChamps.data?.open_lots_by_account ?? {})
-    .filter(([name, n]) => n > 0 && !champs.some((c) => accountsMatch(name, c.name)));
+  const liveLotsKnown = qLive.data != null;
+  const leftoverLots = Object.entries(qChamps.data?.open_lots_by_account ?? {}).filter(
+    ([name, n]) => n > 0 && !champs.some((c) => accountsMatch(name, c.name)),
+  );
+  const filtersOn = championFiltersActive(filters);
+  const sortOn = !isDefaultChampionSort(sort);
+
+  const rows: ChampionListRow[] = useMemo(
+    () =>
+      champs.map((c) => {
+        const split = openLotsByPair(qLive.data, c.name);
+        const lots = openLotsForChampion(qLive.data, c.name);
+        return {
+          ...c,
+          btc: liveLotsKnown ? split.btc : null,
+          eth: liveLotsKnown ? split.eth : null,
+          openLots: liveLotsKnown ? split.total : (c.open_lots ?? 0),
+          liveLotsKnown,
+          lots,
+        };
+      }),
+    [champs, qLive.data, liveLotsKnown],
+  );
+
+  const viewed = useMemo(
+    () => applyChampionRows(rows, filters, sort, fmtChampionSince, fmt),
+    [rows, filters, sort],
+  );
+  const visible = viewed.slice(0, shown);
+
+  function setColumn<K extends keyof ChampionColumnFilters>(key: K, value: ChampionColumnFilters[K]) {
+    setFilters((prev) => ({ ...prev, [key]: value }));
+    setShown(PAGE);
+  }
+
+  function applySort(next: ChampionSort) {
+    setSort(next);
+    setShown(PAGE);
+  }
+
+  function cycleColumn(key: ChampionSortKey) {
+    applySort(cycleChampionSort(sort, key));
+  }
+
+  function openChampion(name: string) {
+    navigate(championDetailPath(name));
+  }
 
   return (
     <div className="space-y-6 min-w-0">
       <p className="text-sm text-white/55">
-        Names on the paper book are isolated €10k accounts. Tap a champion to list
-        that account's open lots and a compact BTC/ETH chart. Graduation below and
-        Discovery (own page) are last-known pipeline results — not a live job unless
-        the sidecar stamp says so.
+        Names on the paper book are isolated €10k accounts. Filter and sort the list
+        like Discovery, then tap a row for that account&apos;s lots, closed trades, and
+        BTC/ETH tape. Graduation below and Discovery (own page) are last-known
+        pipeline results — not a live job unless the sidecar stamp says so.
       </p>
 
       <Card
@@ -178,10 +126,10 @@ export default function Champions() {
         aside={run ? `${champs.length} champions · last cycle ${fmtWhen(run.cycle.last_cycle_at)}` : `${champs.length} champions`}
       >
         <div className="text-sm text-white/60 mb-3">
-          Each name is an isolated paper account. The card shows that account's open
+          Each name is an isolated paper account. Rows show that account&apos;s open
           lots split BTC vs ETH (same /api/live lots as Positions: two BTC + one ETH
-          = BTC 2 · ETH 1, total 3). Tap to expand the rows. After{" "}
-          <b>{evalLimit} closed entries</b> the account leaves this list.{" "}
+          = BTC 2 · ETH 1, total 3). Tap a row for lots and the compact BTC/ETH
+          chart. After <b>{evalLimit} closed entries</b> the account leaves this list.{" "}
           <code>GRADUATED_PAPER</code> is graduated paper, not live money.
           {run?.strategy.mode === "sma_stack_fallback" && (
             <> Pool empty — book is running <code>sma_stack</code> fallback.</>
@@ -194,6 +142,130 @@ export default function Champions() {
           </div>
         ) : null}
 
+        {champs.length ? (
+          <div className="mb-3 rounded-lg border border-white/10 bg-white/[0.02] p-2 sm:p-3 space-y-2">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2 min-w-0">
+              <FilterInput
+                label="Name"
+                value={filters.name}
+                onChange={(v) => setColumn("name", v)}
+                placeholder="contains…"
+              />
+              <FilterInput
+                label="Champion since"
+                value={filters.since}
+                onChange={(v) => setColumn("since", v)}
+                placeholder="date…"
+              />
+              <FilterInput
+                label="BTC lots"
+                value={filters.btc}
+                onChange={(v) => setColumn("btc", v)}
+                placeholder=">=1"
+              />
+              <FilterInput
+                label="ETH lots"
+                value={filters.eth}
+                onChange={(v) => setColumn("eth", v)}
+                placeholder=">=1"
+              />
+              <FilterInput
+                label="Open lots"
+                value={filters.openLots}
+                onChange={(v) => setColumn("openLots", v)}
+                placeholder=">0"
+              />
+              <FilterInput
+                label="Closed"
+                value={filters.closed}
+                onChange={(v) => setColumn("closed", v)}
+                placeholder={`<${evalLimit}`}
+              />
+              <FilterInput
+                label="Wins"
+                value={filters.wins}
+                onChange={(v) => setColumn("wins", v)}
+                placeholder=">=0"
+              />
+              <FilterInput
+                label="Paper P&L"
+                value={filters.pnl}
+                onChange={(v) => setColumn("pnl", v)}
+                placeholder=">0"
+              />
+              <label className="min-w-0 block" htmlFor="champion-sort-key">
+                <span className="text-[11px] uppercase tracking-wider text-white/40">Sort</span>
+                <select
+                  id="champion-sort-key"
+                  value={sort.key}
+                  onChange={(e) => {
+                    const key = e.target.value as ChampionSortKey;
+                    applySort({ key, dir: initialChampionSortDir(key) });
+                  }}
+                  aria-label="Sort Champions"
+                  className="mt-1 w-full min-h-11 rounded-md bg-[#121a38] px-2 text-xs text-white ring-1 ring-white/15"
+                >
+                  {CHAMPION_SORT_COLUMNS.map((col) => (
+                    <option key={col.key} value={col.key}>
+                      {col.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div className="min-w-0">
+                <div className="text-[11px] uppercase tracking-wider text-white/40 mb-1">Order</div>
+                <button
+                  type="button"
+                  onClick={() => applySort({ key: sort.key, dir: sort.dir === "desc" ? "asc" : "desc" })}
+                  aria-label="Toggle sort order"
+                  className="min-h-11 w-full px-3 py-1.5 rounded text-xs bg-white/15 text-white hover:bg-white/20"
+                >
+                  {championSortDirLabels(sort.key)[sort.dir]} {sort.dir === "desc" ? "↓" : "↑"}
+                </button>
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-[11px] text-white/40">
+                BTC, ETH, lots, closed, wins, and P&amp;L accept &gt;, &gt;=, &lt;, &lt;=, or =.
+                Sort ranks the filtered list — highest / lowest on desktop headers and this
+                Sort control.
+              </p>
+              <div className="flex flex-wrap gap-1">
+                {sortOn ? (
+                  <button
+                    type="button"
+                    onClick={() => applySort(DEFAULT_CHAMPION_SORT)}
+                    className="min-h-11 px-3 py-1.5 text-xs bg-white/10 hover:bg-white/20 rounded text-white"
+                  >
+                    Reset sort
+                  </button>
+                ) : null}
+                {filtersOn ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFilters(EMPTY_CHAMPION_FILTERS);
+                      setShown(PAGE);
+                    }}
+                    className="min-h-11 px-3 py-1.5 text-xs bg-white/10 hover:bg-white/20 rounded text-white"
+                  >
+                    Clear filters
+                  </button>
+                ) : null}
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        <div className="flex flex-col gap-2 mb-2 sm:flex-row sm:items-center sm:justify-between">
+          <h3 className="text-xs uppercase tracking-wider text-white/40">Active champions</h3>
+          <p className="text-xs text-white/40">
+            {champs.length
+              ? `Showing ${visible.length} of ${viewed.length}${filtersOn ? ` (filtered from ${champs.length})` : ""}${sortOn ? ` · ${championSortSummary(sort)}` : ""}`
+              : null}
+          </p>
+        </div>
+
         {qChamps.error && !champs.length ? (
           <Empty>
             Could not load /api/champions: {String(qChamps.error)}
@@ -203,80 +275,107 @@ export default function Champions() {
             No champions in champions.json. The live book falls back to{" "}
             <code>{run?.strategy.fallback ?? "sma_stack"}</code> until discovery admits names.
           </Empty>
+        ) : !viewed.length ? (
+          <Empty>No champion rows match these column filters.</Empty>
         ) : (
-          <ul className="space-y-3 min-w-0">
-            {champs.map((c) => {
-              const isOpen = expandedChampion === c.name;
-              const panelId = `champion-lots-${accountSlug(c.name)}`;
-              const knownCount = c.open_lots ?? 0;
-              const split = openLotsByPair(qLive.data, c.name);
-              const lots = openLotsForChampion(qLive.data, c.name);
-              const liveLotsKnown = qLive.data != null;
-              return (
+          <>
+            <PhoneCards>
+              {visible.map((c) => (
                 <li key={c.name} className="rounded-lg border border-white/10 min-w-0 overflow-hidden">
-                  <button
-                    type="button"
-                    aria-expanded={isOpen}
-                    aria-controls={panelId}
-                    onClick={() => setExpandedChampion(isOpen ? null : c.name)}
-                    className="w-full text-left p-3 min-h-11 space-y-2 min-w-0 cursor-pointer hover:bg-white/[0.04] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-indigo-400"
+                  <Link
+                    to={championDetailPath(c.name)}
+                    className="block w-full text-left p-3 min-h-11 space-y-2 min-w-0 hover:bg-white/[0.04] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-indigo-400"
                   >
                     <MonoName className="block w-full text-sm font-medium text-white">{c.name}</MonoName>
                     <div className="flex items-center justify-between gap-2 min-w-0">
                       <Badge tone="run">running now</Badge>
-                      <span
-                        aria-hidden
-                        className={`shrink-0 text-white/40 text-sm leading-none transition-transform ${isOpen ? "rotate-90" : ""}`}
-                      >
+                      <span aria-hidden className="shrink-0 text-white/40 text-sm leading-none">
                         ▸
                       </span>
                     </div>
                     <div className="flex flex-wrap items-center gap-1 min-w-0">
                       <PairLotChips
-                        btc={liveLotsKnown ? split.btc : "—"}
-                        eth={liveLotsKnown ? split.eth : "—"}
+                        btc={c.liveLotsKnown && c.btc != null ? c.btc : "—"}
+                        eth={c.liveLotsKnown && c.eth != null ? c.eth : "—"}
                       />
-                      <LotHealthSummaryChips lots={lots} />
+                      <LotHealthSummaryChips lots={c.lots} />
                       <ChampionSinceChip since={c.champion_since} />
                     </div>
                     <FieldGrid>
-                      <Field label="Open lots">{liveLotsKnown ? split.total : knownCount}</Field>
-                      <Field label={`Closed (of ${evalLimit})`}>{c.closed} / {evalLimit}</Field>
+                      <Field label="Open lots">{c.openLots}</Field>
+                      <Field label={`Closed (of ${evalLimit})`}>
+                        {c.closed} / {evalLimit}
+                      </Field>
                       <Field label="Wins">{c.wins}</Field>
                       <Field label="Paper P&L" className={c.pnl >= 0 ? "text-emerald-400" : "text-rose-400"}>
                         <span className="font-medium">{fmt(c.pnl)}</span>
                       </Field>
                       <Field label="Champion since">{fmtChampionSince(c.champion_since)}</Field>
                     </FieldGrid>
-                  </button>
-                  {isOpen && (
-                    <div
-                      id={panelId}
-                      className="border-t border-white/10 px-3 py-3 bg-white/[0.02] min-w-0 space-y-3"
-                    >
-                      <div className="min-w-0 space-y-2">
-                        <div>
-                          <div className="text-[11px] uppercase tracking-wider text-white/40">Strategy</div>
-                          <CopyableName name={c.name} className="mt-0.5" />
-                        </div>
-                        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 min-w-0 text-xs text-white/50">
-                          <span className="min-w-0 break-words [overflow-wrap:anywhere]">
-                            Started {fmtChampionSince(c.champion_since)}
-                          </span>
-                        </div>
-                      </div>
-                      <ExpandedChampionLots
-                        lots={lots}
-                        liveReady={liveReady}
-                        knownCount={knownCount}
-                      />
-                      <ChampionTape championName={c.name} compact />
-                    </div>
-                  )}
+                  </Link>
                 </li>
-              );
-            })}
-          </ul>
+              ))}
+            </PhoneCards>
+            <DesktopTable>
+              <table className="w-full text-xs">
+                <thead className="text-white/40 uppercase">
+                  <tr>
+                    <SortTh label="Name" column="name" sort={sort} onCycle={cycleColumn} />
+                    <SortTh label="Since" column="since" sort={sort} onCycle={cycleColumn} />
+                    <SortTh label="BTC" column="btc" sort={sort} onCycle={cycleColumn} align="right" />
+                    <SortTh label="ETH" column="eth" sort={sort} onCycle={cycleColumn} align="right" />
+                    <SortTh label="Open" column="openLots" sort={sort} onCycle={cycleColumn} align="right" />
+                    <SortTh label="Closed" column="closed" sort={sort} onCycle={cycleColumn} align="right" />
+                    <SortTh label="Wins" column="wins" sort={sort} onCycle={cycleColumn} align="right" />
+                    <SortTh label="Paper P&L" column="pnl" sort={sort} onCycle={cycleColumn} align="right" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {visible.map((c) => (
+                    <tr
+                      key={c.name}
+                      className="border-t border-white/5 cursor-pointer hover:bg-white/[0.04]"
+                      onClick={() => openChampion(c.name)}
+                    >
+                      <td className="py-1" title={c.name}>
+                        <Link
+                          to={championDetailPath(c.name)}
+                          className="block min-h-11 py-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-indigo-400"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <MonoName className="font-medium text-white">{c.name}</MonoName>
+                        </Link>
+                      </td>
+                      <td className="text-white/50">{fmtChampionSince(c.champion_since)}</td>
+                      <td className="text-right font-mono tabular-nums">
+                        {c.liveLotsKnown && c.btc != null ? c.btc : "—"}
+                      </td>
+                      <td className="text-right font-mono tabular-nums">
+                        {c.liveLotsKnown && c.eth != null ? c.eth : "—"}
+                      </td>
+                      <td className="text-right font-mono tabular-nums">{c.openLots}</td>
+                      <td className="text-right font-mono tabular-nums">
+                        {c.closed} / {evalLimit}
+                      </td>
+                      <td className="text-right font-mono tabular-nums">{c.wins}</td>
+                      <td className={`text-right font-mono font-bold ${c.pnl >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
+                        {fmt(c.pnl)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </DesktopTable>
+            {viewed.length > shown && (
+              <button
+                type="button"
+                onClick={() => setShown((n) => n + PAGE)}
+                className="mt-3 min-h-11 px-3 py-2 text-xs bg-white/10 hover:bg-white/20 rounded text-white"
+              >
+                Show more ({viewed.length - shown} left)
+              </button>
+            )}
+          </>
         )}
         <div className="text-xs text-white/45 mt-3">
           {openLots} open lots on the paper book

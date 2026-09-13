@@ -282,16 +282,19 @@ class AnnotateAndLivePreviewTests(unittest.TestCase):
 class LotHealthUiTests(unittest.TestCase):
     def test_expanded_champion_and_positions_show_per_lot_chips(self):
         champs = (REPO / "frontend" / "src" / "pages" / "Champions.tsx").read_text()
+        detail = (REPO / "frontend" / "src" / "pages" / "ChampionDetail.tsx").read_text()
+        lots_ui = (REPO / "frontend" / "src" / "status" / "ChampionLots.tsx").read_text()
         positions = (REPO / "frontend" / "src" / "pages" / "Positions.tsx").read_text()
         tape = (REPO / "frontend" / "src" / "chart" / "ChampionTape.tsx").read_text()
         types = (REPO / "frontend" / "src" / "api" / "types.ts").read_text()
         fmt = (REPO / "frontend" / "src" / "status" / "format.ts").read_text()
         self.assertIn("openLotsForChampion", champs)
-        self.assertIn("LotHealthChips", champs)
         self.assertIn("LotHealthSummaryChips", champs)
-        collapsed = champs.split("{isOpen &&")[0]
-        self.assertIn("LotHealthSummaryChips", collapsed)
-        self.assertIn("not a third strategy state", champs)
+        list_body = champs.split("Graduated paper")[0]
+        self.assertIn("LotHealthSummaryChips", list_body)
+        self.assertIn("LotHealthChips", lots_ui)
+        self.assertIn("not a third strategy state", lots_ui)
+        self.assertIn("openLotsForChampion", detail)
         self.assertIn("flatOpenLots", positions)
         self.assertIn("LotHealthChips", positions)
         self.assertIn("not a third strategy state", positions)

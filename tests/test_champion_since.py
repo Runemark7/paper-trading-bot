@@ -13,6 +13,8 @@ REPO = Path(__file__).resolve().parents[1]
 TYPES_TS = (REPO / "frontend" / "src" / "api" / "types.ts").read_text()
 FORMAT_TS = (REPO / "frontend" / "src" / "status" / "format.ts").read_text()
 CHAMPS_TSX = (REPO / "frontend" / "src" / "pages" / "Champions.tsx").read_text()
+DETAIL_TSX = (REPO / "frontend" / "src" / "pages" / "ChampionDetail.tsx").read_text()
+LOTS_TSX = (REPO / "frontend" / "src" / "status" / "ChampionLots.tsx").read_text()
 
 
 def _write_trade(root: Path, name: str, entry_ts: str, *, closed: bool = False) -> None:
@@ -190,14 +192,14 @@ class ChampionSinceUiContractTests(unittest.TestCase):
         self.assertIn("function fmtChampionSince", FORMAT_TS)
         self.assertIn("toLocaleDateString", FORMAT_TS)
         self.assertIn("before dating", FORMAT_TS)
-        collapsed = CHAMPS_TSX.split("{isOpen &&")[0]
-        expanded = CHAMPS_TSX.split("{isOpen &&", 1)[1]
-        self.assertIn("ChampionSinceChip", collapsed)
-        self.assertIn('label="Champion since"', collapsed)
-        self.assertIn("fmtChampionSince(c.champion_since)", collapsed)
-        self.assertIn("flex flex-wrap", collapsed)
-        self.assertIn("Started {fmtChampionSince(c.champion_since)}", expanded)
-        self.assertIn("flex flex-wrap", expanded)
+        list_body = CHAMPS_TSX.split("Graduated paper")[0]
+        self.assertIn("ChampionSinceChip", list_body)
+        self.assertIn('label="Champion since"', list_body)
+        self.assertIn("fmtChampionSince(c.champion_since)", list_body)
+        self.assertIn("flex flex-wrap", list_body)
+        self.assertIn("export function ChampionSinceChip", LOTS_TSX)
+        self.assertIn("Started {fmtChampionSince(champ?.champion_since)}", DETAIL_TSX)
+        self.assertIn("flex flex-wrap", DETAIL_TSX)
         self.assertNotIn("target_active: number", TYPES_TS)
 
 
