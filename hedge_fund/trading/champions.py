@@ -35,12 +35,14 @@ __all__ = [
     "attach_open_lots",
     "backfill_champion_since",
     "collect_live_results",
+    "cull_undated_champions",
     "infer_champion_since",
     "load_graduated",
     "load_pool",
     "paper_beats_buy_and_hold",
     "pool_status",
     "promote_candidates",
+    "retain_champions",
     "save_graduated",
     "save_pool",
 ]
@@ -101,6 +103,81 @@ def save_graduated(grad_list: list[dict]):
     path = _graduated_file()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(grad_list, indent=2))
+
+
+def _normalize_keep(keep: set[str] | list[str] | tuple[str, ...]) -> set[str]:
+    names: set[str] = set()
+    for raw in keep:
+        if isinstance(raw, str) and raw.strip():
+            names.add(raw.strip())
+    return names
+
+
+def _has_champion_since(row: dict) -> bool:
+    """True iff persisted champion_since is a non-empty string (UI date)."""
+    since = row.get("champion_since")
+    return isinstance(since, str) and bool(since.strip())
+
+
+def _retain_unlocked(keep: set[str]) -> dict:
+    """Filter the active pool. Does not delete per-account trade DBs."""
+    st = load_pool()
+    champs = list(st.get("champions") or [])
+    kept_rows: list[dict] = []
+    kept: list[str] = []
+    removed: list[str] = []
+    for c in champs:
+        if not isinstance(c, dict):
+            continue
+        name = c.get("name")
+        if isinstance(name, str) and name in keep:
+            kept_rows.append(c)
+            kept.append(name)
+        elif isinstance(name, str):
+            removed.append(name)
+    st["champions"] = kept_rows
+    save_pool(st)
+    return {
+        "ok": True,
+        "paper_only": True,
+        "kept": kept,
+        "removed": removed,
+        "active_count": len(kept_rows),
+    }
+
+
+def retain_champions(keep: set[str]) -> dict:
+    """Keep only ``keep`` names in champions.json. Drop the rest from the pool.
+
+    Does not delete ``trades_*.sqlite`` — live_cycle stops a name once it
+    leaves the active pool. Unknown keep names are ignored (not admitted).
+    """
+    names = _normalize_keep(keep)
+    with paper_state_lock("discovery"):
+        out = _retain_unlocked(names)
+    out["action"] = "retain"
+    return out
+
+
+def cull_undated_champions() -> dict:
+    """Drop pool rows whose persisted ``champion_since`` is empty.
+
+    Matches the UI "before dating" chip (missing / blank since). Dated OOS
+    admits and dated force-admits stay. Does not infer or backfill dates,
+    and does not delete trade DBs.
+    """
+    with paper_state_lock("discovery"):
+        st = load_pool()
+        keep = {
+            c["name"]
+            for c in (st.get("champions") or [])
+            if isinstance(c, dict)
+            and isinstance(c.get("name"), str)
+            and _has_champion_since(c)
+        }
+        out = _retain_unlocked(keep)
+    out["action"] = "cull_undated"
+    return out
 
 
 def paper_beats_buy_and_hold(

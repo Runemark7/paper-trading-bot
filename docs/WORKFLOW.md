@@ -17,9 +17,10 @@ this file is the living topology.
 | **Mint** | `hedge_fund/trading/refill.py` on the farm | Bounded DIP/MOM + structure AND recipe, plus densified HTF buyer-regime ANDs (`h1_ema_abv_{15,20,24,30}` / `h4_ema_abv_{12,24,48}` / `h4_sma_abv_{24,50}`). Recipe emits HTF×mom (2-atom and 3-atom, including `MOM_FILTERS_HTF_DENSE`) before HTF×dip — mom-before-dip. When never-tested leftovers run dry, the next handful is appended to `state/discovery_extended.json`. Static `generate_universe()` stays inside the ~40–120 compiled-list band. |
 | **Farm** | Alexander's Windows PC (`jensa`) | `scripts/discovery_worker.py` evaluates names against local `state/crypto_history_5m.json` (Binance 5m, **BTC/USDT and ETH/USDT only**). Same fail-once / auto-refill / aggregate-OOS / `rm_v1` / 5m rules as `scripts/tournament_engine.py`. |
 | **Eval** | `parse_strategy` → walk-forward → backtest → gate | Name string → AND atoms on native 5m → 8 chronological ~90d windows → `rm_v1` paper backtest → aggregate OOS in `hedge_fund/trading/qualify.py`. |
-| **Ingest** | `POST /api/discovery/ingest` | Token-gated. Pass → champion + isolated paper book on k8s. Fail → parked forever (fail-once). Existing champions are never culled. |
+| **Ingest** | `POST /api/discovery/ingest` | Token-gated. Pass → champion + isolated paper book on k8s. Fail → parked forever (fail-once). Ingest never culls existing champions. |
 | **Prod** | k8s cycle sidecar | `DISCOVERY_ON_CYCLE=0` — live trading only (`run_isolated` → collect → report). Do not turn discovery back on in-cluster. UI: `/discovery`. |
 | **Farm Start/Stop** | `/discovery` → `POST /api/discovery/farm` | Same ingest token. Worker **idles** (does not exit). Start cannot relaunch a dead process. |
+| **Champion pool ops** | `POST /api/champions/retain` and `POST /api/champions/cull_undated` | Same ingest token. Explicit paper-ops exception: drop names from `champions.json` so `live_cycle` stops them. Does not delete trade DBs. `cull_undated` keeps only non-empty `champion_since`. |
 
 **Current walk-forward (after [#43](https://github.com/Runemark7/paper-trading-bot/pull/43)):**
 `QUAL_N_WINDOWS` = 8, `QUAL_WINDOW_DAYS` = 90, `QUAL_COVERAGE_DAYS` = 720

@@ -1101,6 +1101,50 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertIn("mom-before-dip", workflow)
         self.assertIn("h1_ema_abv_15", workflow)
 
+    def test_amendment_2026_09_13_champion_retain_cull(self):
+        from hedge_fund.trading.constants import (
+            MIN_BACKTEST_SHARPE,
+            MIN_BACKTEST_TRADES,
+            QUAL_TIMEFRAME,
+            RISK_POLICY,
+            TRADE_EVALUATION_LIMIT,
+        )
+
+        text = (REPO / "PROTOCOL.md").read_text()
+        self.assertIn("Amendment 2026-09-13 — token-gated champion retain", text)
+        self.assertIn("/api/champions/retain", text)
+        self.assertIn("/api/champions/cull_undated", text)
+        self.assertIn("PAPER_DISCOVERY_INGEST_TOKEN", text)
+        self.assertIn("active pool", text)
+        self.assertIn("before dating", text)
+        self.assertIn("OOS **thresholds** are unchanged", text)
+        self.assertIn("Still paper", text)
+        self.assertEqual(QUAL_TIMEFRAME, "5m")
+        self.assertEqual(RISK_POLICY, "rm_v1")
+        self.assertEqual(MIN_BACKTEST_TRADES, 30)
+        self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
+        self.assertEqual(TRADE_EVALUATION_LIMIT, 80)
+        web = (REPO / "docs" / "WEB_SERVICE.md").read_text()
+        self.assertIn("/api/champions/retain", web)
+        self.assertIn("/api/champions/cull_undated", web)
+        self.assertIn("PAPER_DISCOVERY_INGEST_TOKEN", web)
+        self.assertIn("Does not delete trade DBs", web)
+        workflow = (REPO / "docs" / "WORKFLOW.md").read_text()
+        self.assertIn("/api/champions/retain", workflow)
+        self.assertIn("cull_undated", workflow)
+        self.assertIn("Ingest never culls", workflow)
+        readme = (REPO / "README.md").read_text()
+        self.assertIn("/api/champions/retain", readme)
+        self.assertIn("cull_undated", readme)
+        champs = (REPO / "hedge_fund" / "trading" / "champions.py").read_text()
+        self.assertIn("def retain_champions", champs)
+        self.assertIn("def cull_undated_champions", champs)
+        self.assertIn("Does not delete", champs)
+        server = (REPO / "hedge_fund" / "web" / "server.py").read_text()
+        self.assertIn("/api/champions/retain", server)
+        self.assertIn("/api/champions/cull_undated", server)
+        self.assertIn("_discovery_ingest_authorized", server)
+
 
 class IsolatedRunnerTests(unittest.TestCase):
     def test_no_second_hardcoded_book(self):
