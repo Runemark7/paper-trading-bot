@@ -162,14 +162,19 @@ class ParseStrategyAcceptsTests(unittest.TestCase):
         self.assertFalse(eval_predicate(pred, closes, len(closes) - 1))
 
     def test_and_with_5m_dip_needs_both(self):
-        # Rising 4h, then a 5m dip at the end.
+        # Rising completed 4h bars, then a forming-4h 5m dip so the HTF
+        # close stays the last completed (buyer) close.
         closes = _uptrend_5m(60)
+        base = closes[-1]
         for j in range(1, 13):
-            closes[-j] = closes[-13] * (1.0 - 0.004 * j)
+            closes.append(base * (1.0 - 0.005 * j))
         pred = parse_strategy("h4_ema_abv_24&dip_12b_lt2pc")
         self.assertTrue(eval_predicate(pred, closes, len(closes) - 1))
-        # Same dip, but smash the completed HTF closes below the EMA.
-        sellers = [c * 0.5 for c in closes]
+        # Same 5m dip after a seller 4h tape — HTF wins (no long).
+        sellers = _uptrend_5m(60, step=-1.0)
+        sbase = sellers[-1]
+        for j in range(1, 13):
+            sellers.append(sbase * (1.0 - 0.005 * j))
         self.assertFalse(eval_predicate(pred, sellers, len(sellers) - 1))
 
     def test_wrappers_still_refused(self):
