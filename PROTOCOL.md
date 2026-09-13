@@ -106,6 +106,7 @@ over a meaningful sample, AND calibration is demonstrated independently of P&L.
 | 2026-09-13 | Same-date later: refill mint adds parser-allowed 1% grind bases (`DIP_FILTERS_GRIND` / `MOM_FILTERS_GRIND`) at lookbacks unused by legacy/wide so `near_duplicate_key` stays distinct, and expands short-MA 3-atoms onto every WIDE mom/dip × `don_hi` / `near_swing_hi`. Farm still 0 natural pass; beat-B&H ~100% (bh_oos ≈ 192). Fail-once stays. No named candlesticks. Static list unchanged. Paper only; OOS gates unchanged. |
 | 2026-09-13 | Causal HTF buyer-regime atoms (`h4_ema_abv_24`, `h4_sma_abv_50`, `h1_ema_abv_24`) resample completed 4h/1h bars from the native 5m series and AND onto existing 5m DIP/MOM/WIDE/GRIND bases in the refill recipe. Long-only: HTF sellers → no new long (flat). Mint/parser only. `daily()`/`h1()`/`m5()` wrappers stay refused. Paper only; OOS thresholds and `QUAL_N_WINDOWS` unchanged. |
 | 2026-09-13 | Same-date later: HTF densify + mom-before-dip. Extra parser-allowed HTF periods (`h1_ema_abv_{15,20,30}`, `h4_ema_abv_{12,48}`, `h4_sma_abv_24`) and `MOM_FILTERS_HTF_DENSE` (`mom_18b_gt4pc` / `mom_18b_gt6pc` / `mom_12b_gt6pc`) stay distinct under `near_duplicate_key`. Recipe emits HTF×mom (2-atom and 3-atom) before HTF×dip. First natural OOS qualify was `h1_ema_abv_24&mom_18b_gt2pc`. Fail-once stays. No named candlesticks. Static list unchanged. Paper only; OOS gates unchanged. |
+| 2026-09-13 | Same-date later: HTF×mom mint is 2-atom only (`regime&mom`). `_regime_ands` no longer emits HTF×mom×structure or HTF×dip×structure (`don_hi` / `near_swing_lo`). Densified `REGIME_ATOMS` + `MOM_FILTERS_HTF_DENSE` and mom-before-dip stay. Structure ANDs on that family printed large negative pnl. Fail-once stays. No named candlesticks. Static list unchanged. Paper only; OOS gates unchanged. |
 | 2026-09-13 | Token-gated paper ops: `POST /api/champions/retain` (keep-list) and `POST /api/champions/cull_undated` (drop missing `champion_since` / UI "before dating"). Same `PAPER_DISCOVERY_INGEST_TOKEN` as ingest/farm. Active pool only — no trade-DB delete. OOS thresholds unchanged. |
 
 ### Amendment 2026-08-30 — what actually runs
@@ -681,6 +682,30 @@ This amendment does not rewrite original §§ 1–8 or prior amendments. Qual/li
 **Superseded on this date** (prior text kept above for history):
 
 - Same-date "causal HTF buyer-regime atoms" insofar as `REGIME_ATOMS` froze at three names and `_regime_ands` emitted DIP-first cartesian order (dip 3-atoms before HTF×mom×structure). Fail-once, farm ingest, cycle budget, OOS **thresholds**, `QUAL_N_WINDOWS`, the shipped v1 HTF parser, and the static 40–120 compiled-list band are not superseded.
+
+### Amendment 2026-09-13 — HTF×mom 2-atom-only mint (no structure AND)
+
+This amendment does not rewrite original §§ 1–8 or prior amendments. Qual/live remain 5m, risk policy remains `rm_v1`. OOS **thresholds** are unchanged: `MIN_BACKTEST_TRADES` = 30, `MIN_BACKTEST_SHARPE` = 0.30, must beat buy-and-hold, must beat `sma_stack`, all-windows non-negative is diagnostic only, fail-once never-retest stays. `QUAL_N_WINDOWS` = 8, `DISCOVERY_LOG_CAP` = 10000, `DISCOVERY_REFILL_BATCH_SIZE` = 16 stay. Discovery walk-forwards stay on the Windows farm (`scripts/discovery_worker.py` → `/api/discovery/ingest`); cluster `live_cycle` keeps discovery off (`DISCOVERY_ON_CYCLE=0`). **Still paper.** `GRADUATED_PAPER` meaning is unchanged. Do not cull existing champions. Do not retest parked fails.
+
+**Why.** After HTF densify (#49), three natural 2-atom qualifies cleared the frozen gate (`h1_ema_abv_{20,24,30}&mom_18b_gt2pc`). Remaining eligible names were HTF×mom×structure 3-atoms (`don_hi` / `near_swing_lo` at 12/24/48) with large negative pnl / fail B&H+Sharpe (e.g. `h1_ema_abv_24&mom_18b_gt2pc&don_hi_*` ≈ −4k). Structure ANDs on the mild-continuation edge burn the farm. Bottleneck is still mint/search quality under the frozen gate — not a request to lower bars.
+
+**What changed** (`hedge_fund.trading.refill._regime_ands`). Densified `REGIME_ATOMS` and `MOM_FILTERS_HTF_DENSE` stay. Mom-before-dip stays (all `regime&mom` / grind 2-atoms, then `regime&dip` 2-atoms). `_regime_ands` no longer yields `regime&entry&don_hi_N` / `regime&entry&near_swing_lo_N` for mom or dip. `REGIME_STRUCTURE_NS` / `REGIME_STRUCTURE_TAGS` remain as the unused former light set. Leftover non-HTF structure families are unchanged.
+
+**Why this should help under the frozen gate.** The admit path is 2-atom HTF buyer-regime × short mom continuation. After jensa sync, the next dry refill walks the recipe from the start and skips taken keys, so never-tested HTF×mom 2-atoms mint instead of more HTF×mom×structure. Sharpe is still the honest 0.30 bar. No named candlesticks, no WaveTrend, no MFI.
+
+**Static list unchanged.** `generate_universe()` / `NEW_STRUCTURE_ANDS` stay inside `UNIVERSE_TARGET_MIN` / `UNIVERSE_TARGET_MAX` (~40–120). The farm picks new names from the recipe via `discovery_extended.json`. Sync the worker on jensa before the next dry refill (out of band for the PR).
+
+**Skipped.** Exact names and `near_duplicate_key` collisions against champions, graduated, the static universe, already-emitted extended names, and any `discovery_log.json` row (pass or fail). Refused families stay out: no H&S / flags / triangles / engulfing / hammer / doji / morning_star / evening_star / candlestick encyclopedia / chart_patterns zoo; no Market Cipher scrape; no new `wt_*` WaveTrend spam; no MFI; no `dbl_top` longs; no `daily()`/`h1()`/`m5()` wrappers.
+
+**Topology.** Still mint → farm → gate. [docs/WORKFLOW.md](docs/WORKFLOW.md) §3 records HTF×mom 2-atom-only (no structure AND on that family).
+
+**What did not change.** Sharpe 0.30, 30 OOS trades, beat B&H, beat `sma_stack`, 5m, `rm_v1`, all-windows diagnostic only, fail-once, `QUAL_N_WINDOWS` = 8.
+
+**How to evaluate after merge.** Natural `tested_pass` / unique tested, plus the fail-reason mix (beat-B&H, Sharpe, trades, beat `sma_stack`). Do not change gate constants to move those numbers.
+
+**Superseded on this date** (prior text kept above for history):
+
+- Same-date "HTF densify + mom-before-dip" insofar as `_regime_ands` emitted HTF×mom×structure and HTF×dip×structure 3-atoms. Densified atoms, `MOM_FILTERS_HTF_DENSE`, mom-before-dip 2-atom order, fail-once, farm ingest, cycle budget, OOS **thresholds**, `QUAL_N_WINDOWS`, the shipped v1 HTF parser, and the static 40–120 compiled-list band are not superseded.
 
 ### Amendment 2026-09-13 — token-gated champion retain / cull_undated
 
