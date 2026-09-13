@@ -1100,7 +1100,7 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertIn("mom-before-dip", workflow)
         self.assertIn("h1_ema_abv_15", workflow)
         self.assertIn("2-atom only", workflow)
-        self.assertIn("no structure AND", workflow.lower())
+        self.assertIn("no structure and", workflow.lower())
 
     def test_amendment_2026_09_13_champion_retain_cull(self):
         from hedge_fund.trading.constants import (
