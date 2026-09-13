@@ -14,7 +14,7 @@ this file is the living topology.
 
 | Piece | Where | What it does |
 |---|---|---|
-| **Mint** | `hedge_fund/trading/refill.py` on the farm | Bounded DIP/MOM + structure AND recipe, plus densified HTF buyer-regime ANDs (`h1_ema_abv_{15,18,20,24,30,36}` / `h1_sma_abv_{20,24,30}` / `h4_ema_abv_{12,24,48}` / `h4_sma_abv_{24,50}`). HTF×mom mint is **2-atom only** (`regime&mom`, including `MOM_FILTERS_HTF_DENSE`) — no structure AND on that family (or on HTF×dip). Recipe emits HTF×mom before HTF×dip — mom-before-dip — `mom_18b_gt2pc` first among regime mom bases, and `dip_24b_lt5pc` / `dip_24b_lt6pc` / `dip_18b_lt2pc` first among regime dip bases (`REGIME_DIP_PRIORITY`). When never-tested leftovers run dry, the next handful is appended to `state/discovery_extended.json`. Static `generate_universe()` stays inside the ~40–120 compiled-list band. |
+| **Mint** | `hedge_fund/trading/refill.py` on the farm | Bounded DIP/MOM + structure AND recipe (`STRUCTURE_NS` through **96** — no `don_hi` / `don_lo` / `near_swing_*` / `dbl_bot` `N>96`), plus densified HTF buyer-regime ANDs (`h1_ema_abv_{15,18,20,24,30,36}` / `h1_sma_abv_{20,24,30}` / `h4_ema_abv_{12,24,48}` / `h4_sma_abv_{24,50}`). HTF×mom mint is **2-atom only** (`regime&mom`, including `MOM_FILTERS_HTF_DENSE`) — no structure AND on that family (or on HTF×dip). Recipe emits HTF×mom before HTF×dip — mom-before-dip — `mom_18b_gt2pc` first among regime mom bases, and `dip_24b_lt5pc` / `dip_24b_lt6pc` / `dip_18b_lt2pc` first among regime dip bases (`REGIME_DIP_PRIORITY`). When never-tested leftovers run dry, the next handful is appended to `state/discovery_extended.json`. Static `generate_universe()` stays inside the ~40–120 compiled-list band. |
 | **Farm** | Alexander's Windows PC (`jensa`) | `scripts/discovery_worker.py` evaluates names against local `state/crypto_history_5m.json` (Binance 5m, **BTC/USDT and ETH/USDT only**). Same fail-once / auto-refill / aggregate-OOS / `rm_v1` / 5m rules as `scripts/tournament_engine.py`. Before walk-forward: structure lookback cap (`DISCOVERY_STRUCTURE_LOOKBACK_MAX` = 96) fail-parks `lookback_too_expensive`; 600s eval timeout is a backstop only. Ops/throughput, not a gate softening. |
 | **Eval** | lookback guard → `parse_strategy` → walk-forward → backtest → gate | Name string → structure lookback cap → AND atoms on native 5m → 8 chronological ~90d windows → `rm_v1` paper backtest → aggregate OOS in `hedge_fund/trading/qualify.py`. |
 | **Ingest** | `POST /api/discovery/ingest` | Token-gated. Pass → champion + isolated paper book on k8s. Fail → parked forever (fail-once). Ingest never culls existing champions. |
@@ -94,8 +94,9 @@ Caption: Names are minted on the farm, walked on jensa against Binance 5m
 BTC/ETH, then POSTed to prod. The cluster never runs walk-forwards.
 Start/Stop on `/discovery` is token-gated and only idles the worker.
 Lookback cap / eval timeout are farm ops (throughput) — they do not
-change OOS thresholds. Recipe may still emit lookback-168 names; the
-worker fail-parks them so dry refill can move on.
+change OOS thresholds. Mint no longer emits structure `N>96`; leftover
+already-tested lookback-168/192 names stay parked. Worker fail-park
+remains the backstop for any leftover already-queued name.
 
 ---
 

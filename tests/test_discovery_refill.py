@@ -17,6 +17,10 @@ from hedge_fund.trading.constants import (
     QUAL_N_WINDOWS,
 )
 from hedge_fund.trading.discovery import prioritize_leftovers
+from hedge_fund.trading.discovery_guard import (
+    DEFAULT_STRUCTURE_LOOKBACK_MAX,
+    structure_lookbacks,
+)
 from hedge_fund.trading.refill import (
     CONTINUATION_TRENDS,
     DIP_FILTERS,
@@ -222,14 +226,15 @@ class RecipeBoundsTests(unittest.TestCase):
         names = list(iter_recipe_names())
         self.assertGreater(len(names), 1500)
         self.assertLessEqual(len(names), 8000)
-        self.assertEqual(len(STRUCTURE_NS), 22)
+        self.assertEqual(STRUCTURE_NS, STRUCTURE_NS_THROUGH_96)
+        self.assertEqual(len(STRUCTURE_NS), 14)
         self.assertEqual(STRUCTURE_NS_THROUGH_96[-2:], (84, 96))
         self.assertIn(84, STRUCTURE_NS)
         self.assertIn(96, STRUCTURE_NS)
-        self.assertIn(108, STRUCTURE_NS)
-        self.assertIn(192, STRUCTURE_NS)
-        self.assertEqual(STRUCTURE_NS[-2:], (180, 192))
-        self.assertEqual(STRUCTURE_NS[: len(STRUCTURE_NS_THROUGH_96)], STRUCTURE_NS_THROUGH_96)
+        self.assertNotIn(108, STRUCTURE_NS)
+        self.assertNotIn(192, STRUCTURE_NS)
+        self.assertEqual(STRUCTURE_NS[-2:], (84, 96))
+        self.assertEqual(max(STRUCTURE_NS), DEFAULT_STRUCTURE_LOOKBACK_MAX)
         self.assertTrue(all(n % 6 == 0 for n in STRUCTURE_NS))
         self.assertEqual(LEVEL_TRENDS, ("sma_abv_50", "ema_abv_50", "sma_stack_20_50_100"))
         self.assertEqual(
@@ -349,7 +354,7 @@ class RecipeBoundsTests(unittest.TestCase):
         self.assertGreater(len(names), len(_snapshot_htf_regime()))
 
     def test_every_recipe_name_parses_and_has_structure(self):
-        # Tape longer than STRUCTURE_NS max (192) so long lookbacks can evaluate.
+        # Tape longer than STRUCTURE_NS max (96) so lookbacks can evaluate.
         n_bars = 220
         closes = [100.0] * n_bars
         highs = [101.0] * n_bars
@@ -395,13 +400,31 @@ class RecipeBoundsTests(unittest.TestCase):
         for needle in ("engulfing", "hammer", "doji", "head_and_shoulders", "morning_star"):
             self.assertNotIn(needle, blob)
 
+    def test_recipe_does_not_mint_structure_lookbacks_above_96(self):
+        names = list(iter_recipe_names())
+        self.assertEqual(STRUCTURE_NS, STRUCTURE_NS_THROUGH_96)
+        self.assertEqual(max(STRUCTURE_NS), DEFAULT_STRUCTURE_LOOKBACK_MAX)
+        for name in names:
+            for _atom, n in structure_lookbacks(name):
+                self.assertLessEqual(n, 96, msg=name)
+        self.assertIn("don_hi_96", names)
+        self.assertIn("dbl_bot_48", names)
+        self.assertIn("don_lo_12", names)
+        self.assertIn("near_swing_hi_24", names)
+        self.assertNotIn("don_hi_192", names)
+        self.assertNotIn("dbl_bot_168&ema_abv_50", names)
+        self.assertFalse(any("don_hi_192" in n for n in names))
+        self.assertFalse(any("dbl_bot_168" in n for n in names))
+
     def test_recipe_includes_longer_lookbacks_and_leftover_ands(self):
         names = list(iter_recipe_names())
-        # 9h / 16h on 5m (multiples of 6; step of 12 after 72).
-        self.assertIn("dip_6b_lt2pc&don_lo_108", names)
-        self.assertIn("mom_12b_gt3pc&don_hi_192", names)
-        self.assertIn("don_hi_144", names)
-        self.assertIn("near_swing_lo_168", names)
+        # Mint stops at 96 (farm ops cap). Leftover TREND ANDs stay at ≤96.
+        self.assertNotIn("dip_6b_lt2pc&don_lo_108", names)
+        self.assertNotIn("mom_12b_gt3pc&don_hi_192", names)
+        self.assertNotIn("don_hi_144", names)
+        self.assertNotIn("near_swing_lo_168", names)
+        self.assertIn("don_hi_96", names)
+        self.assertIn("dbl_bot_48", names)
         # Parser already allowed ema_stack / ema_abv_100; morning recipe skipped them.
         self.assertIn(f"{STACK_TREND}&don_hi_12", names)
         self.assertIn(f"{STACK_TREND}&don_lo_24", names)
@@ -857,9 +880,9 @@ class RefillBatchTests(unittest.TestCase):
             self.assertTrue(name_is_parseable(name), msg=name)
             self.assertTrue(_has_mint_tag(name), msg=name)
 
-    def test_parking_morning_recipe_still_feeds_longer_lookbacks(self):
+    def test_parking_morning_recipe_still_feeds_leftover_ands(self):
         # Farm drained STRUCTURE_NS through 96 (~917 unique). Fail-once stays.
-        # Longer lookbacks + leftover ANDs must still refill a full batch.
+        # Leftover TREND / ema_stack / 3-atom ANDs (still ≤96) must refill.
         uni = generate_universe()
         morning = _snapshot_2026_09_12_morning()
         taken = (
@@ -876,16 +899,18 @@ class RefillBatchTests(unittest.TestCase):
             with patch.dict(os.environ, {"PAPER_STATE": str(tmp)}):
                 added = next_refill_batch(taken_names=taken, n=DISCOVERY_REFILL_BATCH_SIZE)
         self.assertEqual(len(added), DISCOVERY_REFILL_BATCH_SIZE)
+        leftover_set = set(_snapshot_2026_09_12_leftover())
         for name in added:
             self.assertNotIn(name, taken)
             self.assertNotIn(near_duplicate_key(name), taken_keys, msg=name)
             self.assertTrue(name_is_parseable(name), msg=name)
             self.assertTrue(_has_mint_tag(name), msg=name)
-        # First unused names after the morning drain are the 108 lookbacks.
-        self.assertTrue(any("_108" in n for n in added))
+            self.assertIn(name, leftover_set)
+            for _atom, n in structure_lookbacks(name):
+                self.assertLessEqual(n, 96, msg=name)
 
     def test_parking_leftover_recipe_still_feeds_trend_participation(self):
-        # Farm chewed the 192 / leftover-TREND pass (~1000 unique, 0 pass).
+        # Farm chewed leftover-TREND through 96 (~1000 unique, 0 pass).
         # Wide dip/mom + continuation ANDs must refill and must not collapse
         # onto those parked fails. Fail-once stays.
         uni = generate_universe()
