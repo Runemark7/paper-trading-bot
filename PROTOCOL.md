@@ -106,6 +106,7 @@ over a meaningful sample, AND calibration is demonstrated independently of P&L.
 | 2026-09-13 | Same-date later: refill mint adds parser-allowed 1% grind bases (`DIP_FILTERS_GRIND` / `MOM_FILTERS_GRIND`) at lookbacks unused by legacy/wide so `near_duplicate_key` stays distinct, and expands short-MA 3-atoms onto every WIDE mom/dip × `don_hi` / `near_swing_hi`. Farm still 0 natural pass; beat-B&H ~100% (bh_oos ≈ 192). Fail-once stays. No named candlesticks. Static list unchanged. Paper only; OOS gates unchanged. |
 | 2026-09-13 | Causal HTF buyer-regime atoms (`h4_ema_abv_24`, `h4_sma_abv_50`, `h1_ema_abv_24`) resample completed 4h/1h bars from the native 5m series and AND onto existing 5m DIP/MOM/WIDE/GRIND bases in the refill recipe. Long-only: HTF sellers → no new long (flat). Mint/parser only. `daily()`/`h1()`/`m5()` wrappers stay refused. Paper only; OOS thresholds and `QUAL_N_WINDOWS` unchanged. |
 | 2026-09-13 | Same-date later: HTF densify + mom-before-dip. Extra parser-allowed HTF periods (`h1_ema_abv_{15,20,30}`, `h4_ema_abv_{12,48}`, `h4_sma_abv_24`) and `MOM_FILTERS_HTF_DENSE` (`mom_18b_gt4pc` / `mom_18b_gt6pc` / `mom_12b_gt6pc`) stay distinct under `near_duplicate_key`. Recipe emits HTF×mom (2-atom and 3-atom) before HTF×dip. First natural OOS qualify was `h1_ema_abv_24&mom_18b_gt2pc`. Fail-once stays. No named candlesticks. Static list unchanged. Paper only; OOS gates unchanged. |
+| 2026-09-13 | Token-gated paper ops: `POST /api/champions/retain` (keep-list) and `POST /api/champions/cull_undated` (drop missing `champion_since` / UI "before dating"). Same `PAPER_DISCOVERY_INGEST_TOKEN` as ingest/farm. Active pool only — no trade-DB delete. OOS thresholds unchanged. |
 
 ### Amendment 2026-08-30 — what actually runs
 
@@ -680,5 +681,22 @@ This amendment does not rewrite original §§ 1–8 or prior amendments. Qual/li
 **Superseded on this date** (prior text kept above for history):
 
 - Same-date "causal HTF buyer-regime atoms" insofar as `REGIME_ATOMS` froze at three names and `_regime_ands` emitted DIP-first cartesian order (dip 3-atoms before HTF×mom×structure). Fail-once, farm ingest, cycle budget, OOS **thresholds**, `QUAL_N_WINDOWS`, the shipped v1 HTF parser, and the static 40–120 compiled-list band are not superseded.
+
+### Amendment 2026-09-13 — token-gated champion retain / cull_undated
+
+This amendment does not rewrite original §§ 1–8 or prior amendments. Qual/live remain 5m, risk policy remains `rm_v1`. OOS **thresholds** are unchanged: `MIN_BACKTEST_TRADES` = 30, `MIN_BACKTEST_SHARPE` = 0.30, must beat buy-and-hold, must beat `sma_stack`, all-windows non-negative is diagnostic only, fail-once never-retest stays. Discovery/ingest still never auto-culls. **Still paper.**
+
+**Why.** Some active-pool names have no `champion_since` (UI: "before dating"). Alexander wants those dropped so `live_cycle` stops them. Dated OOS admits and dated force-admits stay. There was no write API for the pool.
+
+**What was added.** Same `PAPER_DISCOVERY_INGEST_TOKEN` as ingest/farm (`Authorization: Bearer`, `X-Discovery-Token`, or `X-Paper-Discovery-Token`). No/wrong token → 401. Unset token → 503.
+
+- `POST /api/champions/retain` body `{ "keep": ["name", ...] }` — retain only those names in `champions.json`; drop the rest from the active pool.
+- `POST /api/champions/cull_undated` — keep only rows with a non-empty persisted `champion_since` (the field the UI formats). Does not infer or backfill dates.
+
+Both rewrite the active pool only. Per-account `trades_*.sqlite` files are not deleted. `GET /api/champions` stays read-only.
+
+**Superseded on this date** (prior text kept above for history):
+
+- Prior "Do not cull existing champions" insofar as it forbade any pool write. Discovery/ingest still never cull. This is an explicit paper-ops exception, active pool only. OOS **thresholds** are not superseded.
 
 

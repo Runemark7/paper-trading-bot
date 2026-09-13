@@ -11,12 +11,15 @@ A small, dependency-free HTTP server (stdlib only) that exposes:
   GET /api/discovery/summary -> tested / in-flight / leftover-untested; farm Start/Stop status
   POST /api/discovery/ingest -> Windows worker: append evals + admit / force_admit (shared secret)
   POST /api/discovery/farm -> Start/Stop Windows farm (same ingest token)
+  POST /api/champions/retain -> keep-list filter of champions.json (same ingest token)
+  POST /api/champions/cull_undated -> drop missing champion_since (same ingest token)
   POST /run             -> trigger a live decision cycle, then regenerate
   GET /health           -> liveness probe
 
 Purpose: a durable little service you can port-forward to and open the
 dashboard (and its data) from any device. Everything is read-only except
-POST /run and the token-gated discovery ingest / farm Start/Stop routes.
+POST /run, the token-gated discovery ingest / farm Start/Stop routes, and
+the token-gated champion retain / cull_undated routes.
 
 Run:
     .venv/bin/python -m hedge_fund.web.server [--port 8787] [--host 0.0.0.0]
@@ -474,6 +477,41 @@ class Handler(BaseHTTPRequestHandler):
 
                 farm = set_farm_enabled(bool(payload.get("enabled")))
                 self._send_json({"ok": True, "paper_only": True, "farm": farm})
+            except Exception as exc:
+                self._send_json({"ok": False, "error": str(exc), "paper_only": True}, 500)
+        elif route in ("/api/champions/retain", "/api/champions/cull_undated"):
+            ok, err, code = self._discovery_ingest_authorized()
+            if not ok:
+                self._send_json({"ok": False, "error": err, "paper_only": True}, code)
+                return
+            payload, err = self._read_json_body()
+            if err:
+                self._send_json({"ok": False, "error": err, "paper_only": True}, 400)
+                return
+            try:
+                from hedge_fund.trading.champions import (
+                    cull_undated_champions,
+                    retain_champions,
+                )
+
+                if route == "/api/champions/retain":
+                    keep = payload.get("keep")
+                    if not isinstance(keep, list):
+                        self._send_json(
+                            {
+                                "ok": False,
+                                "error": "keep must be a list of names",
+                                "paper_only": True,
+                            },
+                            400,
+                        )
+                        return
+                    names = {
+                        n.strip() for n in keep if isinstance(n, str) and n.strip()
+                    }
+                    self._send_json(retain_champions(names))
+                else:
+                    self._send_json(cull_undated_champions())
             except Exception as exc:
                 self._send_json({"ok": False, "error": str(exc), "paper_only": True}, 500)
         else:
