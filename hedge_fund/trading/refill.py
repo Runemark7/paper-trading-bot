@@ -19,6 +19,10 @@ A same-date later pass broadens parser-allowed dip/mom lookbacks and
 ``%`` thresholds and adds continuation (trend-participation) ANDs so
 new names can stay in a strong B&H OOS window long enough to clear
 trades + Sharpe without softening the gate — still no named candlesticks.
+A 2026-09-13 pass adds shallower ``gt1pc`` / ``lt1pc`` grind bases
+(lookbacks unused by legacy/wide so ``near_duplicate_key`` stays
+distinct) and expands short-MA 3-atoms onto every WIDE mom/dip ×
+``don_hi`` / ``near_swing_hi``.
 """
 from __future__ import annotations
 
@@ -72,9 +76,24 @@ MOM_FILTERS_WIDE: tuple[str, ...] = (
     "mom_48b_gt6pc",
 )
 
-# Public mint bases = legacy ∪ wide. Old generators use *_LEGACY.
-DIP_FILTERS: tuple[str, ...] = DIP_FILTERS_LEGACY + DIP_FILTERS_WIDE
-MOM_FILTERS: tuple[str, ...] = MOM_FILTERS_LEGACY + MOM_FILTERS_WIDE
+# Parser-allowed 1% grind. near_duplicate_key maps gt1pc→gt2pc / lt1pc→lt2pc,
+# so lookbacks must not already appear in LEGACY/WIDE (6/12/18/24/36/48/72).
+# 30=2.5h, 42=3.5h, 60=5h, 84=7h on 5m — shallower % stays in a grind-up.
+DIP_FILTERS_GRIND: tuple[str, ...] = (
+    "dip_30b_lt1pc",
+    "dip_42b_lt1pc",
+    "dip_60b_lt1pc",
+)
+MOM_FILTERS_GRIND: tuple[str, ...] = (
+    "mom_30b_gt1pc",
+    "mom_42b_gt1pc",
+    "mom_60b_gt1pc",
+    "mom_84b_gt1pc",
+)
+
+# Public mint bases = legacy ∪ wide ∪ grind. Old generators use *_LEGACY.
+DIP_FILTERS: tuple[str, ...] = DIP_FILTERS_LEGACY + DIP_FILTERS_WIDE + DIP_FILTERS_GRIND
+MOM_FILTERS: tuple[str, ...] = MOM_FILTERS_LEGACY + MOM_FILTERS_WIDE + MOM_FILTERS_GRIND
 
 # Shorter MAs stay above price longer in a bull OOS than sma_abv_200.
 CONTINUATION_TRENDS: tuple[str, ...] = (
@@ -341,21 +360,37 @@ def _leftover_trend_ands(n: int) -> Iterator[str]:
             yield f"{mom}&near_swing_hi_{n}&{trend}"
 
 
+def _continuation_3atoms(n: int, filters: tuple[str, ...]) -> Iterator[str]:
+    """Short MA × breakout / near-high. Parser atoms only; max 3 tokens."""
+    for base in filters:
+        for struct in (f"don_hi_{n}", f"near_swing_hi_{n}"):
+            for ma in CONTINUATION_TRENDS:
+                yield f"{base}&{struct}&{ma}"
+
+
+def _grind_participation_ands(n: int) -> Iterator[str]:
+    """2026-09-13: 1% grind 2-atoms at unused lookbacks. Highest participation."""
+    for mom in MOM_FILTERS_GRIND:
+        yield f"{mom}&don_hi_{n}"
+        yield f"{mom}&near_swing_hi_{n}"
+    for dip in DIP_FILTERS_GRIND:
+        yield f"{dip}&don_hi_{n}"
+        yield f"{dip}&near_swing_hi_{n}"
+
+
 def _trend_participation_ands(n: int) -> Iterator[str]:
-    """2026-09-12 later: wider dip/mom + continuation ANDs.
+    """2026-09-12 later + 2026-09-13 full short-MA 3-atoms.
 
-    Prod fail mix (2026-09-12): beat-B&H ~100% (B&H OOS ≈ +2122), Sharpe
-    below ~95%, trades below ~49%. High-Sharpe 3-atom structure ANDs
-    under-trade; the few Sharpe+trades near-misses (mom_6b_gt2pc family,
-    dbl_bot_132) still print negative OOS PnL. Legacy 3×3 is too tight
-    and too mean-reversion-heavy for that window.
+    Prod 2026-09-13: PR #42 WIDE is on the farm; still 0 names beat B&H
+    (bh_oos ≈ 192). Sharpe+trades near-misses exist but print negative
+    vs B&H. Next lever is shallower 1% grind + more time-in-market
+    3-atoms (parser-allowed atoms only). Gate constants stay frozen.
 
-    Wide mom (longer lookback, 2% grind) × breakout / near-high stays in
-    the upside. Shallow dip × continuation (not dip×support) buys a small
-    pullback that is already breaking. Short MA × breakout participates
-    more than sma_abv_200. A few loose 3-atoms (2% × sma_abv_20 × don_hi)
-    keep a trend confirm without the old under-trade stack. Parser atoms
-    only. No named candlesticks.
+    Wide mom / shallow dip × continuation stay. Short MA × breakout
+    participates more than sma_abv_200. Every WIDE mom/dip now gets
+    both ``sma_abv_20`` and ``ema_abv_20`` on ``don_hi`` /
+    ``near_swing_hi`` (was gt2pc/lt2pc × don_hi × sma_abv_20 only).
+    Parser atoms only. No named candlesticks.
     """
     for mom in MOM_FILTERS_WIDE:
         yield f"{mom}&don_hi_{n}"
@@ -366,27 +401,24 @@ def _trend_participation_ands(n: int) -> Iterator[str]:
     for trend in CONTINUATION_TRENDS:
         yield f"{trend}&don_hi_{n}"
         yield f"{trend}&near_swing_hi_{n}"
-    for mom in MOM_FILTERS_WIDE:
-        if not mom.endswith("_gt2pc"):
-            continue
-        yield f"{mom}&don_hi_{n}&sma_abv_20"
-    for dip in DIP_FILTERS_WIDE:
-        if not dip.endswith("_lt2pc"):
-            continue
-        yield f"{dip}&don_hi_{n}&sma_abv_20"
+    yield from _continuation_3atoms(n, MOM_FILTERS_WIDE)
+    yield from _continuation_3atoms(n, DIP_FILTERS_WIDE)
 
 
 def iter_recipe_names() -> Iterator[str]:
     """Deterministic bounded stream. Not a full cartesian of every atom.
 
-    Trend-participation / wide dip-mom families are first so a mid-drain
-    farm (eligible leftovers from the 3×3 recipe) mints continuation
-    names on the next dry refill instead of more mean-reversion clones.
-    Legacy 2026-09-11 families, then the 2026-09-12 near-level pass, then
-    leftover TREND / ema_stack / 3-atom families, stay in the stream for
-    later. Dip×support and short-horizon mom stay on the frozen 3×3.
-    No WaveTrend, no MFI.
+    Grind 1% 2-atoms are first (all lookbacks) so a mid-drain farm
+    (eligible leftovers from the 3×3 recipe, or a farm still chewing
+    #42 WIDE 2-atoms) mints higher-participation names on the next dry
+    refill instead of more mean-reversion clones. Wide / short-MA
+    continuation follows, then legacy 2026-09-11 families, the
+    2026-09-12 near-level pass, then leftover TREND / ema_stack /
+    3-atom families. Dip×support and short-horizon mom stay on the
+    frozen 3×3. No WaveTrend, no MFI.
     """
+    for n in STRUCTURE_NS:
+        yield from _grind_participation_ands(n)
     for n in STRUCTURE_NS:
         yield from _trend_participation_ands(n)
     for n in STRUCTURE_NS:

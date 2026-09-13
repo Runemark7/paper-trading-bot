@@ -172,6 +172,7 @@ the farm stays idle until Start.
 - No WaveTrend clones, MFI, named candlesticks, or chart-pattern zoo.
   Auto-refill already walks the expanded Donchian / swing / near-level
   recipe (lookbacks through 192, leftover TREND / ema_stack ANDs, wider
-  dip/mom bases and continuation ANDs).
+  dip/mom bases and continuation ANDs, plus 1% grind bases and full
+  short-MA 3-atoms).
 - No culling champions.
 - Do not point `PAPER_STATE` at the cluster PVC.
