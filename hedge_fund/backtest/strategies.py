@@ -37,6 +37,7 @@ from hedge_fund.risk.rm_v1 import (
     atr_stop_price,
 )
 from hedge_fund.signals.dynamic import clear_ema_cache, eval_predicate, parse_strategy
+from hedge_fund.signals.htf import clear_htf_cache
 from hedge_fund.signals.wavetrend import clear_wavetrend_cache
 
 
@@ -338,6 +339,7 @@ def backtest(closes, highs, lows, strategy, start_cash=10_000.0,
         )
     finally:
         clear_ema_cache()
+        clear_htf_cache()
         clear_wavetrend_cache()
 
 

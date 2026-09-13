@@ -24,6 +24,9 @@ lookbacks through 192 and leftover TREND / ema_stack / 3-atom families,
 then the same-date later pass broadens dip/mom lookbacks/% thresholds
 and continuation ANDs, then the 2026-09-13 pass adds 1% grind bases
 and full short-MA 3-atoms (farm picks them up; this static list stays put).
+Amendment 2026-09-13 later: parser accepts causal HTF buyer-regime atoms
+(``h4_ema_abv_24`` / ``h4_sma_abv_50`` / ``h1_ema_abv_24``); the refill
+recipe ANDs them onto existing 5m bases. This static list stays put.
 Trend / breakout /
 momentum stay as sma_stack/sma_abv, don_hi_*, mom_* — not a second stack.
 Near-duplicate keys collapse tiny param tweaks.
@@ -97,6 +100,9 @@ def _canon_atom(atom: str) -> str:
     m = re.match(r"^(sma_abv|ema_abv)_(\d+)$", atom)
     if m:
         return f"{m.group(1)}_{_round_period(int(m.group(2)))}"
+    m = re.match(r"^(h4|h1)_(sma_abv|ema_abv)_(\d+)$", atom)
+    if m:
+        return f"{m.group(1)}_{m.group(2)}_{_round_period(int(m.group(3)))}"
     m = re.match(r"^rsi_(\d+)_>(\d+)(?:_<(\d+))?$", atom)
     if m:
         p = _round_period(int(m.group(1)))
