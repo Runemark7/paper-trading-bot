@@ -28,12 +28,38 @@ Predicate = Callable[..., bool]
 
 # Per-bar EMA used to recompute 0..i from the SMA seed every call (O(i)).
 # Qualification walks thousands of bars; cache the causal series (O(n) once).
-_EMA_CACHE_MAX = 48
-_ema_series_cache: dict[tuple[int, int, int], list[float]] = {}
+# Sized for one farm batch: 8 windows × 2 symbols × 2 splits × a few periods.
+_EMA_CACHE_MAX = 1024
+_SMA_CACHE_MAX = 1024
+_ema_series_cache: dict[tuple, list[float]] = {}
+_sma_series_cache: dict[tuple, list[float]] = {}
 
 
 def clear_ema_cache() -> None:
     _ema_series_cache.clear()
+
+
+def clear_sma_cache() -> None:
+    _sma_series_cache.clear()
+
+
+def _series_cache_key(closes: list[float], period: int) -> tuple:
+    """id + length + endpoints so a recycled list id cannot serve a stale series."""
+    n = len(closes)
+    if n == 0:
+        return (id(closes), period, 0, 0.0, 0.0, 0.0)
+    return (id(closes), period, n, closes[0], closes[n // 2], closes[-1])
+
+
+def _sma_series(closes: list[float], period: int) -> list[float]:
+    """Window SMA at every bar. Same ``sum(window) / period`` as ``sma``."""
+    n = len(closes)
+    out = [float("nan")] * n
+    if period <= 0 or n < period:
+        return out
+    for idx in range(period - 1, n):
+        out[idx] = sum(closes[idx - period + 1 : idx + 1]) / period
+    return out
 
 
 def _ema_series(closes: list[float], period: int) -> list[float]:
@@ -55,7 +81,15 @@ def sma(closes: list[float], period: int, i: int | None = None) -> float:
     i = len(closes) - 1 if i is None else i
     if i < period - 1 or period <= 0:
         return float("nan")
-    return sum(closes[i - period + 1 : i + 1]) / period
+    n = len(closes)
+    key = _series_cache_key(closes, period)
+    series = _sma_series_cache.get(key)
+    if series is None or len(series) != n:
+        if len(_sma_series_cache) >= _SMA_CACHE_MAX:
+            _sma_series_cache.clear()
+        series = _sma_series(closes, period)
+        _sma_series_cache[key] = series
+    return series[i]
 
 
 def ema(closes: list[float], period: int, i: int | None = None) -> float:
@@ -63,7 +97,7 @@ def ema(closes: list[float], period: int, i: int | None = None) -> float:
     if i < period - 1 or period <= 0:
         return float("nan")
     n = len(closes)
-    key = (id(closes), period, n)
+    key = _series_cache_key(closes, period)
     series = _ema_series_cache.get(key)
     if series is None or len(series) != n:
         if len(_ema_series_cache) >= _EMA_CACHE_MAX:

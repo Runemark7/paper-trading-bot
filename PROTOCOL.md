@@ -110,6 +110,7 @@ over a meaningful sample, AND calibration is demonstrated independently of P&L.
 | 2026-09-13 | Same-date later: densify `h1_ema_abv_18` / `h1_ema_abv_36` around the admit island `h1_ema_abv_{20,24,30}&mom_18b_gt2pc`. Regime path emits `mom_18b_gt2pc` then `mom_12b_gt2pc` / `mom_24b_gt2pc` first. HTF×mom stays 2-atom only. Fail-once stays. No named candlesticks. Static list unchanged. Paper only; OOS gates unchanged. |
 | 2026-09-13 | Same-date later: mint non-collapsing `h1_sma_abv_{20,24,30}` twins of the winning EMA island and prioritize mild pullback dips (`REGIME_DIP_PRIORITY`: `dip_24b_lt5pc` / `dip_24b_lt6pc` / `dip_18b_lt2pc`) on the HTF×dip path. Do not mint `h1_sma_abv_18` (18→20) or `dip_24b_lt4pc` (same canon as lt5). HTF×mom and HTF×dip stay 2-atom only. Fail-once stays. No named candlesticks. Static list unchanged. Paper only; OOS gates unchanged. |
 | 2026-09-13 | Token-gated paper ops: `POST /api/champions/retain` (keep-list) and `POST /api/champions/cull_undated` (drop missing `champion_since` / UI "before dating"). Same `PAPER_DISCOVERY_INGEST_TOKEN` as ingest/farm. Active pool only — no trade-DB delete. OOS thresholds unchanged. |
+| 2026-09-13 | Same-date later: Windows-farm walk-forward evals cache ATR / SMA / EMA / HTF close series across names on the same window slices (cleared when `_window_slices` builds a new batch). HTF buyer-regime uses the full cached HTF series plus an index (no per-bar prefix list). Same `evaluate_strategy_record` / `strategies.backtest` / `rm_v1` path — not `fast_quant`. OOS thresholds, `QUAL_N_WINDOWS`, and window lengths unchanged. Paper only. |
 
 ### Amendment 2026-08-30 — what actually runs
 
@@ -784,5 +785,17 @@ Both rewrite the active pool only. Per-account `trades_*.sqlite` files are not d
 **Superseded on this date** (prior text kept above for history):
 
 - Prior "Do not cull existing champions" insofar as it forbade any pool write. Discovery/ingest still never cull. This is an explicit paper-ops exception, active pool only. OOS **thresholds** are not superseded.
+
+### Amendment 2026-09-13 — cheaper Windows-farm walk-forward evals
+
+This amendment does not rewrite original §§ 1–8 or prior amendments. Qual/live remain 5m, risk policy remains `rm_v1`. OOS **thresholds** are unchanged: `MIN_BACKTEST_TRADES` = 30, `MIN_BACKTEST_SHARPE` = 0.30, must beat buy-and-hold, must beat `sma_stack`, all-windows non-negative is diagnostic only, fail-once never-retest stays. `QUAL_N_WINDOWS` = 8, `QUAL_WINDOW_BARS` = 25920. **Still paper.**
+
+**Why.** Eight × ~90d native 5m is a long tape on jensa. Profile of `evaluate_strategy_record` showed per-bar ATR rebuild (~O(n × 14) listcomp) and HTF buyer-regime allocating a new completed-prefix list and recomputing EMA every bar. Caches were cleared after every `backtest()` call, so a farm batch of names on the same slices paid that cost repeatedly.
+
+**What changed (speed only).** Causal ATR / SMA / EMA / HTF-close series are cached for the life of a window-slice batch and reused across names. `_window_slices` clears them when new lists are built (avoids `id()` reuse). `htf_close_above_ma` indexes the full cached HTF series (prefix-stable SMA/EMA). Golden parity tests lock qualify decisions and window aggregates on a reduced 8 × 960 5m fixture. Not `fast_quant`. Do not skip bars or shorten live windows.
+
+**Superseded on this date** (prior text kept above for history):
+
+- 2026-09-10 cheaper-eval text insofar as it implied caches die after each `backtest()`. OOS **thresholds**, window lengths, fail-once, farm ingest, and the live qualify path (`strategies.backtest`, not `fast_quant`) are not superseded.
 
 

@@ -1307,6 +1307,42 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertIn("/api/champions/cull_undated", server)
         self.assertIn("_discovery_ingest_authorized", server)
 
+    def test_amendment_2026_09_13_faster_walkforward_evals(self):
+        from hedge_fund.trading.constants import (
+            MIN_BACKTEST_SHARPE,
+            MIN_BACKTEST_TRADES,
+            QUAL_N_WINDOWS,
+            QUAL_WINDOW_BARS,
+            QUAL_TIMEFRAME,
+            RISK_POLICY,
+        )
+
+        text = (REPO / "PROTOCOL.md").read_text()
+        self.assertIn("cheaper Windows-farm walk-forward evals", text)
+        self.assertIn("not `fast_quant`", text)
+        self.assertIn("OOS **thresholds** are unchanged", text)
+        self.assertIn("Still paper", text)
+        self.assertEqual(QUAL_TIMEFRAME, "5m")
+        self.assertEqual(RISK_POLICY, "rm_v1")
+        self.assertEqual(MIN_BACKTEST_TRADES, 30)
+        self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
+        self.assertEqual(QUAL_N_WINDOWS, 8)
+        self.assertEqual(QUAL_WINDOW_BARS, 25920)
+        te = (REPO / "scripts" / "tournament_engine.py").read_text()
+        self.assertIn("clear_qual_caches", te)
+        self.assertIn("_SPLIT_MEMO", te)
+        self.assertNotIn("from hedge_fund.backtest.fast_quant", te)
+        bs = (REPO / "hedge_fund" / "backtest" / "strategies.py").read_text()
+        self.assertIn("_cached_atr_series", bs)
+        htf = (REPO / "hedge_fund" / "signals" / "htf.py").read_text()
+        self.assertIn("cached full HTF close series", htf)
+        runbook = (REPO / "docs" / "WINDOWS_DISCOVERY.md").read_text()
+        self.assertIn("caches ATR / SMA / EMA / HTF", runbook)
+        self.assertIn("Do **not** turn discovery back on", runbook)
+        parity = (REPO / "tests" / "test_walkforward_parity.py").read_text()
+        self.assertIn("evaluate_strategy_record", parity)
+        self.assertIn("fast_quant", parity)
+
 
 class IsolatedRunnerTests(unittest.TestCase):
     def test_no_second_hardcoded_book(self):

@@ -10,7 +10,10 @@ fail-once / auto-refill / aggregate-OOS / `rm_v1` / 5m rules as
 A single empty/neg window is not a veto (beat-B&H and Sharpe ≥ 0.30 stay).
 Walk-forward is **8 × ~90 calendar days** of native 5m (~720 days, not
 ~270). Thresholds are unchanged. Longer tape makes each eval slower on
-this PC — that is expected. Do **not** turn discovery back on in the
+this PC — that is expected. The worker caches ATR / SMA / EMA / HTF
+close series across names on the same window slices (cleared when a new
+batch of slices is built). That is a per-eval speedup only — do not skip
+bars or shrink windows. Do **not** turn discovery back on in the
 k8s cycle sidecar to "make up time."
 
 Machine: i5-6600K / 16GB / GTX 1070. GPU is unused (no CUDA rewrite).
