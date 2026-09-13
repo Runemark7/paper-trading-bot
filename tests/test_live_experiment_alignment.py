@@ -1063,8 +1063,10 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
         self.assertEqual(QUAL_N_WINDOWS, 8)
         self.assertIn("h1_ema_abv_15", REGIME_ATOMS)
+        self.assertIn("h1_ema_abv_18", REGIME_ATOMS)
         self.assertIn("h1_ema_abv_20", REGIME_ATOMS)
         self.assertIn("h1_ema_abv_30", REGIME_ATOMS)
+        self.assertIn("h1_ema_abv_36", REGIME_ATOMS)
         self.assertEqual(MOM_FILTERS_HTF_DENSE, ("mom_18b_gt4pc", "mom_18b_gt6pc", "mom_12b_gt6pc"))
         for atom in (*REGIME_ATOMS, *MOM_FILTERS_HTF_DENSE):
             self.assertTrue(name_is_parseable(atom), msg=atom)
@@ -1101,6 +1103,71 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertIn("h1_ema_abv_15", workflow)
         self.assertIn("2-atom only", workflow)
         self.assertIn("no structure and", workflow.lower())
+
+    def test_amendment_2026_09_13_htf_ema_abv_18_36(self):
+        from hedge_fund.trading.constants import (
+            MIN_BACKTEST_SHARPE,
+            MIN_BACKTEST_TRADES,
+            QUAL_N_WINDOWS,
+            QUAL_TIMEFRAME,
+            RISK_POLICY,
+        )
+        from hedge_fund.signals.dynamic import parse_strategy
+        from hedge_fund.trading.refill import (
+            REGIME_ATOMS,
+            REGIME_MOM_BASES,
+            iter_recipe_names,
+            name_is_parseable,
+        )
+
+        self.assertEqual(QUAL_TIMEFRAME, "5m")
+        self.assertEqual(RISK_POLICY, "rm_v1")
+        self.assertEqual(MIN_BACKTEST_TRADES, 30)
+        self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
+        self.assertEqual(QUAL_N_WINDOWS, 8)
+        self.assertIn("h1_ema_abv_18", REGIME_ATOMS)
+        self.assertIn("h1_ema_abv_36", REGIME_ATOMS)
+        self.assertEqual(
+            REGIME_MOM_BASES[:3],
+            ("mom_18b_gt2pc", "mom_12b_gt2pc", "mom_24b_gt2pc"),
+        )
+        for atom in ("h1_ema_abv_18", "h1_ema_abv_36"):
+            parse_strategy(atom)
+            self.assertTrue(name_is_parseable(atom), msg=atom)
+        names = list(iter_recipe_names())
+        self.assertIn("h1_ema_abv_18&mom_18b_gt2pc", names)
+        self.assertIn("h1_ema_abv_36&mom_18b_gt2pc", names)
+        self.assertEqual(names.count("h1_ema_abv_18&mom_18b_gt2pc"), 1)
+        self.assertEqual("h1_ema_abv_18&mom_18b_gt2pc".count("&"), 1)
+        self.assertEqual("h1_ema_abv_36&mom_18b_gt2pc".count("&"), 1)
+        self.assertFalse(
+            any(
+                n.startswith("h1_ema_abv_")
+                and "&mom_" in n
+                and any(tok.startswith(("don_hi_", "near_swing_lo_")) for tok in n.split("&"))
+                for n in names
+            )
+        )
+        self.assertNotIn("h1_ema_abv_18&mom_18b_gt2pc&don_hi_12", names)
+        self.assertNotIn("h1_ema_abv_36&mom_18b_gt2pc&near_swing_lo_24", names)
+        self.assertEqual(names[0], "h4_ema_abv_24&mom_18b_gt2pc")
+        self.assertLessEqual(len(names), 8000)
+        blob = " ".join(names)
+        for needle in ("wt_cross", "mfi_", "engulfing", "hammer", "doji"):
+            self.assertNotIn(needle, blob)
+
+        text = (REPO / "PROTOCOL.md").read_text()
+        self.assertIn("h1_ema_abv_18", text)
+        self.assertIn("h1_ema_abv_36", text)
+        self.assertIn("mom_18b_gt2pc", text)
+        self.assertIn("2-atom only", text)
+        self.assertIn("OOS **thresholds** are unchanged", text)
+        self.assertIn("No named candlesticks", text)
+        workflow = (REPO / "docs" / "WORKFLOW.md").read_text()
+        self.assertIn("h1_ema_abv_18", workflow)
+        self.assertIn("h1_ema_abv_36", workflow)
+        self.assertIn("2-atom only", workflow)
+        self.assertIn("mom-before-dip", workflow)
 
     def test_amendment_2026_09_13_champion_retain_cull(self):
         from hedge_fund.trading.constants import (

@@ -34,6 +34,7 @@ from hedge_fund.trading.refill import (
     REGIME_DIP_BASES,
     REGIME_ENTRY_BASES,
     REGIME_MOM_BASES,
+    REGIME_MOM_PRIORITY,
     REGIME_STRUCTURE_NS,
     REGIME_STRUCTURE_TAGS,
     STACK_TREND,
@@ -285,8 +286,10 @@ class RecipeBoundsTests(unittest.TestCase):
                 "h4_sma_abv_50",
                 "h1_ema_abv_24",
                 "h1_ema_abv_15",
+                "h1_ema_abv_18",
                 "h1_ema_abv_20",
                 "h1_ema_abv_30",
+                "h1_ema_abv_36",
                 "h4_ema_abv_12",
                 "h4_ema_abv_48",
                 "h4_sma_abv_24",
@@ -298,7 +301,18 @@ class RecipeBoundsTests(unittest.TestCase):
         )
         self.assertEqual(REGIME_STRUCTURE_NS, (12, 24, 48))
         self.assertEqual(REGIME_STRUCTURE_TAGS, ("don_hi", "near_swing_lo"))
-        self.assertEqual(REGIME_MOM_BASES, MOM_FILTERS + MOM_FILTERS_HTF_DENSE + GRIND_FILTERS)
+        self.assertEqual(
+            REGIME_MOM_PRIORITY,
+            ("mom_18b_gt2pc", "mom_12b_gt2pc", "mom_24b_gt2pc"),
+        )
+        self.assertEqual(
+            REGIME_MOM_BASES[:3],
+            REGIME_MOM_PRIORITY,
+        )
+        self.assertEqual(
+            set(REGIME_MOM_BASES),
+            set(MOM_FILTERS + MOM_FILTERS_HTF_DENSE + GRIND_FILTERS),
+        )
         self.assertEqual(REGIME_DIP_BASES, DIP_FILTERS)
         self.assertEqual(REGIME_ENTRY_BASES, REGIME_MOM_BASES + REGIME_DIP_BASES)
         self.assertEqual(DISCOVERY_REFILL_BATCH_SIZE, 16)
@@ -457,8 +471,10 @@ class RecipeBoundsTests(unittest.TestCase):
         self.assertIn("h1_ema_abv_24&ema_abv_20", names)
         # Densified HTF × winning-neighborhood mom (parser-allowed, distinct).
         self.assertIn("h1_ema_abv_15&mom_18b_gt2pc", names)
+        self.assertIn("h1_ema_abv_18&mom_18b_gt2pc", names)
         self.assertIn("h1_ema_abv_20&mom_18b_gt2pc", names)
         self.assertIn("h1_ema_abv_30&mom_18b_gt2pc", names)
+        self.assertIn("h1_ema_abv_36&mom_18b_gt2pc", names)
         self.assertIn("h1_ema_abv_24&mom_18b_gt4pc", names)
         self.assertIn("h4_ema_abv_12&mom_18b_gt2pc", names)
         self.assertIn("h4_ema_abv_48&mom_18b_gt4pc", names)
@@ -468,6 +484,10 @@ class RecipeBoundsTests(unittest.TestCase):
         self.assertNotIn("h4_sma_abv_50&mom_36b_gt2pc&don_hi_24", names)
         self.assertNotIn("h1_ema_abv_24&mom_18b_gt2pc&don_hi_12", names)
         self.assertNotIn("h1_ema_abv_15&mom_18b_gt4pc&near_swing_lo_24", names)
+        self.assertNotIn("h1_ema_abv_18&mom_18b_gt2pc&don_hi_12", names)
+        self.assertNotIn("h1_ema_abv_36&mom_18b_gt2pc&near_swing_lo_24", names)
+        self.assertEqual("h1_ema_abv_18&mom_18b_gt2pc".count("&"), 1)
+        self.assertEqual("h1_ema_abv_36&mom_18b_gt2pc".count("&"), 1)
         self.assertTrue(
             any("h4_ema_abv_24" in n and ("mom_12b_gt2pc" in n or "sma_abv_20" in n) for n in names)
         )
@@ -511,6 +531,8 @@ class RecipeBoundsTests(unittest.TestCase):
         self.assertFalse(name_is_refused("h4_ema_abv_24&dip_12b_lt2pc"))
         self.assertTrue(name_is_refused("h1(sma_abv_50)"))
         self.assertTrue(name_is_parseable("h1_ema_abv_15&mom_18b_gt2pc"))
+        self.assertTrue(name_is_parseable("h1_ema_abv_18&mom_18b_gt2pc"))
+        self.assertTrue(name_is_parseable("h1_ema_abv_36&mom_18b_gt2pc"))
         self.assertTrue(name_is_parseable("h1_ema_abv_24&mom_18b_gt4pc"))
         self.assertFalse(name_is_parseable("h1_sma_abv_24&mom_18b_gt2pc"))
 
@@ -524,6 +546,7 @@ class RecipeBoundsTests(unittest.TestCase):
             "h1_ema_abv_15",
             "h1_ema_abv_20",
             "h1_ema_abv_30",
+            "h1_ema_abv_36",
             "h4_ema_abv_12",
             "h4_ema_abv_48",
             "h4_sma_abv_24",
@@ -535,6 +558,13 @@ class RecipeBoundsTests(unittest.TestCase):
             key = near_duplicate_key(atom)
             self.assertNotIn(key, seen, msg=atom)
             seen.add(key)
+        # 18 is in the recipe (exact period) but shares canon with 20.
+        self.assertTrue(name_is_parseable("h1_ema_abv_18"))
+        parse_strategy("h1_ema_abv_18")
+        self.assertEqual(
+            near_duplicate_key("h1_ema_abv_18"),
+            near_duplicate_key("h1_ema_abv_20"),
+        )
         parked_mom = {near_duplicate_key(n) for n in MOM_FILTERS}
         seen_mom = set(parked_mom)
         for atom in MOM_FILTERS_HTF_DENSE:
