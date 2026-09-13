@@ -1343,6 +1343,49 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertIn("evaluate_strategy_record", parity)
         self.assertIn("fast_quant", parity)
 
+    def test_amendment_2026_09_13_lookback_cap_and_eval_timeout(self):
+        from hedge_fund.trading.constants import (
+            MIN_BACKTEST_SHARPE,
+            MIN_BACKTEST_TRADES,
+            QUAL_TIMEFRAME,
+            RISK_POLICY,
+        )
+        from hedge_fund.trading.discovery_guard import (
+            DEFAULT_EVAL_TIMEOUT_SECONDS,
+            DEFAULT_STRUCTURE_LOOKBACK_MAX,
+        )
+
+        text = (REPO / "PROTOCOL.md").read_text()
+        self.assertIn("farm lookback cap + eval timeout", text)
+        self.assertIn("ops, not a gate", text.lower())
+        self.assertIn("lookback_too_expensive", text)
+        self.assertIn("eval_timeout", text)
+        self.assertIn("DISCOVERY_STRUCTURE_LOOKBACK_MAX", text)
+        self.assertIn("DISCOVERY_EVAL_TIMEOUT_SECONDS", text)
+        self.assertIn("not a gate softening", text)
+        self.assertIn("OOS **thresholds** are unchanged", text)
+        self.assertIn("Still paper", text)
+        self.assertEqual(QUAL_TIMEFRAME, "5m")
+        self.assertEqual(RISK_POLICY, "rm_v1")
+        self.assertEqual(MIN_BACKTEST_TRADES, 30)
+        self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
+        self.assertEqual(DEFAULT_STRUCTURE_LOOKBACK_MAX, 96)
+        self.assertEqual(DEFAULT_EVAL_TIMEOUT_SECONDS, 600)
+        worker = (REPO / "scripts" / "discovery_worker.py").read_text()
+        self.assertIn("lookback_too_expensive_reason", worker)
+        self.assertIn("eval_timeout_reason", worker)
+        self.assertIn("_collect_wave", worker)
+        runbook = (REPO / "docs" / "WINDOWS_DISCOVERY.md").read_text()
+        self.assertIn("DISCOVERY_STRUCTURE_LOOKBACK_MAX", runbook)
+        self.assertIn("DISCOVERY_EVAL_TIMEOUT_SECONDS", runbook)
+        self.assertIn("ops/throughput, not a gate", runbook)
+        workflow = (REPO / "docs" / "WORKFLOW.md").read_text()
+        self.assertIn("lookback_too_expensive", workflow)
+        self.assertIn("not a gate softening", workflow)
+        readme = (REPO / "README.md").read_text()
+        self.assertIn("lookback_too_expensive", readme)
+        self.assertIn("eval_timeout", readme)
+
 
 class IsolatedRunnerTests(unittest.TestCase):
     def test_no_second_hardcoded_book(self):

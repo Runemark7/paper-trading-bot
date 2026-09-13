@@ -111,6 +111,7 @@ over a meaningful sample, AND calibration is demonstrated independently of P&L.
 | 2026-09-13 | Same-date later: mint non-collapsing `h1_sma_abv_{20,24,30}` twins of the winning EMA island and prioritize mild pullback dips (`REGIME_DIP_PRIORITY`: `dip_24b_lt5pc` / `dip_24b_lt6pc` / `dip_18b_lt2pc`) on the HTF×dip path. Do not mint `h1_sma_abv_18` (18→20) or `dip_24b_lt4pc` (same canon as lt5). HTF×mom and HTF×dip stay 2-atom only. Fail-once stays. No named candlesticks. Static list unchanged. Paper only; OOS gates unchanged. |
 | 2026-09-13 | Token-gated paper ops: `POST /api/champions/retain` (keep-list) and `POST /api/champions/cull_undated` (drop missing `champion_since` / UI "before dating"). Same `PAPER_DISCOVERY_INGEST_TOKEN` as ingest/farm. Active pool only — no trade-DB delete. OOS thresholds unchanged. |
 | 2026-09-13 | Same-date later: Windows-farm walk-forward evals cache ATR / SMA / EMA / HTF close series across names on the same window slices (cleared when `_window_slices` builds a new batch). HTF buyer-regime uses the full cached HTF series plus an index (no per-bar prefix list). Same `evaluate_strategy_record` / `strategies.backtest` / `rm_v1` path — not `fast_quant`. OOS thresholds, `QUAL_N_WINDOWS`, and window lengths unchanged. Paper only. |
+| 2026-09-13 | Same-date later: farm ops/throughput — not a gate softening. Worker fail-parks structure lookbacks above `DISCOVERY_STRUCTURE_LOOKBACK_MAX` (default 96) as `lookback_too_expensive N>96` before walk-forward, and optionally `eval_timeout after 600s` as a coarse backstop. Fail-once parks forever. Recipe may still emit large lookbacks. OOS thresholds unchanged. |
 
 ### Amendment 2026-08-30 — what actually runs
 
@@ -797,5 +798,23 @@ This amendment does not rewrite original §§ 1–8 or prior amendments. Qual/li
 **Superseded on this date** (prior text kept above for history):
 
 - 2026-09-10 cheaper-eval text insofar as it implied caches die after each `backtest()`. OOS **thresholds**, window lengths, fail-once, farm ingest, and the live qualify path (`strategies.backtest`, not `fast_quant`) are not superseded.
+
+### Amendment 2026-09-13 — farm lookback cap + eval timeout (ops, not a gate)
+
+This amendment does not rewrite original §§ 1–8 or prior amendments. Qual/live remain 5m, risk policy remains `rm_v1`. OOS **thresholds** are unchanged: `MIN_BACKTEST_TRADES` = 30, `MIN_BACKTEST_SHARPE` = 0.30, must beat buy-and-hold, must beat `sma_stack`, all-windows non-negative is diagnostic only, fail-once never-retest stays. Discovery walk-forwards stay on the Windows farm (`scripts/discovery_worker.py` → `/api/discovery/ingest`); cluster `live_cycle` keeps discovery off (`DISCOVERY_ON_CYCLE=0`). **Still paper.** `GRADUATED_PAPER` meaning is unchanged. Do not cull existing champions. Do not retest parked fails.
+
+**Why.** Leftover lookback-168 `dbl_bot_*` / Donchian / near-swing names are pathological O(n·k) on the 8-window 5m tape. They burned Alexander's Windows PC (~2h) with no completed evals and left `discovery_in_flight.json` stuck. A pure wall-clock hang is the symptom; the cost is visible in the name.
+
+**Primary.** Before walk-forward, parse the strategy name. If any `don_hi` / `don_lo` / `near_swing_*` / `dbl_bot_*` lookback exceeds `DISCOVERY_STRUCTURE_LOOKBACK_MAX` (default **96**), immediately emit `qualified=false` with `fail_reasons` including `lookback_too_expensive N>96` (`timeframe` 5m, `risk_policy` `rm_v1`). Ingest that row (fail-once parks the name forever). Clear that name from in-flight. Do **not** run `evaluate_windows`. Set the env to `0` to disable. Recipe / `iter_recipe_names` is not banned — worker fail-park is enough so dry refill can move on. Very large structure lookbacks may hit this often; that is intended.
+
+**Backstop only.** Optional coarse per-name wall-clock timeout `DISCOVERY_EVAL_TIMEOUT_SECONDS` (default **600**). On overrun: same fail-once park with `eval_timeout after 600s`, kill/recycle the multiprocessing worker, continue to the next name. This is ops/throughput, not a gate softening.
+
+**What did not change.** Sharpe 0.30, 30 OOS trades, beat B&H, beat `sma_stack`, 5m, `rm_v1`, all-windows diagnostic only, fail-once, `QUAL_N_WINDOWS` = 8. Ingest requalify from stored aggregates must not flip an ops-park row.
+
+**Topology.** [docs/WORKFLOW.md](docs/WORKFLOW.md) and [docs/WINDOWS_DISCOVERY.md](docs/WINDOWS_DISCOVERY.md) record the guard.
+
+**Superseded on this date** (prior text kept above for history):
+
+- Same-date Windows farm text insofar as a never-tested leftover name must always receive a full walk-forward even when the structure lookback is pathological. Fail-once, farm ingest, cycle budget, OOS **thresholds**, and the recipe stream are not superseded.
 
 

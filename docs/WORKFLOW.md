@@ -15,8 +15,8 @@ this file is the living topology.
 | Piece | Where | What it does |
 |---|---|---|
 | **Mint** | `hedge_fund/trading/refill.py` on the farm | Bounded DIP/MOM + structure AND recipe, plus densified HTF buyer-regime ANDs (`h1_ema_abv_{15,18,20,24,30,36}` / `h1_sma_abv_{20,24,30}` / `h4_ema_abv_{12,24,48}` / `h4_sma_abv_{24,50}`). HTF×mom mint is **2-atom only** (`regime&mom`, including `MOM_FILTERS_HTF_DENSE`) — no structure AND on that family (or on HTF×dip). Recipe emits HTF×mom before HTF×dip — mom-before-dip — `mom_18b_gt2pc` first among regime mom bases, and `dip_24b_lt5pc` / `dip_24b_lt6pc` / `dip_18b_lt2pc` first among regime dip bases (`REGIME_DIP_PRIORITY`). When never-tested leftovers run dry, the next handful is appended to `state/discovery_extended.json`. Static `generate_universe()` stays inside the ~40–120 compiled-list band. |
-| **Farm** | Alexander's Windows PC (`jensa`) | `scripts/discovery_worker.py` evaluates names against local `state/crypto_history_5m.json` (Binance 5m, **BTC/USDT and ETH/USDT only**). Same fail-once / auto-refill / aggregate-OOS / `rm_v1` / 5m rules as `scripts/tournament_engine.py`. |
-| **Eval** | `parse_strategy` → walk-forward → backtest → gate | Name string → AND atoms on native 5m → 8 chronological ~90d windows → `rm_v1` paper backtest → aggregate OOS in `hedge_fund/trading/qualify.py`. |
+| **Farm** | Alexander's Windows PC (`jensa`) | `scripts/discovery_worker.py` evaluates names against local `state/crypto_history_5m.json` (Binance 5m, **BTC/USDT and ETH/USDT only**). Same fail-once / auto-refill / aggregate-OOS / `rm_v1` / 5m rules as `scripts/tournament_engine.py`. Before walk-forward: structure lookback cap (`DISCOVERY_STRUCTURE_LOOKBACK_MAX` = 96) fail-parks `lookback_too_expensive`; 600s eval timeout is a backstop only. Ops/throughput, not a gate softening. |
+| **Eval** | lookback guard → `parse_strategy` → walk-forward → backtest → gate | Name string → structure lookback cap → AND atoms on native 5m → 8 chronological ~90d windows → `rm_v1` paper backtest → aggregate OOS in `hedge_fund/trading/qualify.py`. |
 | **Ingest** | `POST /api/discovery/ingest` | Token-gated. Pass → champion + isolated paper book on k8s. Fail → parked forever (fail-once). Ingest never culls existing champions. |
 | **Prod** | k8s cycle sidecar | `DISCOVERY_ON_CYCLE=0` — live trading only (`run_isolated` → collect → report). Do not turn discovery back on in-cluster. UI: `/discovery`. |
 | **Farm Start/Stop** | `/discovery` → `POST /api/discovery/farm` | Same ingest token. Worker **idles** (does not exit). Start cannot relaunch a dead process. |
@@ -60,11 +60,14 @@ flowchart TB
   ext --> worker
   hist --> worker
 
+  guard{"structure lookback > 96?\nor eval_timeout 600s"}
   parse["parse_strategy(name) in dynamic.py\nAND atoms on native 5m\n+ causal HTF regime from 5m"]
   wf["Walk-forward 8 x 90d"]
   bt["Backtest rm_v1"]
   gate["Aggregate OOS gate\nhedge_fund/trading/qualify.py"]
-  worker --> parse --> wf --> bt --> gate
+  worker --> guard
+  guard -->|"yes: ops fail-park"| parkOps["Fail-once: lookback_too_expensive / eval_timeout"]
+  guard -->|no| parse --> wf --> bt --> gate
 
   frozen["FROZEN: trades at least 30, Sharpe at least 0.30,\nbeat B and H, beat sma_stack,\nall-windows non-neg diagnostic only, fail-once"]
   gate --> frozen
@@ -73,6 +76,7 @@ flowchart TB
   park["Fail: ingest parked forever"]
   frozen -->|"pass"| ingest
   frozen -->|"fail"| park
+  parkOps --> ingest
 
   subgraph prod [Prod k8s]
     champs["Champions / paper books"]
@@ -89,6 +93,9 @@ flowchart TB
 Caption: Names are minted on the farm, walked on jensa against Binance 5m
 BTC/ETH, then POSTed to prod. The cluster never runs walk-forwards.
 Start/Stop on `/discovery` is token-gated and only idles the worker.
+Lookback cap / eval timeout are farm ops (throughput) — they do not
+change OOS thresholds. Recipe may still emit lookback-168 names; the
+worker fail-parks them so dry refill can move on.
 
 ---
 
@@ -97,6 +104,7 @@ Start/Stop on `/discovery` is token-gated and only idles the worker.
 ```mermaid
 flowchart LR
   name["Name string\ne.g. mom_36b_gt2pc AND don_hi_12"]
+  cap{"don_hi / don_lo / near_swing / dbl_bot N > 96?"}
   atoms["Atoms on native 5m\nAND joins"]
   pred["Predicate pred"]
   windows["8 chronological windows\n70/30 train/test each"]
@@ -104,8 +112,11 @@ flowchart LR
   decision{"qualify.py"}
   passNode["Pass: ingest admit"]
   failNode["Fail: parked forever"]
+  opsPark["Ops fail-park lookback_too_expensive / eval_timeout"]
 
-  name --> atoms --> pred --> windows --> score --> decision
+  name --> cap
+  cap -->|yes| opsPark
+  cap -->|no| atoms --> pred --> windows --> score --> decision
   decision -->|"all frozen gates hold"| passNode
   decision -->|"any frozen gate misses"| failNode
 ```
@@ -113,6 +124,7 @@ flowchart LR
 Caption: `&` in the name is AND (every atom true on that 5m bar). Each
 window backtests with `rm_v1`. A single empty or negative window is
 logged (`all_windows_nonneg`) and does not veto. One fail parks the name.
+Structure lookback > 96 skips walk-forward (ops, not a softer gate).
 
 ---
 

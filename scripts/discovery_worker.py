@@ -14,20 +14,22 @@ GPU is unused (no CUDA rewrite). Modest CPU parallelism (2–4) on an i5.
     python scripts/discovery_worker.py --once --workers 1 --no-ingest
 
 Env:
-  PAPER_STATE                     local state dir (history + bootstrap cache)
-  PAPER_DISCOVERY_INGEST_URL      default https://trading.runevibe.se/api/discovery/ingest
-  PAPER_DISCOVERY_INGEST_TOKEN    shared secret (required unless --no-ingest)
-  PAPER_DISCOVERY_BASE_URL        prod origin for bootstrap GETs
-  DISCOVERY_WORKERS               default 2
+  PAPER_STATE                        local state dir (history + bootstrap cache)
+  PAPER_DISCOVERY_INGEST_URL         default https://trading.runevibe.se/api/discovery/ingest
+  PAPER_DISCOVERY_INGEST_TOKEN       shared secret (required unless --no-ingest)
+  PAPER_DISCOVERY_BASE_URL           prod origin for bootstrap GETs
+  DISCOVERY_WORKERS                  default 2
+  DISCOVERY_STRUCTURE_LOOKBACK_MAX   default 96; 0 disables. Farm ops, not an OOS gate.
+  DISCOVERY_EVAL_TIMEOUT_SECONDS     default 600; 0 disables. Coarse per-name backstop.
 """
 from __future__ import annotations
 
 import argparse
 import json
+import multiprocessing
 import os
 import sys
 import time
-from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -55,6 +57,13 @@ from hedge_fund.trading.discovery import (
     select_cycle_batch,
     tested_discovery_names,
     write_in_flight,
+)
+from hedge_fund.trading.discovery_guard import (
+    eval_timeout_reason,
+    eval_timeout_seconds,
+    lookback_too_expensive_reason,
+    ops_fail_record,
+    structure_lookback_max,
 )
 from hedge_fund.trading.discovery_mode import ingest_token
 from hedge_fund.trading.farm import farm_enabled_from_summary
@@ -100,6 +109,50 @@ def _eval_name(name: str) -> dict | None:
         bh_oos_pnl=_BH,
         sma_stack_oos_pnl=_SMA,
     )
+
+
+def _new_eval_pool(n_workers: int, slices, bh, sma, n_windows: int):
+    return multiprocessing.Pool(
+        processes=n_workers,
+        initializer=_init_pool,
+        initargs=(slices, bh, sma, n_windows),
+    )
+
+
+def _collect_wave(
+    asyncs: list[tuple[str, object]],
+    timeout_s: float,
+    *,
+    sleeper=time.sleep,
+    clock=time.monotonic,
+) -> tuple[list[tuple[str, dict | None]], list[str]]:
+    """Wait for a wave of apply_async results.
+
+    *timeout_s* <= 0 waits until every name finishes. Otherwise any name
+    still running after the wave deadline is returned as stuck (caller
+    fail-parks and recycles the pool).
+    """
+    deadline = (clock() + timeout_s) if timeout_s > 0 else None
+    pending = {name: ar for name, ar in asyncs}
+    completed: list[tuple[str, dict | None]] = []
+    while pending:
+        if deadline is not None and clock() >= deadline:
+            return completed, list(pending)
+        ready: list[str] = []
+        for name, ar in pending.items():
+            if ar.ready():
+                try:
+                    rec = ar.get()
+                except Exception as exc:
+                    print(f"discovery_worker: {name} failed: {exc}", flush=True)
+                    rec = None
+                completed.append((name, rec))
+                ready.append(name)
+        for name in ready:
+            del pending[name]
+        if pending:
+            sleeper(0.05)
+    return completed, []
 
 
 def _http_json(url: str, *, token: str | None = None, data: dict | None = None, timeout: int = 60):
@@ -336,58 +389,27 @@ def run_batch(
 
     records: list[dict] = []
     completed: list[str] = []
-    n_workers = max(1, min(int(workers), len(planned)))
-    try:
-        if n_workers == 1:
-            _init_pool(slices, bh, sma, n_windows)
-            results = [_eval_name(name) for name in planned]
-            pairs = list(zip(planned, results))
-        else:
-            with ProcessPoolExecutor(
-                max_workers=n_workers,
-                initializer=_init_pool,
-                initargs=(slices, bh, sma, n_windows),
-            ) as pool:
-                fmap = {pool.submit(_eval_name, name): name for name in planned}
-                pairs = []
-                for fut in as_completed(fmap):
-                    name = fmap[fut]
-                    try:
-                        pairs.append((name, fut.result()))
-                    except Exception as exc:
-                        print(f"discovery_worker: {name} failed: {exc}", flush=True)
-                        pairs.append((name, None))
-            order = {n: i for i, n in enumerate(planned)}
-            pairs.sort(key=lambda p: order.get(p[0], 0))
+    lookback_cap = structure_lookback_max()
+    timeout_s = eval_timeout_seconds()
 
-        for name, record in pairs:
-            completed.append(name)
-            remaining = [n for n in planned if n not in completed]
-            if record is None:
-                write_in_flight(
-                    remaining,
-                    current=None,
-                    remaining=remaining,
-                    completed=completed,
-                    batch_size=len(planned),
-                    source="windows_worker",
-                )
-                continue
+    def finish(name: str, record: dict | None) -> None:
+        completed.append(name)
+        remaining = [n for n in planned if n not in completed]
+        if record is not None:
             append_discovery_evaluation(record)
             records.append(record)
-            write_in_flight(
-                remaining,
-                current=None,
-                remaining=remaining,
-                completed=completed,
-                batch_size=len(planned),
-                source="windows_worker",
-            )
-            print(
-                f"discovery_worker: {name} qualified={record.get('qualified')} "
-                f"sharpe={record.get('sharpe')} trades={record.get('trades')}",
-                flush=True,
-            )
+            reasons = record.get("fail_reasons") or []
+            if record.get("ops_park"):
+                print(
+                    f"discovery_worker: {name} parked {reasons[0] if reasons else 'ops'}",
+                    flush=True,
+                )
+            else:
+                print(
+                    f"discovery_worker: {name} qualified={record.get('qualified')} "
+                    f"sharpe={record.get('sharpe')} trades={record.get('trades')}",
+                    flush=True,
+                )
             if ingest_url and token:
                 _post_ingest(
                     ingest_url,
@@ -402,6 +424,58 @@ def run_batch(
                     },
                     heartbeat="running",
                 )
+        write_in_flight(
+            remaining,
+            current=None,
+            remaining=remaining,
+            completed=completed,
+            batch_size=len(planned),
+            source="windows_worker",
+        )
+
+    cheap: list[str] = []
+    for name in planned:
+        expensive = lookback_too_expensive_reason(name, lookback_cap)
+        if expensive:
+            finish(name, ops_fail_record(name, expensive))
+        else:
+            cheap.append(name)
+
+    n_workers = max(1, min(int(workers), len(cheap) or 1))
+    try:
+        if not cheap:
+            pass
+        elif n_workers == 1 and timeout_s <= 0:
+            _init_pool(slices, bh, sma, n_windows)
+            for name in cheap:
+                finish(name, _eval_name(name))
+        else:
+            pool = _new_eval_pool(n_workers, slices, bh, sma, n_windows)
+            try:
+                i = 0
+                while i < len(cheap):
+                    wave = cheap[i : i + n_workers]
+                    asyncs = [(n, pool.apply_async(_eval_name, (n,))) for n in wave]
+                    done, stuck = _collect_wave(asyncs, timeout_s)
+                    for name, record in done:
+                        finish(name, record)
+                    if stuck:
+                        reason = eval_timeout_reason(timeout_s)
+                        for name in stuck:
+                            finish(name, ops_fail_record(name, reason))
+                        pool.terminate()
+                        pool.join()
+                        if i + len(wave) < len(cheap):
+                            pool = _new_eval_pool(
+                                n_workers, slices, bh, sma, n_windows
+                            )
+                    i += len(wave)
+            finally:
+                try:
+                    pool.terminate()
+                    pool.join()
+                except Exception:
+                    pass
     finally:
         done = set(completed)
         next_name = None
@@ -461,7 +535,9 @@ def main(argv: list[str] | None = None) -> int:
     base = _base_url(args.ingest_url, args.base_url or None)
     print(
         f"discovery_worker: PAPER_STATE={state_root()} workers={workers} "
-        f"max_names={max_names} ingest={'off' if args.no_ingest else ingest_url}",
+        f"max_names={max_names} ingest={'off' if args.no_ingest else ingest_url} "
+        f"lookback_max={structure_lookback_max()} "
+        f"eval_timeout_s={eval_timeout_seconds()}",
         flush=True,
     )
 
