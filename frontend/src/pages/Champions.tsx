@@ -45,6 +45,10 @@ import {
 
 const PAGE = 20;
 
+function hasName<T extends { name?: string | null }>(row: T): row is T & { name: string } {
+  return typeof row.name === "string" && row.name.length > 0;
+}
+
 export default function Champions() {
   const navigate = useNavigate();
   const qChamps = useQuery({ queryKey: ["champions"], queryFn: fetchChampions, refetchInterval: 30_000 });
@@ -57,9 +61,9 @@ export default function Champions() {
   const [shown, setShown] = useState(PAGE);
   const [expandedStrat, setExpandedStrat] = useState<string | null>(null);
 
-  const champs = qChamps.data?.active_champions ?? [];
+  const champs = (qChamps.data?.active_champions ?? []).filter(hasName);
   const evalLimit = qChamps.data?.evaluation_limit ?? 80;
-  const graduated = qGrad.data ?? [];
+  const graduated = (qGrad.data ?? []).filter(hasName);
   const run = status.data?.running_now;
   const prog = status.data?.in_progress;
   const rowLots = champs.reduce((n, c) => n + (c.open_lots ?? 0), 0);
@@ -307,7 +311,7 @@ export default function Champions() {
                         {c.closed} / {evalLimit}
                       </Field>
                       <Field label="Wins">{c.wins}</Field>
-                      <Field label="Paper P&L" className={c.pnl >= 0 ? "text-emerald-400" : "text-rose-400"}>
+                      <Field label="Paper P&L" className={(c.pnl ?? 0) >= 0 ? "text-emerald-400" : "text-rose-400"}>
                         <span className="font-medium">{fmt(c.pnl)}</span>
                       </Field>
                       <Field label="Champion since">{fmtChampionSince(c.champion_since)}</Field>
@@ -358,7 +362,7 @@ export default function Champions() {
                         {c.closed} / {evalLimit}
                       </td>
                       <td className="text-right font-mono tabular-nums">{c.wins}</td>
-                      <td className={`text-right font-mono font-bold ${c.pnl >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
+                      <td className={`text-right font-mono font-bold ${(c.pnl ?? 0) >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
                         {fmt(c.pnl)}
                       </td>
                     </tr>
@@ -429,10 +433,10 @@ export default function Champions() {
                     </div>
                     <div className="flex flex-wrap items-center gap-3">
                       <div className="sm:text-right">
-                        <div className={`text-base font-bold ${g.total_pnl >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
+                        <div className={`text-base font-bold ${(g.total_pnl ?? 0) >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
                           {fmt(g.total_pnl)}
                         </div>
-                        <div className="text-xs text-white/60">Win Rate: {g.win_rate_pct}%</div>
+                        <div className="text-xs text-white/60">Win Rate: {g.win_rate_pct ?? "—"}%</div>
                       </div>
                       <Badge tone={g.status === "GRADUATED_PAPER" ? "pos" : "neg"}>{g.status}</Badge>
                       <button
@@ -452,22 +456,22 @@ export default function Champions() {
                         {g.trade_history?.map((t, idx) => (
                           <li key={idx} className="rounded-lg border border-white/10 p-3 space-y-2 min-w-0 overflow-hidden">
                             <div className="flex items-baseline justify-between gap-2 min-w-0">
-                              <span className="font-medium min-w-0 truncate">{t.symbol}</span>
-                              <span className={`shrink-0 font-bold ${t.pnl >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
+                              <span className="font-medium min-w-0 truncate">{t.symbol ?? "—"}</span>
+                              <span className={`shrink-0 font-bold ${(t.pnl ?? 0) >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
                                 {fmt(t.pnl)}
                               </span>
                             </div>
                             <FieldGrid>
-                              <Field label="Entry">{t.entry_ts?.replace("T", " ").slice(0, 16)}</Field>
-                              <Field label="Entry $">${t.entry_price.toLocaleString()}</Field>
-                              <Field label="Exit $">${t.exit_price.toLocaleString()}</Field>
-                              <Field label="Qty">{t.size.toFixed(4)}</Field>
+                              <Field label="Entry">{t.entry_ts?.replace("T", " ").slice(0, 16) ?? "—"}</Field>
+                              <Field label="Entry $">{fmt(t.entry_price)}</Field>
+                              <Field label="Exit $">{fmt(t.exit_price)}</Field>
+                              <Field label="Qty">{t.size != null ? t.size.toFixed(4) : "—"}</Field>
                               <Field label="Return">
-                                <span className={t.pnl_pct >= 0 ? "text-emerald-400" : "text-rose-400"}>
-                                  {(t.pnl_pct * 100).toFixed(2)}%
+                                <span className={(t.pnl_pct ?? 0) >= 0 ? "text-emerald-400" : "text-rose-400"}>
+                                  {t.pnl_pct != null ? `${(t.pnl_pct * 100).toFixed(2)}%` : "—"}
                                 </span>
                               </Field>
-                              <Field label="Exit reason">{t.exit_reason}</Field>
+                              <Field label="Exit reason">{t.exit_reason ?? "—"}</Field>
                             </FieldGrid>
                           </li>
                         ))}
@@ -489,18 +493,18 @@ export default function Champions() {
                           <tbody>
                             {g.trade_history?.map((t, idx) => (
                               <tr key={idx} className="border-t border-white/5">
-                                <td className="py-1 font-medium">{t.symbol}</td>
-                                <td className="text-white/60">{t.entry_ts?.replace("T", " ").slice(0, 16)}</td>
-                                <td className="text-right font-mono">${t.entry_price.toLocaleString()}</td>
-                                <td className="text-right font-mono">${t.exit_price.toLocaleString()}</td>
-                                <td className="text-right font-mono">{t.size.toFixed(4)}</td>
-                                <td className={`text-right font-bold ${t.pnl >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
+                                <td className="py-1 font-medium">{t.symbol ?? "—"}</td>
+                                <td className="text-white/60">{t.entry_ts?.replace("T", " ").slice(0, 16) ?? "—"}</td>
+                                <td className="text-right font-mono">{fmt(t.entry_price)}</td>
+                                <td className="text-right font-mono">{fmt(t.exit_price)}</td>
+                                <td className="text-right font-mono">{t.size != null ? t.size.toFixed(4) : "—"}</td>
+                                <td className={`text-right font-bold ${(t.pnl ?? 0) >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
                                   {fmt(t.pnl)}
                                 </td>
-                                <td className={`text-right ${t.pnl_pct >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
-                                  {(t.pnl_pct * 100).toFixed(2)}%
+                                <td className={`text-right ${(t.pnl_pct ?? 0) >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
+                                  {t.pnl_pct != null ? `${(t.pnl_pct * 100).toFixed(2)}%` : "—"}
                                 </td>
-                                <td className="text-white/70">{t.exit_reason}</td>
+                                <td className="text-white/70">{t.exit_reason ?? "—"}</td>
                               </tr>
                             ))}
                           </tbody>

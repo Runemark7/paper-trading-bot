@@ -82,7 +82,7 @@ export function filterTestedRows(
     if (filters.result === "qualified" && !d.qualified) return false;
     if (filters.result === "rejected" && d.qualified) return false;
     if (!matchText(d.strategy, filters.strategy)) return false;
-    const whenHaystack = `${d.tested_at} ${formatWhen(d.tested_at)}`;
+    const whenHaystack = `${d.tested_at ?? ""} ${formatWhen(d.tested_at)}`;
     if (!matchText(whenHaystack, filters.testedAt)) return false;
     const sharpeDisp = d.sharpe != null ? d.sharpe.toFixed(2) : "—";
     if (!matchNumeric(d.sharpe, filters.sharpe, sharpeDisp)) return false;
@@ -169,7 +169,7 @@ type SortScalar = number | string | null;
 function sortValue(row: DiscoveryEvaluation, key: TestedSortKey): SortScalar {
   switch (key) {
     case "strategy":
-      return row.strategy.toLowerCase();
+      return (row.strategy ?? "").toLowerCase();
     case "testedAt": {
       const t = Date.parse(row.tested_at);
       return Number.isNaN(t) ? null : t;

@@ -66,23 +66,27 @@ export function accountLabel(raw?: string): string {
 }
 
 /** Same slug as hedge_fund.trading.open_lots.account_slug. */
-export function accountSlug(name: string): string {
-  return name.replace(/[/:]/g, "_");
+export function accountSlug(name: string | null | undefined): string {
+  return (name ?? "").replace(/[/:]/g, "_");
 }
 
 /**
  * Keys that identify one paper account: champion name, open_lots.py slug
  * (/ and : → _), and the trades_* sqlite stem /api/live stamps on rows.
  */
-export function paperAccountKeys(name: string): string[] {
+export function paperAccountKeys(name: string | null | undefined): string[] {
+  if (!name) return [];
   const stripped = name.startsWith("trades_") ? name.slice("trades_".length) : name;
   const slug = accountSlug(name);
   const strippedSlug = accountSlug(stripped);
   return [...new Set([name, slug, stripped, strippedSlug, `trades_${slug}`, `trades_${strippedSlug}`])];
 }
 
-export function accountsMatch(account: string | undefined, championName: string): boolean {
-  if (!account) return false;
+export function accountsMatch(
+  account: string | null | undefined,
+  championName: string | null | undefined,
+): boolean {
+  if (!account || !championName) return false;
   const champ = new Set(paperAccountKeys(championName));
   return paperAccountKeys(account).some((k) => champ.has(k));
 }
@@ -215,9 +219,11 @@ export function lotUnrealized(lot: OpenLot): number | undefined {
 
 export function formatGate(gate?: LotGate | null): string | null {
   if (!gate) return null;
-  const retPct = `${(gate.ret * 100).toFixed(1)}%`;
-  const thrPct = `${(gate.threshold * 100).toFixed(0)}%`;
-  return `${gate.lookback}-bar ${retPct} vs ${thrPct}`;
+  const ret = Number(gate.ret);
+  const thr = Number(gate.threshold);
+  const retPct = Number.isFinite(ret) ? `${(ret * 100).toFixed(1)}%` : "—";
+  const thrPct = Number.isFinite(thr) ? `${(thr * 100).toFixed(0)}%` : "—";
+  return `${gate.lookback ?? "—"}-bar ${retPct} vs ${thrPct}`;
 }
 
 /** Collapsed-card counts: only the non-default flags, so mid/on do not clutter. */

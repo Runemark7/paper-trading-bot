@@ -270,7 +270,7 @@ def _plan_batch(max_names: int) -> tuple[list[str], list[str], list[str]]:
 def poll_farm_enabled(base_url: str, last_known: bool = True) -> bool:
     """Ask prod whether the farm should run. Network errors keep last_known."""
     try:
-        summary = _http_json(f"{base_url.rstrip('/')}/api/discovery/summary", timeout=20)
+        summary = _http_json(f"{base_url.rstrip('/')}/api/discovery/summary?compact=1", timeout=20)
     except Exception:
         return last_known
     return farm_enabled_from_summary(summary, last_known)

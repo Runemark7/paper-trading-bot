@@ -661,6 +661,10 @@ class WorkerPauseTests(unittest.TestCase):
         self.assertTrue(farm_enabled_from_summary({}, last_known=True))
         self.assertFalse(farm_enabled_from_summary(None, last_known=False))
 
+        worker_src = (Path(__file__).resolve().parents[1] / "scripts" / "discovery_worker.py").read_text()
+        self.assertIn("/api/discovery/summary?compact=1", worker_src)
+        self.assertIn("/api/discovery/summary", worker_src.split("bootstrap_from_prod")[1].split("def _plan_batch")[0])
+
         with patch(
             "scripts.discovery_worker._http_json",
             side_effect=RuntimeError("down"),

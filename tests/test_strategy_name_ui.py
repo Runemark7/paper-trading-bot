@@ -54,8 +54,8 @@ class FullStrategyNameUiTests(unittest.TestCase):
     def test_discovery_tested_and_queued_keep_full_names(self):
         self.assertIn("NameChip", DISCOVERY)
         self.assertIn("<NameChip key={name} name={name}", DISCOVERY)
-        self.assertIn('MonoName className="block w-full text-xs font-medium text-white">{d.strategy}', DISCOVERY)
-        self.assertIn("title={d.strategy}", DISCOVERY)
+        self.assertIn('MonoName className="block w-full text-xs font-medium text-white">{d.strategy ?? "—"}', DISCOVERY)
+        self.assertIn("title={d.strategy ?? undefined}", DISCOVERY)
         self.assertNotIn("slice(0, 40)", DISCOVERY)
 
     def test_chart_picker_shows_full_name_outside_the_select(self):

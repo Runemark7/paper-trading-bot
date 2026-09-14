@@ -115,7 +115,10 @@ export const api = {
   learning: () => get<LearningMap>("/api/learning"),
   graduated: () => get<GraduatedStrategy[]>("/api/graduated"),
   discovery: () => get<DiscoveryEvaluation[]>("/api/discovery"),
-  discoverySummary: () => get<DiscoverySummary>("/api/discovery/summary"),
+  discoverySummary: (opts?: { compact?: boolean }) => {
+    const q = opts?.compact ? "?compact=1" : "";
+    return get<DiscoverySummary>(`/api/discovery/summary${q}`);
+  },
   status: () => get<StatusSnapshot>("/api/status"),
   health: () => get<{ ok: boolean }>("/healthz"),
 };
@@ -133,6 +136,6 @@ export function fetchDiscovery(): Promise<DiscoveryEvaluation[]> {
   return get<DiscoveryEvaluation[]>("/api/discovery");
 }
 
-export function fetchDiscoverySummary(): Promise<DiscoverySummary> {
-  return get<DiscoverySummary>("/api/discovery/summary");
+export function fetchDiscoverySummary(opts?: { compact?: boolean }): Promise<DiscoverySummary> {
+  return api.discoverySummary(opts);
 }
