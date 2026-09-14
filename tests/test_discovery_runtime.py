@@ -165,24 +165,27 @@ class HistoryTrimTests(unittest.TestCase):
         }
         keep = 30
         trimmed = {s: rows[-keep:] for s, rows in full.items()}
-        full_w = _window_slices(full, window_size=10, n_windows=3, stride=1)
-        trim_w = _window_slices(trimmed, window_size=10, n_windows=3, stride=1)
+        full_w = _window_slices(full, window_size=10, n_windows=3, stride=1, warmup_bars=0)
+        trim_w = _window_slices(trimmed, window_size=10, n_windows=3, stride=1, warmup_bars=0)
         self.assertEqual(len(full_w), 3)
         for a, b in zip(full_w, trim_w):
             self.assertEqual(set(a), set(b))
             for sym in a:
-                c1, h1, l1, cut1 = a[sym]
-                c2, h2, l2, cut2 = b[sym]
+                c1, h1, l1, warm1, cut1 = a[sym]
+                c2, h2, l2, warm2, cut2 = b[sym]
+                self.assertEqual(warm1, 0)
+                self.assertEqual(warm2, 0)
                 self.assertEqual(cut1, cut2)
                 self.assertEqual(c1, c2)
                 self.assertEqual(h1, h2)
                 self.assertEqual(l1, l2)
 
-    def test_default_keep_is_window_size_times_n_windows(self):
-        from hedge_fund.trading.constants import QUAL_N_WINDOWS
+    def test_default_keep_includes_warmup_prefix(self):
+        from hedge_fund.trading.constants import QUAL_N_WINDOWS, QUAL_WARMUP_BARS
 
         window_bars = 10
-        keep = window_bars * QUAL_N_WINDOWS
+        warmup = 7
+        keep = window_bars * QUAL_N_WINDOWS + warmup
         extra = 25
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -196,15 +199,16 @@ class HistoryTrimTests(unittest.TestCase):
                 patch.dict(os.environ, {"PAPER_STATE": str(root)}),
                 patch("scripts.tournament_engine.QUAL_WINDOW_BARS", window_bars),
                 patch("scripts.tournament_engine.QUAL_N_WINDOWS", QUAL_N_WINDOWS),
+                patch("scripts.tournament_engine.QUAL_WARMUP_BARS", warmup),
             ):
                 data = _load_qual_history()
         self.assertEqual(set(data), {"BTC/USDT", "ETH/USDT"})
-        self.assertEqual(keep, window_bars * QUAL_N_WINDOWS)
         self.assertEqual(len(data["BTC/USDT"]), keep)
         self.assertEqual(data["BTC/USDT"][0], payload["BTC/USDT"][-keep])
         self.assertEqual(data["BTC/USDT"][-1], payload["BTC/USDT"][-1])
+        self.assertEqual(QUAL_WARMUP_BARS, 14 * 24 * 12)
 
-    def test_eight_windows_are_chronological_full_size_holdouts(self):
+    def test_qual_windows_are_chronological_full_size_holdouts(self):
         from hedge_fund.trading.constants import QUAL_N_WINDOWS
 
         window_size = 10
@@ -213,18 +217,52 @@ class HistoryTrimTests(unittest.TestCase):
             "BTC/USDT": _ohlcv(window_size * n_windows, start=100.0),
             "ETH/USDT": _ohlcv(window_size * n_windows, start=10.0),
         }
-        slices = _window_slices(data, window_size=window_size, n_windows=n_windows, stride=1)
+        slices = _window_slices(
+            data, window_size=window_size, n_windows=n_windows, stride=1, warmup_bars=0,
+        )
         self.assertEqual(len(slices), n_windows)
         prev_last = None
         for i, sl in enumerate(slices):
-            closes = sl["BTC/USDT"][0]
+            closes, _h, _l, warmup, cut = sl["BTC/USDT"]
+            self.assertEqual(warmup, 0)
             self.assertEqual(len(closes), window_size)
+            self.assertEqual(cut, int(window_size * 0.70))
             if prev_last is not None:
                 self.assertGreater(closes[0], prev_last)
             prev_last = closes[-1]
         # Last slice is the most recent tape; first slice is the oldest hold-out.
         self.assertEqual(slices[-1]["BTC/USDT"][0][-1], data["BTC/USDT"][-1][4])
         self.assertEqual(slices[0]["BTC/USDT"][0][0], data["BTC/USDT"][0][4])
+
+    def test_warmup_prefix_from_prior_bars_first_window_partial(self):
+        window_size = 10
+        n_windows = 3
+        pad = 8
+        extra = 5
+        data = {
+            "BTC/USDT": _ohlcv(window_size * n_windows + extra, start=100.0),
+            "ETH/USDT": _ohlcv(window_size * n_windows + extra, start=10.0),
+        }
+        slices = _window_slices(
+            data, window_size=window_size, n_windows=n_windows, stride=1, warmup_bars=pad,
+        )
+        self.assertEqual(len(slices), 3)
+        w0 = slices[0]["BTC/USDT"]
+        closes0, _h, _l, warm0, cut0 = w0
+        self.assertEqual(warm0, extra)  # only 5 bars exist before window 0
+        self.assertEqual(len(closes0) - warm0, window_size)
+        self.assertEqual(cut0, warm0 + int(window_size * 0.70))
+        self.assertEqual(closes0[warm0], data["BTC/USDT"][extra][4])
+        w1 = slices[1]["BTC/USDT"]
+        closes1, _h1, _l1, warm1, cut1 = w1
+        self.assertEqual(warm1, pad)
+        self.assertEqual(len(closes1) - warm1, window_size)
+        # Warm-up is earlier tape, not future bars.
+        self.assertLess(closes1[0], closes1[warm1])
+        scored_start1 = extra + window_size
+        self.assertEqual(closes1[0], data["BTC/USDT"][scored_start1 - pad][4])
+        self.assertEqual(closes1[warm1], data["BTC/USDT"][scored_start1][4])
+        self.assertEqual(closes1[-1], data["BTC/USDT"][scored_start1 + window_size - 1][4])
 
 
 class CompactDiscoveryLogTests(unittest.TestCase):

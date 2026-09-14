@@ -8,6 +8,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from hedge_fund.trading.constants import QUAL_N_WINDOWS
 from hedge_fund.trading.qualify import qualification_from_record, requalify_parked_log
 from scripts.tournament_engine import (
     _leftover_batch,
@@ -154,7 +155,7 @@ class OosGateTests(unittest.TestCase):
             "test_pnl": 946.0,
             "bh_oos_pnl": 100.0,
             "sma_stack_oos_pnl": 50.0,
-            "regimes_tested": 8,
+            "regimes_tested": QUAL_N_WINDOWS,
             "fail_reasons": [
                 "window[1] failed/skipped/neg/empty",
                 "not all windows non-negative",
@@ -181,7 +182,7 @@ class OosGateTests(unittest.TestCase):
         self.assertFalse(dbl["qualified"])
         self.assertEqual(flipped[0]["strategy"], "window_veto_only")
 
-    def test_eight_by_ninety_is_the_default_walk_forward(self):
+    def test_twenty_three_by_ninety_is_the_default_walk_forward(self):
         from hedge_fund.trading.constants import (
             MIN_BACKTEST_SHARPE,
             MIN_BACKTEST_TRADES,
@@ -191,10 +192,10 @@ class OosGateTests(unittest.TestCase):
             QUAL_WINDOW_DAYS,
         )
 
-        self.assertEqual(QUAL_N_WINDOWS, 8)
+        self.assertEqual(QUAL_N_WINDOWS, 23)
         self.assertEqual(QUAL_WINDOW_DAYS, 90)
         self.assertEqual(QUAL_WINDOW_BARS, 25920)
-        self.assertEqual(QUAL_COVERAGE_DAYS, 720)
+        self.assertEqual(QUAL_COVERAGE_DAYS, 2070)
         self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
         self.assertEqual(MIN_BACKTEST_TRADES, 30)
 
@@ -203,7 +204,36 @@ class OosGateTests(unittest.TestCase):
             windows, expected_windows=QUAL_N_WINDOWS, bh_oos_pnl=1.0, sma_stack_oos_pnl=1.0
         )
         self.assertTrue(d["passed"], d["reasons"])
-        self.assertEqual(d["tot_oos_trades"], 64)
+        self.assertEqual(d["tot_oos_trades"], QUAL_N_WINDOWS * 8)
+
+        short = [_win(test_pnl=50, test_trades=15) for _ in range(3)]
+        d_short = qualification_decision(
+            short, expected_windows=QUAL_N_WINDOWS, bh_oos_pnl=1.0, sma_stack_oos_pnl=1.0
+        )
+        self.assertFalse(d_short["passed"])
+        self.assertTrue(any("windows" in r for r in d_short["reasons"]))
+
+        old_row = {
+            "strategy": "three_window_legacy",
+            "qualified": False,
+            "sharpe": 0.58,
+            "trades": 296,
+            "test_pnl": 946.0,
+            "bh_oos_pnl": 100.0,
+            "sma_stack_oos_pnl": 50.0,
+            "regimes_tested": 3,
+        }
+        d_old = qualification_from_record(old_row)
+        self.assertFalse(d_old["passed"])
+        self.assertTrue(any("windows" in r for r in d_old["reasons"]))
+
+        eight_row = {**old_row, "strategy": "eight_window_legacy", "regimes_tested": 8}
+        d_eight = qualification_from_record(eight_row)
+        self.assertFalse(d_eight["passed"])
+        self.assertTrue(any("windows" in r for r in d_eight["reasons"]))
+        flipped, names = requalify_parked_log([eight_row], existing_names=set())
+        self.assertEqual(names, [])
+        self.assertFalse(eight_row["qualified"])
 
         short = [_win(test_pnl=50, test_trades=15) for _ in range(3)]
         d_short = qualification_decision(

@@ -203,8 +203,11 @@ class GraduatedPaperTokenTests(unittest.TestCase):
             QUAL_TIMEFRAME,
             QUAL_COVERAGE_DAYS,
             QUAL_N_WINDOWS,
+            QUAL_TAPE_BARS_MEASURED,
+            QUAL_WARMUP_BARS,
             QUAL_WINDOW_BARS,
             QUAL_WINDOW_DAYS,
+            qual_n_windows_for_bars,
             RISK_POLICY,
             TRADE_EVALUATION_LIMIT,
         )
@@ -212,10 +215,14 @@ class GraduatedPaperTokenTests(unittest.TestCase):
         self.assertEqual(DEFAULT_TIMEFRAME, "5m")
         self.assertEqual(QUAL_TIMEFRAME, DEFAULT_TIMEFRAME)
         self.assertEqual(QUAL_TIMEFRAME, "5m")
-        self.assertEqual(QUAL_N_WINDOWS, 8)
+        self.assertEqual(QUAL_N_WINDOWS, 23)
         self.assertEqual(QUAL_WINDOW_DAYS, 90)
-        self.assertEqual(QUAL_COVERAGE_DAYS, 720)
+        self.assertEqual(QUAL_COVERAGE_DAYS, 2070)
+        self.assertEqual(QUAL_TAPE_BARS_MEASURED, 600787)
+        self.assertEqual(qual_n_windows_for_bars(QUAL_TAPE_BARS_MEASURED), QUAL_N_WINDOWS)
         self.assertEqual(QUAL_WINDOW_BARS, 90 * 24 * 12)  # 25920; not 2500 (~9 days of 5m)
+        self.assertEqual(constants.QUAL_WARMUP_BARS, 14 * 24 * 12)
+        self.assertEqual(QUAL_WARMUP_BARS, 4032)
         self.assertEqual(CYCLE_INTERVAL_SECONDS, 300)
         self.assertEqual(RISK_POLICY, "rm_v1")
         self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)

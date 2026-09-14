@@ -12,6 +12,7 @@ from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
+from hedge_fund.trading.constants import QUAL_N_WINDOWS
 from hedge_fund.trading.discovery_mode import discovery_on_cycle, tokens_match
 from hedge_fund.trading.ingest import ingest_discovery_payload
 
@@ -182,7 +183,7 @@ class IngestMergeTests(unittest.TestCase):
             test_pnl=946.0,
             bh_oos_pnl=100.0,
             sma_stack_oos_pnl=50.0,
-            regimes_tested=8,
+            regimes_tested=QUAL_N_WINDOWS,
             fail_reasons=[
                 "window[1] failed/skipped/neg/empty",
                 "not all windows non-negative",
@@ -197,7 +198,7 @@ class IngestMergeTests(unittest.TestCase):
             test_pnl=946.0,
             bh_oos_pnl=2000.0,
             sma_stack_oos_pnl=50.0,
-            regimes_tested=8,
+            regimes_tested=QUAL_N_WINDOWS,
             fail_reasons=[
                 "window[1] failed/skipped/neg/empty",
                 "not all windows non-negative",

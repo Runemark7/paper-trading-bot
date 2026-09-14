@@ -805,10 +805,10 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertIn("DISCOVERY_ON_CYCLE=0", text)
         self.assertEqual(QUAL_TIMEFRAME, "5m")
         self.assertEqual(RISK_POLICY, "rm_v1")
-        self.assertEqual(QUAL_N_WINDOWS, 8)
+        self.assertEqual(QUAL_N_WINDOWS, 23)
         self.assertEqual(QUAL_WINDOW_DAYS, 90)
         self.assertEqual(QUAL_WINDOW_BARS, 25920)
-        self.assertEqual(QUAL_COVERAGE_DAYS, 720)
+        self.assertEqual(QUAL_COVERAGE_DAYS, 2070)
         self.assertEqual(QUAL_STRIDE, 1)
         self.assertEqual(MIN_BACKTEST_TRADES, 30)
         self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
@@ -816,7 +816,7 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertEqual(DISCOVER_CYCLE_TIME_BUDGET_SECONDS, 90)
 
         fetch = (REPO / "scripts" / "fetch_history.py").read_text()
-        self.assertIn("QUAL_WINDOW_BARS * QUAL_N_WINDOWS + 3000", fetch)
+        self.assertIn("QUAL_WINDOW_BARS * QUAL_N_WINDOWS + QUAL_WARMUP_BARS + 3000", fetch)
         self.assertIn("HIST_FETCH_PAGE_CAP = 2500", fetch)
         self.assertNotIn("pages < 300", fetch)
         fetch5 = (REPO / "scripts" / "fetch_history_5m.py").read_text()
@@ -825,16 +825,125 @@ class ProtocolAmendmentTests(unittest.TestCase):
         readme = (REPO / "README.md").read_text()
         self.assertIn("8 × ~90d", readme)
         self.assertIn("~720 days", readme)
+        self.assertIn("23 × ~90d", readme)
+        self.assertIn("~2070 days", readme)
         self.assertIn("OOS thresholds unchanged", readme)
         self.assertIn("do not throttle live k8s", readme)
         runbook = (REPO / "docs" / "WINDOWS_DISCOVERY.md").read_text()
-        self.assertIn("8 × ~90 calendar days", runbook)
-        self.assertIn("~720 days", runbook)
+        self.assertIn("23 × ~90 calendar days", runbook)
+        self.assertIn("~2070 days", runbook)
         self.assertIn("page cap is 2500", runbook)
         self.assertIn("Do **not** turn discovery back on", runbook)
         html = (REPO / "hedge_fund" / "dashboard" / "report.py").read_text()
-        self.assertIn("8×90d span", html)
+        self.assertIn("{QUAL_N_WINDOWS}×{QUAL_WINDOW_DAYS}d span", html)
+        self.assertNotIn("8×90d span", html)
         self.assertNotIn("3×90d span", html)
+
+    def test_amendment_2026_09_14_full_tape_walk_forward(self):
+        from hedge_fund.trading.constants import (
+            MIN_BACKTEST_SHARPE,
+            MIN_BACKTEST_TRADES,
+            QUAL_COVERAGE_DAYS,
+            QUAL_N_WINDOWS,
+            QUAL_TAPE_BARS_MEASURED,
+            QUAL_WARMUP_BARS,
+            QUAL_WINDOW_BARS,
+            QUAL_WINDOW_DAYS,
+            RISK_POLICY,
+            qual_n_windows_for_bars,
+        )
+
+        self.assertEqual(QUAL_WINDOW_DAYS, 90)
+        self.assertEqual(QUAL_WINDOW_BARS, 25920)
+        self.assertEqual(QUAL_TAPE_BARS_MEASURED, 600787)
+        self.assertEqual(qual_n_windows_for_bars(QUAL_TAPE_BARS_MEASURED), 23)
+        self.assertEqual(qual_n_windows_for_bars(24 * QUAL_WINDOW_BARS - 1), 23)
+        self.assertEqual(QUAL_N_WINDOWS, 23)
+        self.assertEqual(QUAL_COVERAGE_DAYS, 2070)
+        self.assertEqual(QUAL_WINDOW_BARS * QUAL_N_WINDOWS, 596160)
+        self.assertEqual(QUAL_WARMUP_BARS, 4032)
+        self.assertLessEqual(
+            QUAL_WINDOW_BARS * QUAL_N_WINDOWS + QUAL_WARMUP_BARS,
+            QUAL_TAPE_BARS_MEASURED,
+        )
+        self.assertGreater(QUAL_WINDOW_BARS * (QUAL_N_WINDOWS + 1), QUAL_TAPE_BARS_MEASURED)
+        self.assertEqual(MIN_BACKTEST_TRADES, 30)
+        self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
+        self.assertEqual(RISK_POLICY, "rm_v1")
+
+        text = (REPO / "PROTOCOL.md").read_text()
+        self.assertIn("full-tape walk-forward", text)
+        self.assertIn("QUAL_N_WINDOWS` = 23", text)
+        self.assertIn("QUAL_COVERAGE_DAYS` = 2070", text)
+        self.assertIn("QUAL_TAPE_BARS_MEASURED", text)
+        self.assertIn("No automatic re-qualify", text)
+        self.assertIn("~3×", text)
+        self.assertIn("out of band", text)
+        self.assertIn("Do not retest parked fails", text)
+        self.assertIn("OOS **thresholds** are unchanged", text)
+
+        workflow = (REPO / "docs" / "WORKFLOW.md").read_text()
+        self.assertIn("QUAL_N_WINDOWS` = 23", workflow)
+        self.assertIn("QUAL_COVERAGE_DAYS` = 2070", workflow)
+        self.assertIn("no automatic re-qualify", workflow)
+        self.assertIn("Walk-forward 23 x 90d", workflow)
+
+        constants = (REPO / "hedge_fund" / "trading" / "constants.py").read_text()
+        self.assertIn("QUAL_WINDOW_BARS * QUAL_N_WINDOWS", constants)
+        te = (REPO / "scripts" / "tournament_engine.py").read_text()
+        self.assertIn("window_size * n_windows", te)
+        worker = (REPO / "scripts" / "discovery_worker.py").read_text()
+        self.assertIn("qual_keep_bars(n_windows=n_windows)", worker)
+
+    def test_amendment_2026_09_14_indicator_warmup(self):
+        from hedge_fund.trading.constants import (
+            MIN_BACKTEST_SHARPE,
+            MIN_BACKTEST_TRADES,
+            QUAL_N_WINDOWS,
+            QUAL_TAPE_BARS_MEASURED,
+            QUAL_WARMUP_BARS,
+            QUAL_WARMUP_DAYS,
+            QUAL_WINDOW_BARS,
+            RISK_POLICY,
+            qual_keep_bars,
+        )
+
+        self.assertEqual(QUAL_WARMUP_DAYS, 14)
+        self.assertEqual(QUAL_WARMUP_BARS, 4032)
+        self.assertEqual(QUAL_N_WINDOWS, 23)
+        self.assertEqual(qual_keep_bars(), QUAL_WINDOW_BARS * QUAL_N_WINDOWS + QUAL_WARMUP_BARS)
+        self.assertLessEqual(qual_keep_bars(), QUAL_TAPE_BARS_MEASURED)
+        self.assertEqual(MIN_BACKTEST_TRADES, 30)
+        self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
+        self.assertEqual(RISK_POLICY, "rm_v1")
+
+        text = (REPO / "PROTOCOL.md").read_text()
+        self.assertIn("indicator warm-up padding", text)
+        self.assertIn("QUAL_WARMUP_BARS` = 4032", text)
+        self.assertIn("score_from", text)
+        self.assertIn("partial warm-up", text)
+        self.assertIn("OOS **thresholds** are unchanged", text)
+        self.assertIn("No automatic re-qualify", text)
+        self.assertIn("Still paper", text)
+
+        workflow = (REPO / "docs" / "WORKFLOW.md").read_text()
+        self.assertIn("QUAL_WARMUP_BARS", workflow)
+        self.assertIn("4032", workflow)
+        self.assertIn("Walk-forward 23 x 90d", workflow)
+
+        runbook = (REPO / "docs" / "WINDOWS_DISCOVERY.md").read_text()
+        self.assertIn("QUAL_WARMUP_BARS", runbook)
+        self.assertIn("exclude", runbook.lower())
+        readme = (REPO / "README.md").read_text()
+        self.assertIn("QUAL_WARMUP_BARS", readme)
+        self.assertIn("14d of 5m", readme)
+
+        te = (REPO / "scripts" / "tournament_engine.py").read_text()
+        self.assertIn("score_from", te)
+        bs = (REPO / "hedge_fund" / "backtest" / "strategies.py").read_text()
+        self.assertIn("score_from", bs)
+        fetch = (REPO / "scripts" / "fetch_history.py").read_text()
+        self.assertIn("QUAL_WINDOW_BARS * QUAL_N_WINDOWS + QUAL_WARMUP_BARS + 3000", fetch)
 
     def test_fetch_history_defaults_btc_eth_only(self):
         from hedge_fund.trading.constants import (
@@ -849,7 +958,7 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertNotIn("SOL/USDT", fetch)
         self.assertNotIn("XRP/USDT", fetch)
         self.assertIn("HIST_FETCH_PAGE_CAP = 2500", fetch)
-        self.assertIn("QUAL_WINDOW_BARS * QUAL_N_WINDOWS + 3000", fetch)
+        self.assertIn("QUAL_WINDOW_BARS * QUAL_N_WINDOWS + QUAL_WARMUP_BARS + 3000", fetch)
 
         fetch5 = (REPO / "scripts" / "fetch_history_5m.py").read_text()
         self.assertIn('_DEFAULT_SYMBOLS = ["BTC/USDT", "ETH/USDT"]', fetch5)
@@ -858,7 +967,7 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertNotIn("XRP/USDT", fetch5)
         self.assertIn("pages < 2500", fetch5)
 
-        self.assertEqual(QUAL_N_WINDOWS, 8)
+        self.assertEqual(QUAL_N_WINDOWS, 23)
         self.assertEqual(MIN_BACKTEST_TRADES, 30)
         self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
 
@@ -882,7 +991,7 @@ class ProtocolAmendmentTests(unittest.TestCase):
         )
 
         self.assertEqual(DISCOVERY_LOG_CAP, 10000)
-        self.assertEqual(QUAL_N_WINDOWS, 8)
+        self.assertEqual(QUAL_N_WINDOWS, 23)
         self.assertEqual(MIN_BACKTEST_TRADES, 30)
         self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
 
@@ -935,7 +1044,7 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertEqual(RISK_POLICY, "rm_v1")
         self.assertEqual(MIN_BACKTEST_TRADES, 30)
         self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
-        self.assertEqual(QUAL_N_WINDOWS, 8)
+        self.assertEqual(QUAL_N_WINDOWS, 23)
         self.assertEqual(DISCOVER_CYCLE_MAX_NAMES, 1)
         self.assertEqual(DISCOVERY_REFILL_BATCH_SIZE, 16)
         self.assertEqual(
@@ -997,7 +1106,7 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertEqual(RISK_POLICY, "rm_v1")
         self.assertEqual(MIN_BACKTEST_TRADES, 30)
         self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
-        self.assertEqual(QUAL_N_WINDOWS, 8)
+        self.assertEqual(QUAL_N_WINDOWS, 23)
         self.assertEqual(DISCOVERY_LOG_CAP, 10000)
         self.assertEqual(DISCOVERY_REFILL_BATCH_SIZE, 16)
         self.assertEqual(
@@ -1069,7 +1178,7 @@ class ProtocolAmendmentTests(unittest.TestCase):
 
         self.assertEqual(MIN_BACKTEST_TRADES, 30)
         self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
-        self.assertEqual(QUAL_N_WINDOWS, 8)
+        self.assertEqual(QUAL_N_WINDOWS, 23)
         self.assertIn("h1_ema_abv_15", REGIME_ATOMS)
         self.assertIn("h1_ema_abv_18", REGIME_ATOMS)
         self.assertIn("h1_ema_abv_20", REGIME_ATOMS)
@@ -1143,7 +1252,7 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertEqual(RISK_POLICY, "rm_v1")
         self.assertEqual(MIN_BACKTEST_TRADES, 30)
         self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
-        self.assertEqual(QUAL_N_WINDOWS, 8)
+        self.assertEqual(QUAL_N_WINDOWS, 23)
         self.assertIn("h1_ema_abv_18", REGIME_ATOMS)
         self.assertIn("h1_ema_abv_36", REGIME_ATOMS)
         self.assertEqual(
@@ -1215,7 +1324,7 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertEqual(RISK_POLICY, "rm_v1")
         self.assertEqual(MIN_BACKTEST_TRADES, 30)
         self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
-        self.assertEqual(QUAL_N_WINDOWS, 8)
+        self.assertEqual(QUAL_N_WINDOWS, 23)
         for atom in ("h1_sma_abv_20", "h1_sma_abv_24", "h1_sma_abv_30"):
             self.assertIn(atom, REGIME_ATOMS)
             parse_strategy(atom)
@@ -1349,7 +1458,7 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertEqual(RISK_POLICY, "rm_v1")
         self.assertEqual(MIN_BACKTEST_TRADES, 30)
         self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
-        self.assertEqual(QUAL_N_WINDOWS, 8)
+        self.assertEqual(QUAL_N_WINDOWS, 23)
         self.assertEqual(QUAL_WINDOW_BARS, 25920)
         te = (REPO / "scripts" / "tournament_engine.py").read_text()
         self.assertIn("clear_qual_caches", te)
@@ -1490,7 +1599,7 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertEqual(RISK_POLICY, "rm_v1")
         self.assertEqual(MIN_BACKTEST_TRADES, 30)
         self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
-        self.assertEqual(QUAL_N_WINDOWS, 8)
+        self.assertEqual(QUAL_N_WINDOWS, 23)
         self.assertEqual(DISCOVERY_REFILL_BATCH_SIZE, 16)
         self.assertEqual(STRUCTURE_NS, STRUCTURE_NS_THROUGH_96)
         self.assertEqual(max(STRUCTURE_NS), DEFAULT_STRUCTURE_LOOKBACK_MAX)
@@ -1588,7 +1697,7 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertEqual(RISK_POLICY, "rm_v1")
         self.assertEqual(MIN_BACKTEST_TRADES, 30)
         self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
-        self.assertEqual(QUAL_N_WINDOWS, 8)
+        self.assertEqual(QUAL_N_WINDOWS, 23)
         self.assertEqual(DISCOVERY_REFILL_BATCH_SIZE, 16)
         self.assertEqual(STRUCTURE_NS, STRUCTURE_NS_THROUGH_96)
         self.assertEqual(max(STRUCTURE_NS), DEFAULT_STRUCTURE_LOOKBACK_MAX)
@@ -1673,7 +1782,7 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertEqual(RISK_POLICY, "rm_v1")
         self.assertEqual(MIN_BACKTEST_TRADES, 30)
         self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
-        self.assertEqual(QUAL_N_WINDOWS, 8)
+        self.assertEqual(QUAL_N_WINDOWS, 23)
         self.assertEqual(DISCOVERY_REFILL_BATCH_SIZE, 16)
         self.assertEqual(STRUCTURE_NS, STRUCTURE_NS_THROUGH_96)
         self.assertEqual(max(STRUCTURE_NS), DEFAULT_STRUCTURE_LOOKBACK_MAX)
@@ -1820,6 +1929,9 @@ class DashboardRulesTests(unittest.TestCase):
         self.assertIn(GRADUATED_PAPER, html)
         self.assertNotIn("READY_FOR_LIVE", html)
         self.assertIn(QUAL_TIMEFRAME, html)
+        self.assertIn("23×90d span", html)
+        self.assertIn("~2070 calendar days", html)
+        self.assertNotIn("8×90d span", html)
         self.assertNotIn("5m history is not the admit bar", html)
         self.assertIn("Every 300s", html)
         self.assertIn("around the clock", html)

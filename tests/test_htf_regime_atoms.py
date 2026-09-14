@@ -56,7 +56,7 @@ class FrozenGatesUntouchedTests(unittest.TestCase):
     def test_oos_gates_unchanged(self):
         self.assertEqual(MIN_BACKTEST_TRADES, 30)
         self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
-        self.assertEqual(QUAL_N_WINDOWS, 8)
+        self.assertEqual(QUAL_N_WINDOWS, 23)
 
 
 class CausalIndexResampleTests(unittest.TestCase):
