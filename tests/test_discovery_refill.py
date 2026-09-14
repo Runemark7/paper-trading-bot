@@ -23,6 +23,13 @@ from hedge_fund.trading.discovery_guard import (
 )
 from hedge_fund.trading.refill import (
     CONTINUATION_TRENDS,
+    DEEP_STACK_MOM,
+    DEEP_STACK_REGIME,
+    DEEP_STACK_RSI,
+    DEEP_STACK_STRUCTURE_NS,
+    DEEP_STACK_STRUCTURE_TAGS,
+    DEEP_STACK_TREND,
+    DEEP_STACK_TREND_PAIRS,
     DIP_FILTERS,
     DIP_FILTERS_GRIND,
     DIP_FILTERS_LEGACY,
@@ -35,6 +42,7 @@ from hedge_fund.trading.refill import (
     MOM_FILTERS_LEGACY,
     MOM_FILTERS_WIDE,
     MOM_FILTERS_HTF_EXPAND,
+    RECIPE_MAX_ATOMS,
     REGIME_ADMIT_ATOMS,
     REGIME_ATOMS,
     REGIME_CONT_ATOMS,
@@ -259,6 +267,19 @@ def _snapshot_pre_2026_09_14_recipe() -> list[str]:
     )
 
 
+def _snapshot_pre_deep_stack_recipe() -> list[str]:
+    """Winner 3-atoms + HTF 2-atoms + leftover structure (pre 4–7 stacks)."""
+    from hedge_fund.trading.refill import _regime_pair_ands, _regime_winner_3atoms
+
+    return (
+        list(_regime_winner_3atoms())
+        + list(_regime_pair_ands(REGIME_MOM_BASES))
+        + list(_regime_pair_ands(REGIME_DIP_BASES))
+        + _snapshot_trend_participation()
+        + _snapshot_2026_09_12_leftover()
+    )
+
+
 def _snapshot_2026_09_12_morning(ns: tuple[int, ...] | None = None) -> list[str]:
     """Frozen 2026-09-12 morning stream (legacy + near-level, lookbacks through 96)."""
     from hedge_fund.trading.refill import _legacy_structure_ands, _near_level_ands
@@ -376,6 +397,33 @@ class RecipeBoundsTests(unittest.TestCase):
         self.assertNotIn("h1_sma_abv_18", REGIME_ATOMS)
         self.assertTrue(set(REGIME_ADMIT_ATOMS).issubset(REGIME_ATOMS))
         self.assertEqual(REGIME_CONT_ATOMS, ("sma_abv_50", "ema_abv_20"))
+        self.assertEqual(
+            DEEP_STACK_REGIME,
+            (
+                "h1_ema_abv_20",
+                "h1_ema_abv_24",
+                "h1_ema_abv_30",
+                "h1_ema_abv_50",
+                "h1_sma_abv_20",
+                "h1_sma_abv_24",
+                "h1_sma_abv_30",
+            ),
+        )
+        self.assertTrue(set(DEEP_STACK_REGIME).issubset(REGIME_ATOMS))
+        self.assertEqual(DEEP_STACK_MOM, REGIME_MOM_PRIORITY)
+        self.assertEqual(
+            DEEP_STACK_TREND,
+            ("sma_abv_50", "ema_abv_20", "sma_abv_20", "ema_abv_50"),
+        )
+        self.assertEqual(
+            DEEP_STACK_TREND_PAIRS,
+            (("sma_abv_50", "ema_abv_20"), ("sma_abv_20", "ema_abv_50")),
+        )
+        self.assertEqual(DEEP_STACK_RSI, "rsi_14_>50")
+        self.assertEqual(DEEP_STACK_STRUCTURE_NS, (12, 24, 48))
+        self.assertEqual(DEEP_STACK_STRUCTURE_TAGS, ("near_swing_hi",))
+        self.assertEqual(RECIPE_MAX_ATOMS, 7)
+        self.assertTrue(all(n <= 48 for n in DEEP_STACK_STRUCTURE_NS))
         self.assertEqual(
             MOM_FILTERS_HTF_EXPAND,
             (
@@ -1115,6 +1163,87 @@ class RefillBatchTests(unittest.TestCase):
                 any(tok.startswith(("don_hi_", "near_swing_")) for tok in name.split("&")),
                 msg=name,
             )
+
+    def test_recipe_emits_depth_4_through_7_admit_stacks(self):
+        names = list(iter_recipe_names())
+        depths = [n.count("&") + 1 for n in names]
+        self.assertGreaterEqual(max(depths), 4)
+        self.assertEqual(max(depths), 7)
+        self.assertLessEqual(max(depths), RECIPE_MAX_ATOMS)
+        four = "h1_ema_abv_20&mom_18b_gt2pc&sma_abv_50&dip_24b_lt5pc"
+        five = "h1_ema_abv_20&mom_18b_gt2pc&sma_abv_50&ema_abv_20&dip_24b_lt5pc"
+        six = "h1_ema_abv_20&mom_18b_gt2pc&sma_abv_50&ema_abv_20&dip_24b_lt5pc&rsi_14_>50"
+        seven = (
+            "h1_ema_abv_20&mom_18b_gt2pc&sma_abv_50&ema_abv_20"
+            "&dip_24b_lt5pc&rsi_14_>50&near_swing_hi_24"
+        )
+        for name in (four, five, six, seven):
+            self.assertIn(name, names, msg=name)
+            self.assertTrue(name_is_parseable(name), msg=name)
+            parse_strategy(name)
+        self.assertLess(names.index(four), names.index(six))
+        self.assertLess(names.index(five), names.index(six))
+        self.assertLess(names.index(six), names.index(seven))
+        # Depth 4–5 ahead of leftover structure ANDs.
+        self.assertLess(names.index(four), names.index("dip_6b_lt2pc&don_lo_6"))
+        self.assertLess(names.index(five), names.index("mom_30b_gt1pc&don_hi_6"))
+        # Cheap structure only, N≤48; no expensive Donchian on HTF×mom.
+        self.assertNotIn("h1_ema_abv_20&mom_18b_gt2pc&don_hi_12", names)
+        for name in names:
+            parts = [p for p in name.split("&") if p]
+            self.assertLessEqual(len(parts), 7, msg=name)
+            for _atom, n in structure_lookbacks(name):
+                self.assertLessEqual(n, 96, msg=name)
+            if name.count("&") >= 3 and any(
+                tok.startswith("h1_") for tok in name.split("&")
+            ):
+                for tok in name.split("&"):
+                    if tok.startswith(("don_hi_", "near_swing_lo_")):
+                        self.fail(f"expensive structure on deep HTF stack: {name}")
+                    if tok.startswith("near_swing_hi_"):
+                        n = int(tok.rsplit("_", 1)[-1])
+                        self.assertLessEqual(n, 48, msg=name)
+        eight = seven + "&sma_abv_100"
+        self.assertFalse(name_is_parseable(eight))
+        self.assertTrue(name_is_parseable(five))
+        self.assertTrue(name_is_parseable(six))
+        self.assertTrue(name_is_parseable(seven))
+        self.assertEqual(MIN_BACKTEST_TRADES, 30)
+        self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
+        self.assertEqual(QUAL_N_WINDOWS, 8)
+
+    def test_deep_stack_family_adds_farm_feasible_new_keys(self):
+        prior_keys = {near_duplicate_key(n) for n in _snapshot_pre_deep_stack_recipe()}
+        new_keys = {
+            near_duplicate_key(n)
+            for n in iter_recipe_names()
+            if name_is_parseable(n)
+        }
+        added = new_keys - prior_keys
+        self.assertGreaterEqual(len(added), 500, msg=f"new distinct keys={len(added)}")
+        self.assertLessEqual(len(added), 2000, msg=f"new distinct keys={len(added)}")
+        self.assertEqual(max(STRUCTURE_NS), 96)
+        self.assertEqual(MIN_BACKTEST_TRADES, 30)
+        self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
+
+    def test_next_refill_batch_fills_deep_stacks_against_large_taken(self):
+        taken = set(_snapshot_pre_deep_stack_recipe()) | set(generate_universe())
+        i = 0
+        while len(taken) < 5037:
+            taken.add(f"parked_dummy_{i}")
+            i += 1
+        added = next_refill_batch(taken_names=taken, n=DISCOVERY_REFILL_BATCH_SIZE)
+        self.assertEqual(len(added), DISCOVERY_REFILL_BATCH_SIZE)
+        taken_keys = {near_duplicate_key(n) for n in taken}
+        for name in added:
+            self.assertNotIn(name, taken)
+            self.assertNotIn(near_duplicate_key(name), taken_keys, msg=name)
+            self.assertTrue(name_is_parseable(name), msg=name)
+            self.assertGreaterEqual(name.count("&") + 1, 4, msg=name)
+            self.assertLessEqual(name.count("&") + 1, 7, msg=name)
+            self.assertTrue(_has_mint_tag(name), msg=name)
+            for _atom, n in structure_lookbacks(name):
+                self.assertLessEqual(n, 96, msg=name)
 
     def test_max_names_one_refills_only_when_eligible_empty(self):
         self.assertEqual(DISCOVER_CYCLE_MAX_NAMES, 1)
