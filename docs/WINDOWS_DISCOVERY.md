@@ -205,6 +205,7 @@ the farm stays idle until Start.
   `h4_sma_abv_20` / `h4_sma_abv_24` / `h4_sma_abv_30` / `h4_sma_abv_50`,
   plus `h1_ema_abv_{12,40,50}` / `h1_sma_abv_{15,36,40}`,
   winner `regime&mom&mild_dip` 3-atoms first (not structure),
+  then 4–7 atom admit-island stacks (depth 4–5 first),
   mom-before-dip, `REGIME_DIP_PRIORITY`
   (`dip_24b_lt5pc` / `dip_24b_lt6pc` / `dip_18b_lt2pc`),
   plus `MOM_FILTERS_HTF_DENSE` / `MOM_FILTERS_HTF_EXPAND`).

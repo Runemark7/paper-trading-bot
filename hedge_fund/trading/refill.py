@@ -42,7 +42,11 @@ twins of that island and emit mild pullback dips
 the regime×dip path. Same-date 2026-09-14: un-dry the farm by
 combining winning HTF×mom with mild dip / continuation 3-atoms
 (not structure) and densifying unused distinct HTF periods + mom
-grids. Still no named candlesticks. OOS gates unchanged.
+grids. Same-date later: densify 4–7 atom AND stacks on that
+admit island (role buckets, not a cartesian) so dry refill can
+mint Alexander-style multi-filter names. Cheap ``near_swing_hi``
+N≤48 only at depth 7; no HTF×mom×expensive structure. Still no
+named candlesticks. OOS gates unchanged.
 """
 from __future__ import annotations
 
@@ -185,6 +189,33 @@ REGIME_CONT_ATOMS: tuple[str, ...] = (
     "sma_abv_50",
     "ema_abv_20",
 )
+# 4–7 atom stacks sit on the paid-off island only — not every
+# REGIME_ADMIT_ATOMS neighbor. Spine is always REGIME+MOM.
+# Optional extras: 0–2 continuation, 0–1 mild dip, 0–1 RSI,
+# 0–1 cheap near_swing_hi (N≤48) at depth 7 only.
+DEEP_STACK_REGIME: tuple[str, ...] = (
+    "h1_ema_abv_20",
+    "h1_ema_abv_24",
+    "h1_ema_abv_30",
+    "h1_ema_abv_50",
+    "h1_sma_abv_20",
+    "h1_sma_abv_24",
+    "h1_sma_abv_30",
+)
+DEEP_STACK_TREND: tuple[str, ...] = (
+    "sma_abv_50",
+    "ema_abv_20",
+    "sma_abv_20",
+    "ema_abv_50",
+)
+DEEP_STACK_TREND_PAIRS: tuple[tuple[str, str], ...] = (
+    ("sma_abv_50", "ema_abv_20"),
+    ("sma_abv_20", "ema_abv_50"),
+)
+DEEP_STACK_RSI: str = "rsi_14_>50"
+DEEP_STACK_STRUCTURE_NS: tuple[int, ...] = (12, 24, 48)
+DEEP_STACK_STRUCTURE_TAGS: tuple[str, ...] = ("near_swing_hi",)
+RECIPE_MAX_ATOMS: int = 7
 # Short-continuation mom around the first admit (12–24b / gt2–gt4).
 # near_duplicate_key: lb rounds to 6, thr to even. gt3pc→gt4pc so
 # mom_18b_gt3pc is the same canon as gt4 — emit the canon only.
@@ -222,6 +253,7 @@ REGIME_MOM_PRIORITY: tuple[str, ...] = (
     "mom_12b_gt2pc",
     "mom_24b_gt2pc",
 )
+DEEP_STACK_MOM: tuple[str, ...] = REGIME_MOM_PRIORITY
 REGIME_MOM_BASES: tuple[str, ...] = REGIME_MOM_PRIORITY + tuple(
     m
     for m in (
@@ -427,7 +459,7 @@ def name_is_parseable(name: str) -> bool:
     if not name or name_is_refused(name):
         return False
     parts = [p.strip() for p in name.split("&") if p.strip()]
-    if not parts or len(parts) > 3:
+    if not parts or len(parts) > RECIPE_MAX_ATOMS:
         return False
     return all(atom_is_allowed(p) for p in parts)
 
@@ -573,6 +605,104 @@ def _regime_winner_3atoms() -> Iterator[str]:
                 yield f"{regime}&{mom}&{cont}"
 
 
+def _and_join(*atoms: str) -> str:
+    return "&".join(a for a in atoms if a)
+
+
+def _iter_deep_trend_choices(n_trend: int) -> Iterator[tuple[str, ...]]:
+    if n_trend == 0:
+        yield ()
+        return
+    if n_trend == 1:
+        for trend in DEEP_STACK_TREND:
+            yield (trend,)
+        return
+    for pair in DEEP_STACK_TREND_PAIRS:
+        yield pair
+
+
+def _iter_deep_dip_choices(n_dip: int) -> Iterator[tuple[str, ...]]:
+    if n_dip == 0:
+        yield ()
+        return
+    for dip in REGIME_DIP_PRIORITY:
+        yield (dip,)
+
+
+def _iter_deep_rsi_choices(n_rsi: int) -> Iterator[tuple[str, ...]]:
+    if n_rsi == 0:
+        yield ()
+        return
+    yield (DEEP_STACK_RSI,)
+
+
+def _iter_deep_struct_choices(n_struct: int) -> Iterator[tuple[str, ...]]:
+    if n_struct == 0:
+        yield ()
+        return
+    for tag in DEEP_STACK_STRUCTURE_TAGS:
+        for n in DEEP_STACK_STRUCTURE_NS:
+            yield (f"{tag}_{n}",)
+
+
+def _deep_stacks_at_depth(depth: int) -> Iterator[str]:
+    """Role-bucket stacks of exact ``depth``. Spine is REGIME+MOM.
+
+    At most one atom per role except continuation (0–2). Structure
+    only at depth 7 (cheap ``near_swing_hi``, N≤48). Not a cartesian
+    of every parser atom.
+    """
+    extras = depth - 2
+    winner_3_extras = frozenset(REGIME_CONT_ATOMS + REGIME_DIP_PRIORITY)
+    for n_trend in range(3):
+        for n_dip in (0, 1):
+            for n_rsi in (0, 1):
+                for n_struct in (0, 1):
+                    if n_trend + n_dip + n_rsi + n_struct != extras:
+                        continue
+                    if n_struct and depth != 7:
+                        continue
+                    if n_struct and not (n_trend == 2 and n_dip == 1 and n_rsi == 1):
+                        continue
+                    for regime in DEEP_STACK_REGIME:
+                        for mom in DEEP_STACK_MOM:
+                            for trends in _iter_deep_trend_choices(n_trend):
+                                for dips in _iter_deep_dip_choices(n_dip):
+                                    for rsis in _iter_deep_rsi_choices(n_rsi):
+                                        for structs in _iter_deep_struct_choices(n_struct):
+                                            extras_atoms = trends + dips + rsis + structs
+                                            if (
+                                                depth == 3
+                                                and len(extras_atoms) == 1
+                                                and extras_atoms[0] in winner_3_extras
+                                            ):
+                                                continue
+                                            yield _and_join(
+                                                regime, mom, *trends, *dips, *rsis, *structs
+                                            )
+
+
+def _regime_deep_stacks() -> Iterator[str]:
+    """4–7 atom admit-island stacks. Depth 4–5 first, then leftover 3, then 6–7.
+
+    Builds on winning HTF×mom×continuation / mild-dip 3-atoms. Skip
+    names already emit-equivalent via ``near_duplicate_key``. Prefer
+    trend / RSI / dip over Donchian; cheap ``near_swing_hi`` N≤48
+    only at depth 7. No ``don_hi`` / ``near_swing_lo`` / N>48.
+    """
+    seen: set[str] = set()
+    for depth in (4, 5, 3, 6, 7):
+        for name in _deep_stacks_at_depth(depth):
+            parts = [p for p in name.split("&") if p]
+            if not (3 <= len(parts) <= RECIPE_MAX_ATOMS):
+                continue
+            key = near_duplicate_key(name)
+            if key in seen:
+                continue
+            seen.add(key)
+            yield name
+
+
 def _regime_ands() -> Iterator[str]:
     """2026-09-13: HTF buyer-regime AND existing 5m DIP/MOM/WIDE/GRIND.
 
@@ -584,11 +714,14 @@ def _regime_ands() -> Iterator[str]:
     (``dip_24b_lt5pc`` / ``dip_24b_lt6pc`` / ``dip_18b_lt2pc``)
     first among regime dip bases. 2026-09-14: winner 3-atoms first
     (``regime&mom&mild_dip`` then ``regime&mom&continuation``), then
-    ``regime&mom`` then ``regime&dip``. No ``don_hi`` / ``near_swing_lo``.
-    Dry refill hits combined admits immediately. HTF False → no new
-    long (flat). No named candlesticks.
+    4–7 atom role-bucket stacks (depth 4–5 before 6–7), then
+    ``regime&mom`` then ``regime&dip``. No ``don_hi`` /
+    ``near_swing_lo``. Cheap ``near_swing_hi`` N≤48 only on depth-7
+    stacks. Dry refill hits combined admits immediately. HTF False
+    → no new long (flat). No named candlesticks.
     """
     yield from _regime_winner_3atoms()
+    yield from _regime_deep_stacks()
     yield from _regime_pair_ands(REGIME_MOM_BASES)
     yield from _regime_pair_ands(REGIME_DIP_BASES)
 
@@ -625,11 +758,14 @@ def iter_recipe_names() -> Iterator[str]:
 
     HTF buyer-regime families are first so a dry refill mints
     admit-island ``regime&mom&mild_dip`` / continuation 3-atoms,
-    then ``regime&mom`` 2-atoms, then HTF×dip. No HTF×mom×structure.
-    Grind 1% 2-atoms and wide / short-MA continuation follow, then
-    legacy 2026-09-11 families, the 2026-09-12 near-level pass, then
-    leftover TREND / ema_stack / 3-atom families. Dip×support and
-    short-horizon mom stay on the frozen 3×3. No WaveTrend, no MFI.
+    then 4–7 atom role-bucket stacks (depth 4–5 before 6–7), then
+    ``regime&mom`` 2-atoms, then HTF×dip. No HTF×mom×expensive
+    structure (``don_hi`` / ``near_swing_lo`` / N>48). Cheap
+    ``near_swing_hi`` N≤48 only at depth 7. Grind 1% 2-atoms and
+    wide / short-MA continuation follow, then legacy 2026-09-11
+    families, the 2026-09-12 near-level pass, then leftover TREND
+    / ema_stack / 3-atom families. Dip×support and short-horizon
+    mom stay on the frozen 3×3. No WaveTrend, no MFI.
     """
     yield from _regime_ands()
     for n in STRUCTURE_NS:

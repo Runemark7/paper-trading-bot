@@ -214,6 +214,21 @@ class ParseStrategyAcceptsTests(unittest.TestCase):
         sellers = [200.0] * 600 + [200.0 - i * 2.0 for i in range(50)]
         self.assertFalse(eval_predicate(pred, sellers, len(sellers) - 1))
 
+    def test_deep_5_to_7_atom_ands_parse(self):
+        from hedge_fund.trading.refill import name_is_parseable
+
+        five = "h1_ema_abv_20&mom_18b_gt2pc&sma_abv_50&ema_abv_20&dip_24b_lt5pc"
+        six = five + "&rsi_14_>50"
+        seven = six + "&near_swing_hi_24"
+        closes = [100.0] * 600 + [100.0 + i * 2.0 for i in range(50)]
+        highs = [c + 0.5 for c in closes]
+        lows = [c - 0.5 for c in closes]
+        for name in (five, six, seven):
+            self.assertTrue(name_is_parseable(name), msg=name)
+            parse_strategy(name)
+            eval_predicate(parse_strategy(name), closes, None, highs=highs, lows=lows)
+        self.assertFalse(name_is_parseable(seven + "&sma_abv_100"))
+
     def test_and_with_5m_dip_needs_both(self):
         # Rising completed 4h bars, then a forming-4h 5m dip so the HTF
         # close stays the last completed (buyer) close.

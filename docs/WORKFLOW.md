@@ -14,7 +14,7 @@ this file is the living topology.
 
 | Piece | Where | What it does |
 |---|---|---|
-| **Mint** | `hedge_fund/trading/refill.py` on the farm | Bounded DIP/MOM + structure AND recipe (`STRUCTURE_NS` through **96** — no `don_hi` / `don_lo` / `near_swing_*` / `dbl_bot` `N>96`), plus densified HTF buyer-regime ANDs (`h1_ema_abv_{12,15,18,20,24,30,36,40,50}` / `h1_sma_abv_{15,20,24,30,36,40}` / `h4_ema_abv_{12,20,24,30,36,48}` / `h4_sma_abv_{20,24,30,50}`). Admit-island **3-atoms first**: `regime&mom&mild_dip` then `regime&mom&sma_abv_50` / `ema_abv_20` (not HTF×mom×structure). Then HTF×mom 2-atom (`regime&mom`, including `MOM_FILTERS_HTF_DENSE` / `MOM_FILTERS_HTF_EXPAND`) — 2-atom only vs structure — then HTF×dip 2-atom only. Mom-before-dip: `mom_18b_gt2pc` first among regime mom bases, `dip_24b_lt5pc` / `dip_24b_lt6pc` / `dip_18b_lt2pc` first among regime dip bases (`REGIME_DIP_PRIORITY`). When never-tested leftovers run dry, the next handful is appended to `state/discovery_extended.json`. Static `generate_universe()` stays inside the ~40–120 compiled-list band. |
+| **Mint** | `hedge_fund/trading/refill.py` on the farm | Bounded DIP/MOM + structure AND recipe (`STRUCTURE_NS` through **96** — no `don_hi` / `don_lo` / `near_swing_*` / `dbl_bot` `N>96`), plus densified HTF buyer-regime ANDs (`h1_ema_abv_{12,15,18,20,24,30,36,40,50}` / `h1_sma_abv_{15,20,24,30,36,40}` / `h4_ema_abv_{12,20,24,30,36,48}` / `h4_sma_abv_{20,24,30,50}`). Admit-island **3-atoms first**: `regime&mom&mild_dip` then `regime&mom&sma_abv_50` / `ema_abv_20` (not HTF×mom×structure). Then **4–7 atom role-bucket stacks** on that island (depth 4–5 first, then 6–7; REGIME+MOM spine, 0–2 continuation, 0–1 mild dip, 0–1 RSI, cheap `near_swing_hi` N≤48 only at depth 7). Then HTF×mom 2-atom (`regime&mom`, including `MOM_FILTERS_HTF_DENSE` / `MOM_FILTERS_HTF_EXPAND`) — 2-atom only vs expensive structure — then HTF×dip 2-atom only. Mom-before-dip: `mom_18b_gt2pc` first among regime mom bases, `dip_24b_lt5pc` / `dip_24b_lt6pc` / `dip_18b_lt2pc` first among regime dip bases (`REGIME_DIP_PRIORITY`). When never-tested leftovers run dry, the next handful is appended to `state/discovery_extended.json`. Static `generate_universe()` stays inside the ~40–120 compiled-list band. |
 | **Farm** | Alexander's Windows PC (`jensa`) | `scripts/discovery_worker.py` evaluates names against local `state/crypto_history_5m.json` (Binance 5m, **BTC/USDT and ETH/USDT only**). Same fail-once / auto-refill / aggregate-OOS / `rm_v1` / 5m rules as `scripts/tournament_engine.py`. Before walk-forward: structure lookback cap (`DISCOVERY_STRUCTURE_LOOKBACK_MAX` = 96) fail-parks `lookback_too_expensive`; 600s eval timeout is a backstop only. Ops/throughput, not a gate softening. |
 | **Eval** | lookback guard → `parse_strategy` → walk-forward → backtest → gate | Name string → structure lookback cap → AND atoms on native 5m → 8 chronological ~90d windows → `rm_v1` paper backtest → aggregate OOS in `hedge_fund/trading/qualify.py`. |
 | **Ingest** | `POST /api/discovery/ingest` | Token-gated. Pass → champion + isolated paper book on k8s. Fail → parked forever (fail-once). Ingest never culls existing champions. |
@@ -49,7 +49,7 @@ Honesty contract: [PROTOCOL.md](../PROTOCOL.md).
 
 ```mermaid
 flowchart TB
-  recipe["Mint: hedge_fund/trading/refill.py\nHTF×mom×mild-dip 3-atom first\nthen HTF×mom 2-atom + mom-before-dip\nthen DIP/MOM + structure"]
+  recipe["Mint: hedge_fund/trading/refill.py\nHTF×mom×mild-dip 3-atom first\nthen 4-7 atom admit stacks\nthen HTF×mom 2-atom + leftover structure"]
   ext["state/discovery_extended.json"]
   recipe --> ext
 
@@ -154,7 +154,10 @@ HTF sellers → no new long (flat), not short. When HTF says buyers
 and 5m is in a dip, that is buy-the-dip; disagree → HTF wins
 (no long). Recipe emits admit-island **3-atoms first**
 (`regime&mom&mild_dip`, then `regime&mom&sma_abv_50` / `ema_abv_20`)
-then HTF×mom **2-atom only** vs structure (no structure AND —
+then **4–7 atom role-bucket stacks** on that island (depth 4–5
+first, then leftover new 3-atoms, then 6–7; spine REGIME+MOM;
+cheap `near_swing_hi` N≤48 only at depth 7)
+then HTF×mom **2-atom only** vs expensive structure (no structure AND —
 no `don_hi` / `near_swing_lo` AND on that family, and HTF×dip stays 2-atom only)
 **before** leftover HTF×dip — mom-before-dip — with `mom_18b_gt2pc`
 first among regime mom bases and `dip_24b_lt5pc` / `dip_24b_lt6pc` /
@@ -168,7 +171,7 @@ AND onto every HTF tag. OOS gates are unchanged.
 ```mermaid
 flowchart TB
   shipped["SHIPPED v1 + densify + 2026-09-14 neighbors:\nh1_ema_abv_12/15/18/20/24/30/36/40/50\nh1_sma_abv_15/20/24/30/36/40\nh4_ema_abv_12/20/24/30/36/48\nh4_sma_abv_20/24/30/50"]
-  order["winner 3-atoms first:\nHTF x mom x mild-dip / continuation\nthen mom-before-dip:\nHTF x mom 2-atom only vs structure\nthen HTF x dip 2-atom\nlt5 / lt6 / 18b_lt2 first"]
+  order["winner 3-atoms first:\nHTF x mom x mild-dip / continuation\nthen 4-7 atom role-bucket stacks\n(depth 4-5 then 6-7)\nthen mom-before-dip:\nHTF x mom 2-atom only vs expensive structure\nthen HTF x dip 2-atom"]
   mintOnly["AND into refill recipe only\nnew names in discovery_extended.json"]
   sameEval["Same 5m walk-forward + rm_v1\n8 x 90d"]
   sameGate["Same frozen OOS gates\nin qualify.py"]

@@ -1553,6 +1553,89 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertIn("no structure and", workflow.lower())
         self.assertIn("mom-before-dip", workflow)
 
+    def test_amendment_2026_09_14_deep_admit_stacks(self):
+        from hedge_fund.trading.constants import (
+            DISCOVERY_REFILL_BATCH_SIZE,
+            MIN_BACKTEST_SHARPE,
+            MIN_BACKTEST_TRADES,
+            QUAL_N_WINDOWS,
+            QUAL_TIMEFRAME,
+            RISK_POLICY,
+        )
+        from hedge_fund.signals.dynamic import parse_strategy
+        from hedge_fund.trading.discovery_guard import (
+            DEFAULT_STRUCTURE_LOOKBACK_MAX,
+            structure_lookbacks,
+        )
+        from hedge_fund.trading.refill import (
+            DEEP_STACK_REGIME,
+            RECIPE_MAX_ATOMS,
+            STRUCTURE_NS,
+            STRUCTURE_NS_THROUGH_96,
+            iter_recipe_names,
+            name_is_parseable,
+            next_refill_batch,
+        )
+        from hedge_fund.trading.universe import generate_universe, near_duplicate_key
+
+        self.assertEqual(QUAL_TIMEFRAME, "5m")
+        self.assertEqual(RISK_POLICY, "rm_v1")
+        self.assertEqual(MIN_BACKTEST_TRADES, 30)
+        self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
+        self.assertEqual(QUAL_N_WINDOWS, 8)
+        self.assertEqual(DISCOVERY_REFILL_BATCH_SIZE, 16)
+        self.assertEqual(STRUCTURE_NS, STRUCTURE_NS_THROUGH_96)
+        self.assertEqual(max(STRUCTURE_NS), DEFAULT_STRUCTURE_LOOKBACK_MAX)
+        self.assertEqual(RECIPE_MAX_ATOMS, 7)
+        self.assertIn("h1_ema_abv_50", DEEP_STACK_REGIME)
+        names = list(iter_recipe_names())
+        self.assertEqual(names[0], "h1_ema_abv_20&mom_18b_gt2pc&dip_24b_lt5pc")
+        four = "h1_ema_abv_20&mom_18b_gt2pc&sma_abv_50&dip_24b_lt5pc"
+        seven = (
+            "h1_ema_abv_20&mom_18b_gt2pc&sma_abv_50&ema_abv_20"
+            "&dip_24b_lt5pc&rsi_14_>50&near_swing_hi_24"
+        )
+        self.assertIn(four, names)
+        self.assertIn(seven, names)
+        self.assertEqual(max(n.count("&") + 1 for n in names), 7)
+        self.assertLess(names.index(four), names.index("dip_6b_lt2pc&don_lo_6"))
+        self.assertNotIn("h1_ema_abv_20&mom_18b_gt2pc&don_hi_12", names)
+        self.assertLessEqual(len(names), 8000)
+        for name in names:
+            for _atom, n in structure_lookbacks(name):
+                self.assertLessEqual(n, 96, msg=name)
+        for name in (four, seven):
+            self.assertTrue(name_is_parseable(name), msg=name)
+            parse_strategy(name)
+        self.assertFalse(name_is_parseable(seven + "&sma_abv_100"))
+        added = next_refill_batch(
+            taken_names=set(generate_universe()),
+            n=DISCOVERY_REFILL_BATCH_SIZE,
+        )
+        self.assertEqual(len(added), DISCOVERY_REFILL_BATCH_SIZE)
+        self.assertEqual(
+            near_duplicate_key("h1_ema_abv_20&mom_18b_gt2pc&sma_abv_50&dip_24b_lt5pc"),
+            near_duplicate_key("dip_24b_lt5pc&sma_abv_50&mom_18b_gt2pc&h1_ema_abv_20"),
+        )
+
+        text = (REPO / "PROTOCOL.md").read_text()
+        self.assertIn("Amendment 2026-09-14 — densify 4–7 atom admit-island stacks", text)
+        self.assertIn("DEEP_STACK_REGIME", text)
+        self.assertIn("RECIPE_MAX_ATOMS", text)
+        self.assertIn("OOS **thresholds** are unchanged", text)
+        self.assertIn("No named candlesticks", text)
+        self.assertIn("STRUCTURE_NS", text)
+        workflow = (REPO / "docs" / "WORKFLOW.md").read_text()
+        self.assertIn("4–7 atom", workflow)
+        self.assertIn("role-bucket", workflow)
+        self.assertIn("near_swing_hi", workflow)
+        self.assertIn("2-atom only", workflow)
+        self.assertIn("mom-before-dip", workflow)
+        readme = (REPO / "README.md").read_text()
+        self.assertIn("4–7 atom", readme)
+        runbook = (REPO / "docs" / "WINDOWS_DISCOVERY.md").read_text()
+        self.assertIn("4–7 atom", runbook)
+
 
 class IsolatedRunnerTests(unittest.TestCase):
     def test_no_second_hardcoded_book(self):
