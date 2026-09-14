@@ -186,6 +186,17 @@ class ParseStrategyAcceptsTests(unittest.TestCase):
             "h4_ema_abv_12",
             "h4_ema_abv_48",
             "h4_sma_abv_24",
+            "h1_ema_abv_12",
+            "h1_ema_abv_40",
+            "h1_ema_abv_50",
+            "h1_sma_abv_15",
+            "h1_sma_abv_36",
+            "h1_sma_abv_40",
+            "h4_ema_abv_20",
+            "h4_ema_abv_30",
+            "h4_ema_abv_36",
+            "h4_sma_abv_20",
+            "h4_sma_abv_30",
         ):
             pred = parse_strategy(name)
             self.assertTrue(eval_predicate(pred, closes, i), msg=name)
@@ -194,6 +205,14 @@ class ParseStrategyAcceptsTests(unittest.TestCase):
         closes = _uptrend_5m(60, step=-1.0)
         pred = parse_strategy("h4_ema_abv_24")
         self.assertFalse(eval_predicate(pred, closes, len(closes) - 1))
+
+    def test_winner_3atom_and_parses(self):
+        # Flat HTF warmup, then a 5m pop so mom_18b_gt2pc and sma_abv_50 fire.
+        closes = [100.0] * 600 + [100.0 + i * 2.0 for i in range(50)]
+        pred = parse_strategy("h1_ema_abv_20&mom_18b_gt2pc&sma_abv_50")
+        self.assertTrue(eval_predicate(pred, closes, len(closes) - 1))
+        sellers = [200.0] * 600 + [200.0 - i * 2.0 for i in range(50)]
+        self.assertFalse(eval_predicate(pred, sellers, len(sellers) - 1))
 
     def test_and_with_5m_dip_needs_both(self):
         # Rising completed 4h bars, then a forming-4h 5m dip so the HTF

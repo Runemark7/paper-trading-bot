@@ -200,11 +200,14 @@ the farm stays idle until Start.
   densified `h1_ema_abv_15` / `h1_ema_abv_18` / `h1_ema_abv_20` /
   `h1_ema_abv_24` / `h1_ema_abv_30` / `h1_ema_abv_36` /
   `h1_sma_abv_20` / `h1_sma_abv_24` / `h1_sma_abv_30` /
-  `h4_ema_abv_12` / `h4_ema_abv_24` /
-  `h4_ema_abv_48` / `h4_sma_abv_24` / `h4_sma_abv_50`,
+  `h4_ema_abv_12` / `h4_ema_abv_20` / `h4_ema_abv_24` /
+  `h4_ema_abv_30` / `h4_ema_abv_36` / `h4_ema_abv_48` /
+  `h4_sma_abv_20` / `h4_sma_abv_24` / `h4_sma_abv_30` / `h4_sma_abv_50`,
+  plus `h1_ema_abv_{12,40,50}` / `h1_sma_abv_{15,36,40}`,
+  winner `regime&mom&mild_dip` 3-atoms first (not structure),
   mom-before-dip, `REGIME_DIP_PRIORITY`
   (`dip_24b_lt5pc` / `dip_24b_lt6pc` / `dip_18b_lt2pc`),
-  plus `MOM_FILTERS_HTF_DENSE`).
+  plus `MOM_FILTERS_HTF_DENSE` / `MOM_FILTERS_HTF_EXPAND`).
 - No culling champions.
 - Do not point `PAPER_STATE` at the cluster PVC.
 - Do not raise `DISCOVERY_STRUCTURE_LOOKBACK_MAX` / disable the timeout
