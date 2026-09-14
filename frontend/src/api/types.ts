@@ -213,6 +213,8 @@ export interface DiscoveryFarm {
 export interface DiscoverySummary {
   paper_only: boolean;
   as_of: string;
+  /** True when GET ?compact=1 omitted tested / queued / extended_names lists. */
+  compact?: boolean;
   certainty: string;
   running: boolean;
   stamp_says_in_progress: boolean;

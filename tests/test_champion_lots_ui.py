@@ -75,7 +75,7 @@ class AccountJoinTests(unittest.TestCase):
 
     def test_frontend_helper_uses_the_same_slug_as_open_lots_py(self):
         self.assertIn('name.replace("/", "_").replace(":", "_")', OPEN_LOTS_PY)
-        self.assertIn("name.replace(/[/:]/g, \"_\")", FORMAT_TS)
+        self.assertIn('(name ?? "").replace(/[/:]/g, "_")', FORMAT_TS)
         self.assertIn("function paperAccountKeys", FORMAT_TS)
         self.assertIn("function accountsMatch", FORMAT_TS)
         self.assertIn("function lotsForChampion", FORMAT_TS)
@@ -258,6 +258,10 @@ class ChampionsListUiTests(unittest.TestCase):
         self.assertIn("Could not load /api/graduated", CHAMPS_TSX)
         self.assertIn("Could not load /api/discovery/summary", DISCOVERY_TSX)
         self.assertIn("DiscoveryTeaser", CHAMPS_TSX)
+        self.assertIn('queryKey: ["discovery-summary", "compact"]', DISCOVERY_TSX)
+        self.assertIn("fetchDiscoverySummary({ compact: true })", DISCOVERY_TSX)
+        self.assertIn("PageErrorBoundary", APP_TSX)
+        self.assertIn('label="Champions"', APP_TSX)
         self.assertIn('to="/discovery"', DISCOVERY_TSX)
         self.assertNotIn("<DiscoveryBuckets", CHAMPS_TSX)
         self.assertNotIn("Already tested", CHAMPS_TSX)

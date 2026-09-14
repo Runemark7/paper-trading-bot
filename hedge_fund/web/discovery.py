@@ -4,6 +4,10 @@ Never claims a sidecar process is alive. in_flight names come from
 ``discovery_in_flight.json`` when the tournament stamp is started (including
 stale). Otherwise the UI shows idle + newest eval — or stuck/overdue copy
 when the stamp is stale or evaluations have gone quiet with leftover work.
+
+``lists=False`` / ``?compact=1`` keeps counts, farm, and stuck copy but omits
+tested / queued / extended_names / in-flight name lists so UI polls (Champions
+teaser, farm heartbeat) do not ship the full unique-tested log.
 """
 from __future__ import annotations
 
@@ -30,7 +34,13 @@ from hedge_fund.trading.universe import generate_universe, untested_candidates
 from hedge_fund.web.status import _iso, _pipeline_block
 
 
+def compact_query(value: str | None) -> bool:
+    """True for ``?compact=1`` / true / yes — UI polls that must not ship lists."""
+    return str(value or "").strip().lower() in ("1", "true", "yes")
+
+
 def _eval_row(row: dict) -> dict:
+    """Slim latest-eval row for the Discovery table — no windows / train extras."""
     reasons = row.get("fail_reasons")
     if not isinstance(reasons, list):
         reasons = []
@@ -41,13 +51,7 @@ def _eval_row(row: dict) -> dict:
         "sharpe": row.get("sharpe"),
         "trades": row.get("trades"),
         "test_pnl": row.get("test_pnl"),
-        "train_pnl": row.get("train_pnl"),
-        "win_rate_pct": row.get("win_rate_pct"),
         "fail_reasons": reasons,
-        "timeframe": row.get("timeframe"),
-        "risk_policy": row.get("risk_policy"),
-        "bh_oos_pnl": row.get("bh_oos_pnl"),
-        "sma_stack_oos_pnl": row.get("sma_stack_oos_pnl"),
         "all_windows_nonneg": row.get("all_windows_nonneg"),
     }
 
@@ -60,7 +64,7 @@ def _sort_tested_newest_first(rows: list[dict]) -> list[dict]:
     return sorted(rows, key=key, reverse=True)
 
 
-def build_discovery_summary() -> dict:
+def build_discovery_summary(*, lists: bool = True) -> dict:
     now = datetime.now(timezone.utc)
     pipeline = _pipeline_block(now)
     stamp_in_progress = bool(pipeline.get("stamp_says_in_progress"))
@@ -77,10 +81,13 @@ def build_discovery_summary() -> dict:
     extended = load_extended_names()
     universe = sorted(set(universe_static) | set(extended))
     log = load_discovery_log()
-    tested = _sort_tested_newest_first([_eval_row(r) for r in latest_eval_per_strategy(log)])
-    tested_names = {r["strategy"] for r in tested if r.get("strategy")}
-    tested_pass = sum(1 for r in tested if r.get("qualified"))
-    tested_fail = len(tested) - tested_pass
+    latest = latest_eval_per_strategy(log)
+    tested_names = {r.get("strategy") for r in latest if r.get("strategy")}
+    tested_pass = sum(1 for r in latest if r.get("qualified"))
+    tested_fail = len(latest) - tested_pass
+    tested = (
+        _sort_tested_newest_first([_eval_row(r) for r in latest]) if lists else []
+    )
 
     leftovers = untested_candidates(blocked, universe)
     failed_names = failed_discovery_names(log)
@@ -88,7 +95,7 @@ def build_discovery_summary() -> dict:
     rejected_parked = [n for n in leftovers if n in failed_names]
     eligible = prioritize_leftovers(leftovers, log, now=now)
 
-    newest = newest_eval(log) or newest_eval(tested)
+    newest = newest_eval(log) or (newest_eval(tested) if tested else None)
     last_tested_at = newest.get("tested_at") if newest else None
     last_strategy = newest.get("strategy") if newest else None
     last_ts = parse_tested_at(last_tested_at if isinstance(last_tested_at, str) else None)
@@ -198,9 +205,16 @@ def build_discovery_summary() -> dict:
         now=now,
     )
 
+    ship_names = flight_names if lists else []
+    ship_remaining = remaining if lists else []
+    ship_completed = completed if lists else []
+    ship_queued = queued if lists else []
+    ship_extended = list(extended) if lists else []
+
     return {
         "paper_only": True,
         "as_of": _iso(now),
+        "compact": not lists,
         "certainty": "stamp" if tournament_now else ("last_known" if log else "no_signal"),
         "running": False,
         "stamp_says_in_progress": tournament_now,
@@ -211,29 +225,29 @@ def build_discovery_summary() -> dict:
         "discovery_on_cycle": on_cycle,
         "discovery_farm": "cycle_sidecar" if on_cycle else "windows_worker",
         "farm": farm,
-        "extended_names": list(extended),
+        "extended_names": ship_extended,
         "in_flight": {
             "active": bool(tournament_now or (stamp_stale and tournament_stamp) or worker_flight),
             "running": False,
             "stale": bool(stamp_stale and tournament_stamp),
             "source": (flight or {}).get("source") if flight else None,
-            "names": flight_names,
+            "names": ship_names,
             "current": current,
-            "remaining": remaining,
-            "completed": completed,
+            "remaining": ship_remaining,
+            "completed": ship_completed,
             "batch_size": batch_size,
             "started_at": flight_started,
             "stamp_started_at": pipeline.get("started_at") if (tournament_now or tournament_stamp) else None,
             "note": flight_note,
         },
-        "queued": queued,
-        "untested": queued,
+        "queued": ship_queued,
+        "untested": ship_queued,
         "counts": {
             "universe": len(universe),
             "tested_pass": tested_pass,
             "tested_fail": tested_fail,
-            "tested": len(tested),
-            "unique_tested": len(tested),
+            "tested": len(latest),
+            "unique_tested": len(latest),
             "log_rows": len(log),
             "untested": len(queued),
             "leftovers": len(leftovers),

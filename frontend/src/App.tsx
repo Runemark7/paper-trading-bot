@@ -7,6 +7,7 @@ import Discovery from "./pages/Discovery";
 import Learning from "./pages/Learning";
 import ChartPage from "./pages/Chart";
 import StatusBar from "./status/StatusBar";
+import PageErrorBoundary from "./components/PageErrorBoundary";
 
 const nav = [
   { to: "/", label: "Overview" },
@@ -59,16 +60,32 @@ export default function App() {
       </header>
       <StatusBar />
       <main className="max-w-7xl mx-auto min-w-0 px-4 py-4 md:px-6 md:py-6 pb-24 md:pb-6">
-        <Routes>
-          <Route path="/" element={<Overview />} />
-          <Route path="/chart" element={<ChartPage />} />
-          <Route path="/positions" element={<Positions />} />
-          <Route path="/champions" element={<Champions />} />
-          <Route path="/champions/*" element={<ChampionDetail />} />
-          <Route path="/discovery" element={<Discovery />} />
-          <Route path="/learning" element={<Learning />} />
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
+        <PageErrorBoundary label="This page">
+          <Routes>
+            <Route path="/" element={<Overview />} />
+            <Route path="/chart" element={<ChartPage />} />
+            <Route path="/positions" element={<Positions />} />
+            <Route
+              path="/champions"
+              element={
+                <PageErrorBoundary label="Champions">
+                  <Champions />
+                </PageErrorBoundary>
+              }
+            />
+            <Route
+              path="/champions/*"
+              element={
+                <PageErrorBoundary label="Champion detail">
+                  <ChampionDetail />
+                </PageErrorBoundary>
+              }
+            />
+            <Route path="/discovery" element={<Discovery />} />
+            <Route path="/learning" element={<Learning />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </PageErrorBoundary>
       </main>
       <nav
         className="md:hidden fixed bottom-0 inset-x-0 z-40 border-t border-white/10 bg-[#0d1430]/95 pb-[env(safe-area-inset-bottom)]"

@@ -183,7 +183,7 @@ type SortScalar = number | string | null;
 function sortValue(row: ChampionListRow, key: ChampionSortKey): SortScalar {
   switch (key) {
     case "name":
-      return row.name.toLowerCase();
+      return (row.name ?? "").toLowerCase();
     case "since": {
       if (!row.champion_since) return null;
       const t = Date.parse(row.champion_since);

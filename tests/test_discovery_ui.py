@@ -102,6 +102,13 @@ class DiscoveryPageContractTests(unittest.TestCase):
         self.assertIn("Open Discovery", DISCOVERY_TSX)
         self.assertIn("farmStatusLabel", DISCOVERY_TSX)
         self.assertIn("Farm:", DISCOVERY_TSX)
+        self.assertIn('queryKey: ["discovery-summary", "compact"]', DISCOVERY_TSX)
+        self.assertIn("fetchDiscoverySummary({ compact: true })", DISCOVERY_TSX)
+        self.assertIn("?compact=1", CLIENT_TS)
+        self.assertIn("opts?.compact", CLIENT_TS)
+        self.assertIn("PageErrorBoundary", APP)
+        self.assertIn('label="Champions"', APP)
+        self.assertIn('label="Champion detail"', APP)
 
     def test_farm_control_start_stop_and_unseen_copy(self):
         self.assertIn("Stop discovery", FARM_TSX)

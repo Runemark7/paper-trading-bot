@@ -5,10 +5,13 @@ from contextlib import contextmanager
 import json
 import os
 import tempfile
+import threading
 import unittest
 from datetime import datetime, timedelta, timezone
+from http.server import ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
+from urllib.request import urlopen
 
 from hedge_fund.trading.constants import (
     DISCOVER_CYCLE_MAX_NAMES,
@@ -164,6 +167,44 @@ class DiscoverySummaryBucketTests(unittest.TestCase):
         self.assertTrue(s["farm"]["enabled"])
         self.assertEqual(s["farm"]["status"], "worker_unseen")
         self.assertIn("Worker not seen", s["farm"]["note"])
+        self.assertFalse(s.get("compact"))
+        self.assertNotIn("train_pnl", s["tested"][0])
+        self.assertNotIn("bh_oos_pnl", s["tested"][0])
+
+    def test_compact_omits_tested_queued_and_extended_lists(self):
+        universe = ["keep_me", "tested_pass"]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "champions.json").write_text(json.dumps({"champions": [], "synced_until": ""}))
+            (root / "discovery_extended.json").write_text(json.dumps({
+                "names": ["keep_me", "another_long_atom_stack"],
+            }))
+            recent = (datetime.now(timezone.utc) - timedelta(minutes=15)).isoformat()
+            (root / "discovery_log.json").write_text(json.dumps([
+                _eval("tested_pass", qualified=True, tested_at=recent),
+            ]))
+            with patch.dict(os.environ, {"PAPER_STATE": str(root)}):
+                with patch("hedge_fund.web.discovery.generate_universe", return_value=universe):
+                    with patch("hedge_fund.trading.universe.generate_universe", return_value=universe):
+                        full = build_discovery_summary()
+                        compact = build_discovery_summary(lists=False)
+        self.assertTrue(full["tested"])
+        self.assertTrue(full["queued"] or full["extended_names"])
+        self.assertTrue(compact["compact"])
+        self.assertEqual(compact["tested"], [])
+        self.assertEqual(compact["queued"], [])
+        self.assertEqual(compact["untested"], [])
+        self.assertEqual(compact["extended_names"], [])
+        self.assertEqual(compact["in_flight"]["names"], [])
+        self.assertEqual(compact["counts"]["unique_tested"], full["counts"]["unique_tested"])
+        self.assertEqual(compact["counts"]["tested_pass"], 1)
+        self.assertEqual(compact["counts"]["untested"], full["counts"]["untested"])
+        self.assertEqual(compact["last_strategy"], full["last_strategy"])
+        self.assertIn("farm", compact)
+        self.assertLess(
+            len(json.dumps(compact)),
+            len(json.dumps(full)),
+        )
 
     def test_last_tested_at_is_newest_not_alpha_min(self):
         universe = ["bb_lower_20_2", "wt_cross_up_os&sma_stack_20_50_100"]
@@ -490,10 +531,60 @@ class DiscoveryRouteTests(unittest.TestCase):
         src = (Path(__file__).resolve().parents[1] / "hedge_fund" / "web" / "server.py").read_text()
         self.assertIn('route == "/api/discovery/summary"', src)
         self.assertIn("build_discovery_summary", src)
+        self.assertIn("compact_query", src)
         self.assertIn('route == "/api/discovery/farm"', src)
         self.assertIn("set_farm_enabled", src)
         self.assertIn("X-Paper-Discovery-Token", src)
         self.assertIn("_discovery_ingest_authorized", src)
+
+    def test_compact_query_flag(self):
+        from hedge_fund.web.discovery import compact_query
+
+        self.assertTrue(compact_query("1"))
+        self.assertTrue(compact_query("TRUE"))
+        self.assertTrue(compact_query("yes"))
+        self.assertFalse(compact_query(""))
+        self.assertFalse(compact_query("0"))
+        self.assertFalse(compact_query(None))
+
+    def test_http_compact_omits_lists(self):
+        from hedge_fund.web.server import Handler
+
+        universe = ["keep_me", "tested_pass"]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "champions.json").write_text(json.dumps({"champions": [], "synced_until": ""}))
+            recent = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+            (root / "discovery_log.json").write_text(json.dumps([
+                _eval("tested_pass", qualified=True, tested_at=recent),
+            ]))
+            httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+            port = httpd.server_address[1]
+            thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+            thread.start()
+            try:
+                with patch.dict(os.environ, {"PAPER_STATE": str(root)}):
+                    with patch("hedge_fund.web.discovery.generate_universe", return_value=universe):
+                        with patch("hedge_fund.trading.universe.generate_universe", return_value=universe):
+                            full = json.loads(urlopen(
+                                f"http://127.0.0.1:{port}/api/discovery/summary",
+                                timeout=5,
+                            ).read().decode())
+                            compact = json.loads(urlopen(
+                                f"http://127.0.0.1:{port}/api/discovery/summary?compact=1",
+                                timeout=5,
+                            ).read().decode())
+            finally:
+                httpd.shutdown()
+                thread.join(timeout=3)
+                httpd.server_close()
+        self.assertTrue(full["tested"])
+        self.assertFalse(full.get("compact"))
+        self.assertTrue(compact["compact"])
+        self.assertEqual(compact["tested"], [])
+        self.assertEqual(compact["queued"], [])
+        self.assertEqual(compact["counts"]["unique_tested"], full["counts"]["unique_tested"])
+        self.assertIn("farm", compact)
 
 
 if __name__ == "__main__":

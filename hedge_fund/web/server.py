@@ -9,6 +9,7 @@ A small, dependency-free HTTP server (stdlib only) that exposes:
   GET /api/trades       -> JSON: recent closed trades
   GET /api/status       -> running-now vs in-progress (last-known stamps)
   GET /api/discovery/summary -> tested / in-flight / leftover-untested; farm Start/Stop status
+                                (?compact=1 omits those lists; counts/farm/stuck stay)
   POST /api/discovery/ingest -> Windows worker: append evals + admit / force_admit (shared secret)
   POST /api/discovery/farm -> Start/Stop Windows farm (same ingest token)
   POST /api/champions/retain -> keep-list filter of champions.json (same ingest token)
@@ -371,9 +372,9 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"error": str(exc)}, 500)
         elif route == "/api/discovery/summary":
             try:
-                from hedge_fund.web.discovery import build_discovery_summary
+                from hedge_fund.web.discovery import build_discovery_summary, compact_query
 
-                self._send_json(build_discovery_summary())
+                self._send_json(build_discovery_summary(lists=not compact_query(qs.get("compact"))))
             except Exception as exc:
                 self._send_json({"error": str(exc)}, 500)
         elif route == "/api/discovery":

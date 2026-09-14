@@ -48,7 +48,7 @@ function ClosedTradeHistory({ trades }: { trades: TradeRow[] }) {
             className="rounded-lg border border-white/10 p-3 space-y-2 min-w-0 overflow-hidden"
           >
             <div className="flex items-baseline justify-between gap-2 min-w-0">
-              <span className="font-medium min-w-0 truncate">{t.symbol}</span>
+              <span className="font-medium min-w-0 truncate">{t.symbol ?? "—"}</span>
               <span className={`shrink-0 ${(t.pnl ?? 0) >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
                 {t.pnl != null ? fmt(t.pnl) : fmtPct(t.pnl_pct)}
               </span>
@@ -87,7 +87,7 @@ function ClosedTradeHistory({ trades }: { trades: TradeRow[] }) {
           <tbody>
             {trades.map((t) => (
               <tr key={`${t.account ?? ""}-${t.id}`} className="border-t border-white/5">
-                <td className="py-1 font-medium">{t.symbol}</td>
+                <td className="py-1 font-medium">{t.symbol ?? "—"}</td>
                 <td className="text-white/60">{t.entry_ts?.replace("T", " ").slice(0, 16)}</td>
                 <td className="text-right font-mono">{fmt(t.entry_price)}</td>
                 <td className="text-right font-mono">{t.exit_price != null ? fmt(t.exit_price) : "—"}</td>
@@ -120,7 +120,9 @@ export default function ChampionDetail() {
     enabled: Boolean(name),
   });
 
-  const champs = qChamps.data?.active_champions ?? [];
+  const champs = (qChamps.data?.active_champions ?? []).filter(
+    (c): c is Champion => typeof c.name === "string" && c.name.length > 0,
+  );
   const evalLimit = qChamps.data?.evaluation_limit ?? 80;
   const champ = findChampion(champs, name);
   const liveReady = qLive.data !== undefined || qLive.isError;
@@ -180,7 +182,7 @@ export default function ChampionDetail() {
                     {champ.closed} / {evalLimit}
                   </Field>
                   <Field label="Wins">{champ.wins}</Field>
-                  <Field label="Paper P&L" className={champ.pnl >= 0 ? "text-emerald-400" : "text-rose-400"}>
+                  <Field label="Paper P&L" className={(champ.pnl ?? 0) >= 0 ? "text-emerald-400" : "text-rose-400"}>
                     <span className="font-medium">{fmt(champ.pnl)}</span>
                   </Field>
                   <Field label="Champion since">{fmtChampionSince(champ.champion_since)}</Field>

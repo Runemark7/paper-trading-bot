@@ -55,8 +55,8 @@ function TestedRowFields({ d }: { d: DiscoveryEvaluation }) {
 /** Short Champions-page pointer — full buckets live on /discovery. */
 export function DiscoveryTeaser() {
   const q = useQuery({
-    queryKey: ["discovery-summary"],
-    queryFn: fetchDiscoverySummary,
+    queryKey: ["discovery-summary", "compact"],
+    queryFn: () => fetchDiscoverySummary({ compact: true }),
     refetchInterval: 15_000,
   });
   const counts = q.data?.counts;
@@ -119,6 +119,7 @@ export default function DiscoveryBuckets() {
   const [filters, setFilters] = useState<TestedColumnFilters>(EMPTY_TESTED_FILTERS);
   const [sort, setSort] = useState<TestedSort>(DEFAULT_TESTED_SORT);
   const [shown, setShown] = useState(PAGE);
+  const [shownQueued, setShownQueued] = useState(PAGE);
 
   const data = q.data;
   const tested = data?.tested ?? [];
@@ -231,9 +232,9 @@ export default function DiscoveryBuckets() {
                 {flight.remaining?.length ? ` · ${flight.remaining.length} remaining this cycle` : ""}
               </p>
             ) : null}
-            {flight.names.length ? (
+            {(flight.names ?? []).length ? (
               <div className="flex flex-wrap gap-1.5 min-w-0">
-                {flight.names.map((name) => (
+                {(flight.names ?? []).map((name) => (
                   <NameChip key={name} name={name} className="bg-amber-500/15 text-amber-100" />
                 ))}
               </div>
@@ -413,9 +414,9 @@ export default function DiscoveryBuckets() {
         ) : (
           <>
             <PhoneCards>
-              {visible.map((d) => (
-                <li key={`${d.strategy}-${d.tested_at}`} className="rounded-lg border border-white/10 p-3 space-y-2 min-w-0 overflow-hidden">
-                  <MonoName className="block w-full text-xs font-medium text-white">{d.strategy}</MonoName>
+              {visible.map((d, idx) => (
+                <li key={`${d.strategy ?? "row"}-${d.tested_at ?? idx}`} className="rounded-lg border border-white/10 p-3 space-y-2 min-w-0 overflow-hidden">
+                  <MonoName className="block w-full text-xs font-medium text-white">{d.strategy ?? "—"}</MonoName>
                   <Badge tone={testedTone(d.qualified)}>{d.qualified ? "QUALIFIED" : "REJECTED"}</Badge>
                   <TestedRowFields d={d} />
                   {!d.qualified && d.fail_reasons?.length ? (
@@ -441,10 +442,10 @@ export default function DiscoveryBuckets() {
                   </tr>
                 </thead>
                 <tbody>
-                  {visible.map((d) => (
-                    <tr key={`${d.strategy}-${d.tested_at}`} className="border-t border-white/5">
-                      <td className="py-1" title={d.strategy}>
-                        <MonoName className="font-medium text-white">{d.strategy}</MonoName>
+                  {visible.map((d, idx) => (
+                    <tr key={`${d.strategy ?? "row"}-${d.tested_at ?? idx}`} className="border-t border-white/5">
+                      <td className="py-1" title={d.strategy ?? undefined}>
+                        <MonoName className="font-medium text-white">{d.strategy ?? "—"}</MonoName>
                       </td>
                       <td className="text-white/50">{fmtWhen(d.tested_at)}</td>
                       <td>
@@ -498,9 +499,18 @@ export default function DiscoveryBuckets() {
           </Empty>
         ) : (
           <div className="flex flex-wrap gap-1.5 min-w-0">
-            {queued.map((name) => (
+            {queued.slice(0, shownQueued).map((name) => (
               <NameChip key={name} name={name} className="bg-white/10 text-white/80" />
             ))}
+            {queued.length > shownQueued ? (
+              <button
+                type="button"
+                onClick={() => setShownQueued((n) => n + PAGE)}
+                className="min-h-11 px-3 py-2 text-xs bg-white/10 hover:bg-white/20 rounded text-white"
+              >
+                Show more ({queued.length - shownQueued} left)
+              </button>
+            ) : null}
           </div>
         )}
       </section>
