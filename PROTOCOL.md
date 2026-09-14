@@ -115,6 +115,7 @@ over a meaningful sample, AND calibration is demonstrated independently of P&L.
 | 2026-09-13 | Same-date later: refill mint no longer emits structure lookbacks `N>96` (`STRUCTURE_NS` == `STRUCTURE_NS_THROUGH_96`). Aligns with the farm ops cap. Leftover already-tested 108–192 names stay parked. Worker fail-park remains the backstop. Dip/mom/HTF lookbacks that are not structure atoms stay. Fail-once / OOS gates unchanged. Paper only. |
 | 2026-09-14 | Same-date amendment: refill mint expands around the winning HTF×mom island. Extra distinct `h1`/`h4` EMA/SMA periods and unused mom lookbacks/% (`MOM_FILTERS_HTF_EXPAND`) stay distinct under `near_duplicate_key`. Selective 3-atoms `regime&mom&mild_dip` and `regime&mom&sma_abv_50` / `ema_abv_20` emit first (not HTF×mom×structure). Farm was eligible=0 after ~5037 unique fails. Fail-once stays. `STRUCTURE_NS` still ≤96. No named candlesticks. Static list unchanged. Paper only; OOS gates unchanged. |
 | 2026-09-14 | Same-date later: `GET /api/discovery/summary?compact=1` omits tested / queued / extended_names / in-flight name lists so Champions teaser and farm polls do not ship the unique-tested log (grew with mint #59/#60). Full lists stay on `/discovery`. UI error boundary on Champions/detail. Paper only; OOS gates unchanged. |
+| 2026-09-14 | Same-date later: refill mint un-dries again. Unused distinct HTF periods / mom lookbacks/% (`REGIME_ATOMS_FRESH` / `MOM_FILTERS_HTF_FRESH`) and winner-shaped 3–5 stacks (`sma_abv_30` / `ema_abv_30` continuation × rsi-or-mild-dip, `rsi_14_>55`) emit **first**. Farm was eligible=0 after ~7200 unique / last eval ~12:49Z; depth-7 `near_swing` mostly 0-trade fails. Fail-once stays. `STRUCTURE_NS` still ≤96. No named candlesticks. Static list unchanged. Paper only; OOS gates unchanged. |
 
 ### Amendment 2026-08-30 — what actually runs
 
@@ -901,5 +902,34 @@ Spine is always REGIME+MOM when depth≥2. Stream order: winner 3-atoms first, t
 **Superseded on this date** (prior text kept above for history):
 
 - Same-date "combine winning HTF×mom with mild-dip / continuation 3-atoms" insofar as `name_is_parseable` froze at 3 atoms and `_regime_ands` stopped at 3-atom HTF×mom×dip / continuation. Winner 3-atoms first, HTF×mom×expensive structure refused, fail-once, farm ingest, cycle budget, OOS **thresholds**, `QUAL_N_WINDOWS`, `STRUCTURE_NS` ≤96, the shipped v1 HTF parser, and the static 40–120 compiled-list band are not superseded.
+
+### Amendment 2026-09-14 — un-dry mint: unused HTF/mom + winner-shaped 3–5 first
+
+This amendment does not rewrite original §§ 1–8 or prior amendments. Qual/live remain 5m, risk policy remains `rm_v1`. OOS **thresholds** are unchanged: `MIN_BACKTEST_TRADES` = 30, `MIN_BACKTEST_SHARPE` = 0.30, must beat buy-and-hold, must beat `sma_stack`, all-windows non-negative is diagnostic only, fail-once never-retest stays. `QUAL_N_WINDOWS` = 8, `DISCOVERY_LOG_CAP` = 10000, `DISCOVERY_REFILL_BATCH_SIZE` = 16 stay. Discovery walk-forwards stay on the Windows farm (`scripts/discovery_worker.py` → `/api/discovery/ingest`); cluster `live_cycle` keeps discovery off (`DISCOVERY_ON_CYCLE=0`). **Still paper.** `GRADUATED_PAPER` meaning is unchanged. Do not cull existing champions. Do not retest parked fails.
+
+**Why.** Prod 2026-09-14 later: farm idle again (eligible=0, worker "no never-tested names (recipe dry or all parked)", last eval ~12:49Z) after ~7200 unique tested. Winning island (`tested_pass` ≈ 75) is HTF×`mom_18b_gt2pc` × optional continuation (`sma`/`ema_abv`) × optional `rsi_14_>50`, depths 2–5. Depth-7 stacks with `near_swing` are mostly 0-trade fails — do not pour more of those. Bottleneck is still mint/search quality under the frozen gate — not a request to lower bars.
+
+**What was added** (`hedge_fund.trading.refill.iter_recipe_names` / `_regime_fresh_winner_shaped` / `_regime_fresh_pairs`). Parser / `_ALLOWED_ATOM_RES` already accept the tokens. No new atom type. `STRUCTURE_NS` stays `{6…96}`. `RECIPE_MAX_ATOMS` stays 7.
+
+Fresh families emit **first** (never-tested keys immediately on dry refill):
+
+- Unused distinct HTF periods (`REGIME_ATOMS_FRESH`): `h1_ema_abv_{60,70}`, `h1_sma_abv_{12,50,60}`, `h4_ema_abv_{15,40,60}`, `h4_sma_abv_{12,15,36,40}`. Skip `h1_ema_abv_8` (8→10, same as 12) and `h4_ema_abv_50` / `h4_sma_abv_48` (48→50)
+- Unused mom lookbacks/% (`MOM_FILTERS_HTF_FRESH`): `mom_78b_gt2pc` / `mom_90b_gt2pc` / `mom_96b_gt2pc` / `mom_48b_gt4pc` / `mom_54b_gt4pc` / `mom_72b_gt4pc` / `mom_60b_gt6pc` / `mom_18b_gt8pc`. Do not emit `84b_gt2` (grind `84b_gt1`→gt2) or 16b/20b (round onto 18)
+- Winner-shaped 3–5 on `FRESH_STACK_REGIME` (admit island + extra h1): REGIME+MOM spine × new continuation `sma_abv_30` / `ema_abv_30` × (`rsi_14_>50` OR mild dip). Also `rsi_14_>55` 3-atoms and `rsi_14_>50` on extra regimes / `MOM_FILTERS_HTF_DENSE`. Prefer depths 3–5 that already admitted. No dual-continuation required. No `near_swing` / `don_hi` on this family
+
+Then the drained prefix: winner 3-atoms (`regime&mom&mild_dip` / old continuation), 4–7 role-bucket stacks (depth-7 `near_swing_hi` N≤48 last), then HTF×mom / HTF×dip 2-atoms on `REGIME_ATOMS_PRIOR`. Target +500 to +2000 new unique `near_duplicate_key`s, not 100k.
+
+**Skipped.** Exact names and `near_duplicate_key` collisions against champions, graduated, the static universe, already-emitted extended names, and any `discovery_log.json` row (pass or fail). No HTF×mom×expensive structure (`don_hi` / `near_swing_lo` / N>96). No H&S / flags / triangles / engulfing / hammer / doji / morning_star / evening_star / candlestick encyclopedia / chart_patterns zoo; no Market Cipher scrape; no new `wt_*` WaveTrend spam; no MFI; no `dbl_top` longs; no `daily()`/`h1()`/`m5()` wrappers.
+
+**Topology.** Still mint → farm → gate. [docs/WORKFLOW.md](docs/WORKFLOW.md) §3 records fresh 3–5 / unused HTF-mom **first**, then the #60 4–7 stacks.
+
+**What did not change.** Sharpe 0.30, 30 OOS trades, beat B&H, beat `sma_stack`, 5m, `rm_v1`, all-windows diagnostic only, fail-once, `QUAL_N_WINDOWS` = 8. `STRUCTURE_NS` cap at 96.
+
+**How to evaluate after merge.** Natural `tested_pass` / unique tested, plus the fail-reason mix (beat-B&H, Sharpe, trades, beat `sma_stack`). Do not change gate constants to move those numbers.
+
+**Superseded on this date** (prior text kept above for history):
+
+- Same-date "densify 4–7 atom admit-island stacks" insofar as `_regime_ands` froze with winner 3-atoms first and the HTF/mom grids omitted unused 60/70/sma-12/gt8 canons. Depth-7 cheap `near_swing_hi` N≤48 may remain last in that family; do not expand it. Fail-once, farm ingest, cycle budget, OOS **thresholds**, `QUAL_N_WINDOWS`, `STRUCTURE_NS` ≤96, the shipped v1 HTF parser, and the static 40–120 compiled-list band are not superseded.
+
 
 

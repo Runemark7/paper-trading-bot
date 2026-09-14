@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { fetchDiscoverySummary, setDiscoveryFarm } from "../api/client";
-import type { DiscoveryFarm } from "../api/types";
+import type { DiscoveryFarm, DiscoverySummary } from "../api/types";
 import { Badge, Card } from "../components/ui";
 import { fmtWhen } from "./format";
 
@@ -57,9 +57,9 @@ function farmTone(status?: string): "pos" | "neg" | "warn" | "wait" | "neutral" 
 /** Prominent Start/Stop for the Windows discovery farm. Token stays in this tab. */
 export default function FarmControl() {
   const queryClient = useQueryClient();
-  const q = useQuery({
-    queryKey: ["discovery-summary"],
-    queryFn: fetchDiscoverySummary,
+  const q = useQuery<DiscoverySummary, Error>({
+    queryKey: ["discovery-summary", "compact"],
+    queryFn: () => fetchDiscoverySummary({ compact: true }),
     refetchInterval: 15_000,
   });
   const [savedToken, setSavedToken] = useState(loadToken);

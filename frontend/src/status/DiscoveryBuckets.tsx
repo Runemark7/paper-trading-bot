@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { fetchDiscoverySummary } from "../api/client";
-import type { DiscoveryEvaluation } from "../api/types";
+import type { DiscoveryEvaluation, DiscoverySummary } from "../api/types";
 import { FilterInput, SortTh } from "../components/tableControls";
 import { Badge, Card, Empty, Field, FieldGrid, MonoName, NameChip, PhoneCards, DesktopTable, fmt } from "../components/ui";
 import { farmStatusLabel } from "./FarmControl";
@@ -54,7 +54,7 @@ function TestedRowFields({ d }: { d: DiscoveryEvaluation }) {
 
 /** Short Champions-page pointer — full buckets live on /discovery. */
 export function DiscoveryTeaser() {
-  const q = useQuery({
+  const q = useQuery<DiscoverySummary, Error>({
     queryKey: ["discovery-summary", "compact"],
     queryFn: () => fetchDiscoverySummary({ compact: true }),
     refetchInterval: 15_000,
@@ -111,9 +111,9 @@ export function DiscoveryTeaser() {
 }
 
 export default function DiscoveryBuckets() {
-  const q = useQuery({
+  const q = useQuery<DiscoverySummary, Error>({
     queryKey: ["discovery-summary"],
-    queryFn: fetchDiscoverySummary,
+    queryFn: () => fetchDiscoverySummary(),
     refetchInterval: 15_000,
   });
   const [filters, setFilters] = useState<TestedColumnFilters>(EMPTY_TESTED_FILTERS);

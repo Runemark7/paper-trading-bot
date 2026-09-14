@@ -45,8 +45,11 @@ combining winning HTF×mom with mild dip / continuation 3-atoms
 grids. Same-date later: densify 4–7 atom AND stacks on that
 admit island (role buckets, not a cartesian) so dry refill can
 mint Alexander-style multi-filter names. Cheap ``near_swing_hi``
-N≤48 only at depth 7; no HTF×mom×expensive structure. Still no
-named candlesticks. OOS gates unchanged.
+N≤48 only at depth 7; no HTF×mom×expensive structure. Same-date later:
+un-dry again — unused distinct HTF periods / mom lookbacks/% plus
+winner-shaped 3–5 stacks (REGIME+MOM × new continuation × rsi-or-mild-dip)
+emit **first** so dry refill does not stall on already-parked depth-7
+``near_swing`` names. Still no named candlesticks. OOS gates unchanged.
 """
 from __future__ import annotations
 
@@ -133,7 +136,10 @@ GRIND_FILTERS: tuple[str, ...] = CONTINUATION_TRENDS
 # vs the shipped three (24→25, sma_50, h1/24→25), except 18→20
 # (same canon as 20; still minted). Skip 10 (collides with 12→10)
 # and ema_50 (collides with ema_48→50) on the same tf+kind.
-REGIME_ATOMS: tuple[str, ...] = (
+# Frozen 2026-09-14 morning + #59/#60 neighbors (25). Leftover 2-atom
+# pair generator stays on this set so new HTF 2-atoms are not mixed
+# into the already-drained prefix.
+REGIME_ATOMS_PRIOR: tuple[str, ...] = (
     "h4_ema_abv_24",
     "h4_sma_abv_50",
     "h1_ema_abv_24",
@@ -148,10 +154,6 @@ REGIME_ATOMS: tuple[str, ...] = (
     "h4_ema_abv_12",
     "h4_ema_abv_48",
     "h4_sma_abv_24",
-    # 2026-09-14: unused canons around the admit island. Verified
-    # against _round_period: 12→10, 40→40, 50→50, 15→15, 36→35,
-    # 20→20, 30→30. Do not mint h1_sma_abv_18 (18→20) or
-    # h4_ema_abv_50 (48→50) or h4_sma_abv_48 (50).
     "h1_ema_abv_12",
     "h1_ema_abv_40",
     "h1_ema_abv_50",
@@ -164,6 +166,25 @@ REGIME_ATOMS: tuple[str, ...] = (
     "h4_sma_abv_20",
     "h4_sma_abv_30",
 )
+# 2026-09-14 later: unused canons. Verified against _round_period:
+# 60→60, 70→70, 12→10 (h1/h4 sma; h1 ema 12 already minted),
+# 15→15, 36→35, 40→40. Do not mint h1_ema_abv_8 (8→10, same as 12)
+# or h4_ema_abv_50 / h4_sma_abv_48 (48→50).
+REGIME_ATOMS_FRESH: tuple[str, ...] = (
+    "h1_ema_abv_60",
+    "h1_ema_abv_70",
+    "h1_sma_abv_12",
+    "h1_sma_abv_50",
+    "h1_sma_abv_60",
+    "h4_ema_abv_15",
+    "h4_ema_abv_40",
+    "h4_ema_abv_60",
+    "h4_sma_abv_12",
+    "h4_sma_abv_15",
+    "h4_sma_abv_36",
+    "h4_sma_abv_40",
+)
+REGIME_ATOMS: tuple[str, ...] = REGIME_ATOMS_PRIOR + REGIME_ATOMS_FRESH
 # Winning HTF island + nearby distinct (or exact-period 18) for
 # selective 3-atoms. Not the full REGIME_ATOMS cartesian — h4
 # leftovers stay 2-atom. Combine what already works.
@@ -216,6 +237,21 @@ DEEP_STACK_RSI: str = "rsi_14_>50"
 DEEP_STACK_STRUCTURE_NS: tuple[int, ...] = (12, 24, 48)
 DEEP_STACK_STRUCTURE_TAGS: tuple[str, ...] = ("near_swing_hi",)
 RECIPE_MAX_ATOMS: int = 7
+# Winner-shaped 3–5 atom densify (2026-09-14 later). Unused 5m
+# continuation (30→30, distinct from 20/50) and rsi_14_>55 (55→55,
+# distinct from >50). Extra h1 periods join admit for these stacks
+# only — h4 leftovers stay 2-atom. No near_swing / don_hi here.
+FRESH_CONT_ATOMS: tuple[str, ...] = (
+    "sma_abv_30",
+    "ema_abv_30",
+)
+FRESH_RSI: str = "rsi_14_>55"
+FRESH_STACK_REGIME: tuple[str, ...] = REGIME_ADMIT_ATOMS + (
+    "h1_sma_abv_12",
+    "h1_sma_abv_50",
+    "h1_sma_abv_60",
+    "h1_ema_abv_60",
+)
 # Short-continuation mom around the first admit (12–24b / gt2–gt4).
 # near_duplicate_key: lb rounds to 6, thr to even. gt3pc→gt4pc so
 # mom_18b_gt3pc is the same canon as gt4 — emit the canon only.
@@ -245,6 +281,21 @@ MOM_FILTERS_HTF_EXPAND: tuple[str, ...] = (
     "mom_24b_gt6pc",
     "mom_36b_gt6pc",
 )
+# Unused lb/% vs MOM_FILTERS + DENSE + EXPAND. 78/90/96 are new lbs
+# (round-to-6 identity). gt4 at 48/54/72 is distinct from existing
+# 48b_gt2 / 48b_gt6 / 54b_gt2 / 72b_gt2. gt6 at 60 is distinct from
+# grind 60b_gt1→gt2. gt8 at 18 is distinct from 18b gt2/gt4/gt6.
+# Do not emit 84b_gt2 (grind 84b_gt1→gt2) or 16b/20b (round onto 18).
+MOM_FILTERS_HTF_FRESH: tuple[str, ...] = (
+    "mom_78b_gt2pc",
+    "mom_90b_gt2pc",
+    "mom_96b_gt2pc",
+    "mom_48b_gt4pc",
+    "mom_54b_gt4pc",
+    "mom_72b_gt4pc",
+    "mom_60b_gt6pc",
+    "mom_18b_gt8pc",
+)
 # Regime-path mom order: winning-neighborhood first so dry refill
 # emits HTF×mom_18b_gt2pc before leftover mom / dense / grind.
 # Public MOM_FILTERS (leftover structure families) stay as-is.
@@ -254,12 +305,23 @@ REGIME_MOM_PRIORITY: tuple[str, ...] = (
     "mom_24b_gt2pc",
 )
 DEEP_STACK_MOM: tuple[str, ...] = REGIME_MOM_PRIORITY
+REGIME_MOM_BASES_PRIOR: tuple[str, ...] = REGIME_MOM_PRIORITY + tuple(
+    m
+    for m in (
+        MOM_FILTERS
+        + MOM_FILTERS_HTF_DENSE
+        + MOM_FILTERS_HTF_EXPAND
+        + GRIND_FILTERS
+    )
+    if m not in REGIME_MOM_PRIORITY
+)
 REGIME_MOM_BASES: tuple[str, ...] = REGIME_MOM_PRIORITY + tuple(
     m
     for m in (
         MOM_FILTERS
         + MOM_FILTERS_HTF_DENSE
         + MOM_FILTERS_HTF_EXPAND
+        + MOM_FILTERS_HTF_FRESH
         + GRIND_FILTERS
     )
     if m not in REGIME_MOM_PRIORITY
@@ -582,10 +644,61 @@ def _grind_participation_ands(n: int) -> Iterator[str]:
         yield f"{dip}&near_swing_hi_{n}"
 
 
-def _regime_pair_ands(entries: tuple[str, ...]) -> Iterator[str]:
-    for regime in REGIME_ATOMS:
+def _regime_pair_ands(
+    entries: tuple[str, ...],
+    regimes: tuple[str, ...] | None = None,
+) -> Iterator[str]:
+    for regime in regimes if regimes is not None else REGIME_ATOMS:
         for entry in entries:
             yield f"{regime}&{entry}"
+
+
+def _regime_fresh_winner_shaped() -> Iterator[str]:
+    """Never-tested 3–5 atom winner-shaped stacks. Emit first on dry refill.
+
+    Spine is REGIME+MOM. New continuation (``sma_abv_30`` / ``ema_abv_30``)
+    and ``rsi_14_>55`` are unused canons. ``rsi_14_>50`` 3-atoms cover
+    admit neighbors + dense mom that leftover depth-3 did not. 4-atoms
+    are continuation × (rsi OR mild dip). 5-atoms add both. No
+    ``near_swing`` / ``don_hi``. Depth-7 skipped.
+    """
+    extra_rsi_regimes = tuple(
+        r for r in FRESH_STACK_REGIME if r not in DEEP_STACK_REGIME
+    )
+    for regime in FRESH_STACK_REGIME:
+        for mom in REGIME_MOM_PRIORITY:
+            for cont in FRESH_CONT_ATOMS:
+                yield f"{regime}&{mom}&{cont}"
+    for regime in FRESH_STACK_REGIME:
+        for mom in REGIME_MOM_PRIORITY:
+            yield f"{regime}&{mom}&{FRESH_RSI}"
+    for regime in extra_rsi_regimes:
+        for mom in REGIME_MOM_PRIORITY:
+            yield f"{regime}&{mom}&{DEEP_STACK_RSI}"
+    for regime in FRESH_STACK_REGIME:
+        for mom in MOM_FILTERS_HTF_DENSE:
+            yield f"{regime}&{mom}&{DEEP_STACK_RSI}"
+    for regime in FRESH_STACK_REGIME:
+        for mom in REGIME_MOM_PRIORITY:
+            for cont in FRESH_CONT_ATOMS:
+                yield f"{regime}&{mom}&{cont}&{DEEP_STACK_RSI}"
+    for regime in FRESH_STACK_REGIME:
+        for mom in REGIME_MOM_PRIORITY:
+            for cont in FRESH_CONT_ATOMS:
+                for dip in REGIME_DIP_PRIORITY:
+                    yield f"{regime}&{mom}&{cont}&{dip}"
+    for regime in FRESH_STACK_REGIME:
+        for mom in REGIME_MOM_PRIORITY:
+            for cont in FRESH_CONT_ATOMS:
+                for dip in REGIME_DIP_PRIORITY:
+                    yield f"{regime}&{mom}&{cont}&{dip}&{DEEP_STACK_RSI}"
+
+
+def _regime_fresh_pairs() -> Iterator[str]:
+    """Unused HTF × all mom/dip, plus parked HTF × unused mom. Mom first."""
+    yield from _regime_pair_ands(REGIME_MOM_BASES, regimes=REGIME_ATOMS_FRESH)
+    yield from _regime_pair_ands(MOM_FILTERS_HTF_FRESH, regimes=REGIME_ATOMS_PRIOR)
+    yield from _regime_pair_ands(REGIME_DIP_BASES, regimes=REGIME_ATOMS_FRESH)
 
 
 def _regime_winner_3atoms() -> Iterator[str]:
@@ -715,15 +828,19 @@ def _regime_ands() -> Iterator[str]:
     first among regime dip bases. 2026-09-14: winner 3-atoms first
     (``regime&mom&mild_dip`` then ``regime&mom&continuation``), then
     4–7 atom role-bucket stacks (depth 4–5 before 6–7), then
-    ``regime&mom`` then ``regime&dip``. No ``don_hi`` /
-    ``near_swing_lo``. Cheap ``near_swing_hi`` N≤48 only on depth-7
-    stacks. Dry refill hits combined admits immediately. HTF False
-    → no new long (flat). No named candlesticks.
+    ``regime&mom`` then ``regime&dip``. Same-date later: **fresh**
+    winner-shaped 3–5 (new continuation / rsi) and unused HTF/mom
+    2-atoms emit before that drained prefix so dry refill is not idle.
+    No ``don_hi`` / ``near_swing_lo``. Cheap ``near_swing_hi`` N≤48
+    only on depth-7 stacks. HTF False → no new long (flat). No named
+    candlesticks.
     """
+    yield from _regime_fresh_winner_shaped()
+    yield from _regime_fresh_pairs()
     yield from _regime_winner_3atoms()
     yield from _regime_deep_stacks()
-    yield from _regime_pair_ands(REGIME_MOM_BASES)
-    yield from _regime_pair_ands(REGIME_DIP_BASES)
+    yield from _regime_pair_ands(REGIME_MOM_BASES_PRIOR, regimes=REGIME_ATOMS_PRIOR)
+    yield from _regime_pair_ands(REGIME_DIP_BASES, regimes=REGIME_ATOMS_PRIOR)
 
 
 def _trend_participation_ands(n: int) -> Iterator[str]:
@@ -756,16 +873,20 @@ def _trend_participation_ands(n: int) -> Iterator[str]:
 def iter_recipe_names() -> Iterator[str]:
     """Deterministic bounded stream. Not a full cartesian of every atom.
 
-    HTF buyer-regime families are first so a dry refill mints
-    admit-island ``regime&mom&mild_dip`` / continuation 3-atoms,
+    Fresh never-tested families are first so a dry refill mints unused
+    HTF/mom canons and winner-shaped 3–5 stacks (``sma_abv_30`` /
+    ``ema_abv_30`` continuation, ``rsi_14_>55``, extra-regime
+    ``rsi_14_>50``, continuation × rsi-or-mild-dip) immediately.
+    Then admit-island ``regime&mom&mild_dip`` / continuation 3-atoms,
     then 4–7 atom role-bucket stacks (depth 4–5 before 6–7), then
     ``regime&mom`` 2-atoms, then HTF×dip. No HTF×mom×expensive
     structure (``don_hi`` / ``near_swing_lo`` / N>48). Cheap
-    ``near_swing_hi`` N≤48 only at depth 7. Grind 1% 2-atoms and
-    wide / short-MA continuation follow, then legacy 2026-09-11
-    families, the 2026-09-12 near-level pass, then leftover TREND
-    / ema_stack / 3-atom families. Dip×support and short-horizon
-    mom stay on the frozen 3×3. No WaveTrend, no MFI.
+    ``near_swing_hi`` N≤48 only at depth 7 — deprioritized after the
+    fresh 3–5 family. Grind 1% 2-atoms and wide / short-MA
+    continuation follow, then legacy 2026-09-11 families, the
+    2026-09-12 near-level pass, then leftover TREND / ema_stack /
+    3-atom families. Dip×support and short-horizon mom stay on the
+    frozen 3×3. No WaveTrend, no MFI.
     """
     yield from _regime_ands()
     for n in STRUCTURE_NS:
