@@ -215,8 +215,10 @@ the farm stays idle until Start.
   `h4_ema_abv_{15,40,60}` / `h4_sma_abv_{12,15,36,40}`,
   **fresh** winner-shaped 3–5 first (`sma_abv_30` / `ema_abv_30` /
   `rsi_14_>55`, not depth-7 `near_swing` spam),
-  then drained `regime&mom&mild_dip` 3-atoms (not structure),
-  then 4–7 atom admit-island stacks (depth 4–5 first),
+  then drained `regime&mom&continuation` 3-atoms (not structure;
+  recipe no longer ANDs `mom_gt` with `mild_dip`),
+  then 4–7 atom admit-island stacks (depth 4–5 continuation / RSI;
+  never mom∧dip),
   mom-before-dip, `REGIME_DIP_PRIORITY`
   (`dip_24b_lt5pc` / `dip_24b_lt6pc` / `dip_18b_lt2pc`),
   plus `MOM_FILTERS_HTF_DENSE` / `MOM_FILTERS_HTF_EXPAND` /

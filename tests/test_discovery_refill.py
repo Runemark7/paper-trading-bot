@@ -70,6 +70,7 @@ from hedge_fund.trading.refill import (
     iter_recipe_names,
     load_extended_names,
     maybe_refill_discovery,
+    name_has_mom_gt_and_dip,
     name_is_parseable,
     name_is_refused,
     next_refill_batch,
@@ -740,19 +741,19 @@ class RecipeBoundsTests(unittest.TestCase):
         self.assertIn("h1_ema_abv_20&mom_18b_gt2pc&rsi_14_>55", names)
         self.assertIn("h1_ema_abv_15&mom_18b_gt2pc&rsi_14_>50", names)
         self.assertIn("h1_ema_abv_20&mom_18b_gt2pc&sma_abv_30&rsi_14_>50", names)
-        self.assertIn("h1_ema_abv_20&mom_18b_gt2pc&sma_abv_30&dip_24b_lt5pc", names)
+        self.assertNotIn("h1_ema_abv_20&mom_18b_gt2pc&sma_abv_30&dip_24b_lt5pc", names)
         self.assertIn("h1_ema_abv_60&mom_18b_gt2pc", names)
         self.assertIn("h1_sma_abv_12&mom_78b_gt2pc", names)
         self.assertIn("h4_ema_abv_15&mom_18b_gt8pc", names)
         self.assertEqual(names[0], "h1_ema_abv_20&mom_18b_gt2pc&sma_abv_30")
         self.assertLess(
             names.index("h1_ema_abv_20&mom_18b_gt2pc&sma_abv_30"),
-            names.index("h1_ema_abv_20&mom_18b_gt2pc&dip_24b_lt5pc"),
+            names.index("h1_ema_abv_20&dip_24b_lt5pc"),
         )
-        # Winner 3-atoms (drained prefix): HTF×mom×mild-dip / continuation, not structure.
-        self.assertIn("h1_ema_abv_20&mom_18b_gt2pc&dip_24b_lt5pc", names)
-        self.assertIn("h1_ema_abv_24&mom_18b_gt2pc&dip_24b_lt6pc", names)
-        self.assertIn("h1_sma_abv_24&mom_18b_gt2pc&dip_18b_lt2pc", names)
+        # Winner 3-atoms (drained prefix): HTF×mom×continuation, not dip, not structure.
+        self.assertNotIn("h1_ema_abv_20&mom_18b_gt2pc&dip_24b_lt5pc", names)
+        self.assertNotIn("h1_ema_abv_24&mom_18b_gt2pc&dip_24b_lt6pc", names)
+        self.assertNotIn("h1_sma_abv_24&mom_18b_gt2pc&dip_18b_lt2pc", names)
         self.assertIn("h1_ema_abv_20&mom_18b_gt2pc&sma_abv_50", names)
         self.assertIn("h1_ema_abv_24&mom_12b_gt2pc&ema_abv_20", names)
         # HTF×mom×structure stays refused.
@@ -1280,35 +1281,101 @@ class RefillBatchTests(unittest.TestCase):
                 any(tok.startswith(("don_hi_", "near_swing_")) for tok in name.split("&")),
                 msg=name,
             )
+            self.assertFalse(name_has_mom_gt_and_dip(name), msg=name)
+
+    def test_next_refill_batch_skips_mom_gt_and_dip_candidates(self):
+        self.assertTrue(
+            name_has_mom_gt_and_dip("h1_ema_abv_20&mom_18b_gt2pc&dip_24b_lt5pc")
+        )
+        self.assertTrue(
+            name_has_mom_gt_and_dip(
+                "h1_ema_abv_20&mom_18b_gt2pc&sma_abv_50&ema_abv_20"
+                "&dip_24b_lt5pc&rsi_14_>50&near_swing_hi_24"
+            )
+        )
+        self.assertFalse(name_has_mom_gt_and_dip("h1_ema_abv_20&mom_18b_gt2pc&sma_abv_50"))
+        self.assertFalse(name_has_mom_gt_and_dip("h1_ema_abv_20&mom_18b_gt2pc&rsi_14_>50"))
+        self.assertFalse(name_has_mom_gt_and_dip("h1_ema_abv_20&dip_24b_lt5pc"))
+        self.assertFalse(name_has_mom_gt_and_dip("dip_24b_lt5pc&sma_abv_50"))
+        self.assertFalse(name_has_mom_gt_and_dip("mom_18b_gt2pc&don_hi_12"))
+        names = list(iter_recipe_names())
+        bad = [n for n in names if name_has_mom_gt_and_dip(n)]
+        self.assertEqual(bad, [])
+        self.assertIn("h1_ema_abv_20&mom_18b_gt2pc&sma_abv_30", names)
+        self.assertIn("h1_ema_abv_20&mom_18b_gt2pc&sma_abv_30&rsi_14_>50", names)
+        self.assertIn("h1_ema_abv_20&mom_18b_gt2pc&sma_abv_50", names)
+        self.assertIn("h1_ema_abv_20&mom_18b_gt2pc&rsi_14_>55", names)
+        self.assertIn("h1_ema_abv_20&dip_24b_lt5pc", names)
+        self.assertIn("h4_sma_abv_50&dip_12b_lt2pc", names)
+        self.assertNotIn("h1_ema_abv_20&mom_18b_gt2pc&dip_24b_lt5pc", names)
+        self.assertNotIn("h1_ema_abv_20&mom_18b_gt2pc&sma_abv_30&dip_24b_lt5pc", names)
+        self.assertNotIn(
+            "h1_ema_abv_20&mom_18b_gt2pc&sma_abv_50&dip_24b_lt5pc",
+            names,
+        )
+        # Parser still accepts already-queued mom∧dip so they can drain once.
+        queued = "h1_ema_abv_20&mom_18b_gt2pc&dip_24b_lt5pc"
+        self.assertTrue(name_is_parseable(queued))
+        parse_strategy(queued)
+        self.assertEqual(MIN_BACKTEST_TRADES, 30)
+        self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
+        self.assertEqual(QUAL_N_WINDOWS, 23)
+        self.assertEqual(max(STRUCTURE_NS), 96)
+        uni = generate_universe()
+        added = next_refill_batch(taken_names=uni, n=DISCOVERY_REFILL_BATCH_SIZE)
+        self.assertEqual(len(added), DISCOVERY_REFILL_BATCH_SIZE)
+        self.assertFalse(any(name_has_mom_gt_and_dip(n) for n in added))
+        with patch(
+            "hedge_fund.trading.refill.iter_recipe_names",
+            return_value=iter(
+                [
+                    "h1_ema_abv_20&mom_18b_gt2pc&dip_24b_lt5pc",
+                    "h1_ema_abv_20&mom_18b_gt2pc&sma_abv_30&dip_24b_lt5pc",
+                    "h1_ema_abv_20&mom_18b_gt2pc&sma_abv_30",
+                    "h1_ema_abv_20&dip_24b_lt5pc",
+                ]
+            ),
+        ):
+            skipped = next_refill_batch(taken_names=[], n=DISCOVERY_REFILL_BATCH_SIZE)
+        self.assertEqual(
+            skipped,
+            [
+                "h1_ema_abv_20&mom_18b_gt2pc&sma_abv_30",
+                "h1_ema_abv_20&dip_24b_lt5pc",
+            ],
+        )
+        self.assertFalse(any(name_has_mom_gt_and_dip(n) for n in skipped))
 
     def test_recipe_emits_depth_4_through_7_admit_stacks(self):
         names = list(iter_recipe_names())
         depths = [n.count("&") + 1 for n in names]
         self.assertGreaterEqual(max(depths), 4)
-        self.assertEqual(max(depths), 7)
+        self.assertGreaterEqual(max(depths), 5)
         self.assertLessEqual(max(depths), RECIPE_MAX_ATOMS)
-        four = "h1_ema_abv_20&mom_18b_gt2pc&sma_abv_50&dip_24b_lt5pc"
-        five = "h1_ema_abv_20&mom_18b_gt2pc&sma_abv_50&ema_abv_20&dip_24b_lt5pc"
-        six = "h1_ema_abv_20&mom_18b_gt2pc&sma_abv_50&ema_abv_20&dip_24b_lt5pc&rsi_14_>50"
-        seven = (
+        four = "h1_ema_abv_20&mom_18b_gt2pc&sma_abv_50&rsi_14_>50"
+        five = "h1_ema_abv_20&mom_18b_gt2pc&sma_abv_50&ema_abv_20&rsi_14_>50"
+        dip_four = "h1_ema_abv_20&mom_18b_gt2pc&sma_abv_50&dip_24b_lt5pc"
+        dip_five = "h1_ema_abv_20&mom_18b_gt2pc&sma_abv_50&ema_abv_20&dip_24b_lt5pc"
+        dip_six = "h1_ema_abv_20&mom_18b_gt2pc&sma_abv_50&ema_abv_20&dip_24b_lt5pc&rsi_14_>50"
+        dip_seven = (
             "h1_ema_abv_20&mom_18b_gt2pc&sma_abv_50&ema_abv_20"
             "&dip_24b_lt5pc&rsi_14_>50&near_swing_hi_24"
         )
-        for name in (four, five, six, seven):
+        for name in (four, five):
             self.assertIn(name, names, msg=name)
             self.assertTrue(name_is_parseable(name), msg=name)
             parse_strategy(name)
-        self.assertLess(names.index(four), names.index(six))
-        self.assertLess(names.index(five), names.index(six))
-        self.assertLess(names.index(six), names.index(seven))
-        # Depth 4–5 ahead of leftover structure ANDs.
+        for name in (dip_four, dip_five, dip_six, dip_seven):
+            self.assertNotIn(name, names, msg=name)
+            self.assertTrue(name_is_parseable(name), msg=name)
+        self.assertLess(names.index(four), names.index(five))
         self.assertLess(names.index(four), names.index("dip_6b_lt2pc&don_lo_6"))
         self.assertLess(names.index(five), names.index("mom_30b_gt1pc&don_hi_6"))
-        # Cheap structure only, N≤48; no expensive Donchian on HTF×mom.
         self.assertNotIn("h1_ema_abv_20&mom_18b_gt2pc&don_hi_12", names)
         for name in names:
             parts = [p for p in name.split("&") if p]
             self.assertLessEqual(len(parts), 7, msg=name)
+            self.assertFalse(name_has_mom_gt_and_dip(name), msg=name)
             for _atom, n in structure_lookbacks(name):
                 self.assertLessEqual(n, 96, msg=name)
             if name.count("&") >= 3 and any(
@@ -1320,11 +1387,8 @@ class RefillBatchTests(unittest.TestCase):
                     if tok.startswith("near_swing_hi_"):
                         n = int(tok.rsplit("_", 1)[-1])
                         self.assertLessEqual(n, 48, msg=name)
-        eight = seven + "&sma_abv_100"
-        self.assertFalse(name_is_parseable(eight))
+        self.assertFalse(name_is_parseable(dip_seven + "&sma_abv_100"))
         self.assertTrue(name_is_parseable(five))
-        self.assertTrue(name_is_parseable(six))
-        self.assertTrue(name_is_parseable(seven))
         self.assertEqual(MIN_BACKTEST_TRADES, 30)
         self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
         self.assertEqual(QUAL_N_WINDOWS, 23)
@@ -1339,7 +1403,7 @@ class RefillBatchTests(unittest.TestCase):
             if name_is_parseable(n)
         }
         added = new_keys - prior_keys
-        self.assertGreaterEqual(len(added), 500, msg=f"new distinct keys={len(added)}")
+        self.assertGreaterEqual(len(added), 150, msg=f"new distinct keys={len(added)}")
         self.assertLessEqual(len(added), 2000, msg=f"new distinct keys={len(added)}")
         self.assertEqual(max(STRUCTURE_NS), 96)
         self.assertEqual(MIN_BACKTEST_TRADES, 30)
@@ -1376,6 +1440,7 @@ class RefillBatchTests(unittest.TestCase):
             self.assertGreaterEqual(name.count("&") + 1, 3, msg=name)
             self.assertLessEqual(name.count("&") + 1, 7, msg=name)
             self.assertTrue(_has_mint_tag(name), msg=name)
+            self.assertFalse(name_has_mom_gt_and_dip(name), msg=name)
             for _atom, n in structure_lookbacks(name):
                 self.assertLessEqual(n, 96, msg=name)
 
@@ -1400,6 +1465,7 @@ class RefillBatchTests(unittest.TestCase):
                 any(tok.startswith(("don_hi_", "near_swing_")) for tok in name.split("&")),
                 msg=name,
             )
+            self.assertFalse(name_has_mom_gt_and_dip(name), msg=name)
         self.assertEqual(added[0], "h1_ema_abv_20&mom_18b_gt2pc&sma_abv_30")
         self.assertEqual(MIN_BACKTEST_TRADES, 30)
         self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
