@@ -59,7 +59,7 @@ export default function FarmControl() {
   const queryClient = useQueryClient();
   const q = useQuery({
     queryKey: ["discovery-summary"],
-    queryFn: fetchDiscoverySummary,
+    queryFn: () => fetchDiscoverySummary(),
     refetchInterval: 15_000,
   });
   const [savedToken, setSavedToken] = useState(loadToken);

@@ -113,7 +113,7 @@ export function DiscoveryTeaser() {
 export default function DiscoveryBuckets() {
   const q = useQuery({
     queryKey: ["discovery-summary"],
-    queryFn: fetchDiscoverySummary,
+    queryFn: () => fetchDiscoverySummary(),
     refetchInterval: 15_000,
   });
   const [filters, setFilters] = useState<TestedColumnFilters>(EMPTY_TESTED_FILTERS);
