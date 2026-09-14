@@ -9,7 +9,11 @@ fail-once / auto-refill / aggregate-OOS / `rm_v1` / 5m rules as
 `scripts/tournament_engine.py` and POSTs results to prod.
 A single empty/neg window is not a veto (beat-B&H and Sharpe ≥ 0.30 stay).
 Walk-forward is **23 × ~90 calendar days** of native 5m (~2070 days, ~5.67y;
-not the previous 8 × 90d ≈ 720d). Thresholds are unchanged. Existing
+not the previous 8 × 90d ≈ 720d). Each window is prefixed with
+**`QUAL_WARMUP_BARS` = 4032** (~14d of 5m) from bars *before* the scored
+slice so EMA/SMA/HTF/ATR are warm at OOS start. OOS trades / PnL / Sharpe
+**exclude** the warm-up (and train). First window uses a partial prefix
+if history is short. Thresholds are unchanged. Existing
 discovery_log admits were under the shorter window count — no automatic
 re-qualify; fail-once parks stay parked. Longer tape
 makes each eval slower on this PC (~3× vs 8 windows) — that is expected. The worker caches ATR / SMA / EMA / HTF
@@ -63,8 +67,8 @@ Binance; it does not need the cluster. Default symbols are **BTC/USDT and
 ETH/USDT only** (no SOL/XRP — discovery/qual tape is BTC+ETH). Override
 with `HIST_SYMBOLS` (comma-separated ccxt symbols) only if you need extra
 pairs. Default bars track
-`QUAL_WINDOW_BARS * QUAL_N_WINDOWS + slack` (~596k five-minute bars for
-23 × 90d). The page cap is 2500 so a multi-year fetch can finish. Re-run
+`QUAL_WINDOW_BARS * QUAL_N_WINDOWS + QUAL_WARMUP_BARS + slack` (~600k
+five-minute bars: 23 × 90d scored plus a 14d indicator pad). The page cap is 2500 so a multi-year fetch can finish. Re-run
 until the file covers ~2070 calendar days (the current ~5.7y tape already
 does), then
 every few days so the tape stays current. The `/tmp` mirror is skipped

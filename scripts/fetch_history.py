@@ -10,7 +10,7 @@ Discovery qualification reads crypto_history_5m.json (HIST_TIMEFRAME=5m).
 
 Usage:
   python scripts/fetch_history.py
-  HIST_TIMEFRAME=5m HIST_BARS=599000 python scripts/fetch_history.py
+  HIST_TIMEFRAME=5m HIST_BARS=603000 python scripts/fetch_history.py
   HIST_TIMEFRAME=4h HIST_BARS=20000 python scripts/fetch_history.py
   HIST_SYMBOLS=BTC/USDT,ETH/USDT python scripts/fetch_history.py
 """
@@ -18,13 +18,18 @@ import json, os, time
 from pathlib import Path
 from hedge_fund.paths import state_root
 from hedge_fund.data.binance import CcxtSource
-from hedge_fund.trading.constants import QUAL_TIMEFRAME, QUAL_N_WINDOWS, QUAL_WINDOW_BARS
+from hedge_fund.trading.constants import QUAL_TIMEFRAME, QUAL_N_WINDOWS, QUAL_WINDOW_BARS, QUAL_WARMUP_BARS
 from datetime import datetime, timezone
 
 DEFAULT_TF = os.environ.get("HIST_TIMEFRAME", QUAL_TIMEFRAME)
-# Cover QUAL_N_WINDOWS × ~90d of 5m (23 × 25920 → 596160 bars, ~2070d) plus slack.
+# Cover QUAL_N_WINDOWS × ~90d of 5m plus QUAL_WARMUP_BARS (23 × 25920 + 4032
+# → 600192 bars, ~2070d scored + ~14d seed) and page slack.
 # Tracks the walk-forward constants so a longer span fetches more tape.
-_DEFAULT_BARS = QUAL_WINDOW_BARS * QUAL_N_WINDOWS + 3000 if DEFAULT_TF == QUAL_TIMEFRAME else 70000
+_DEFAULT_BARS = (
+    QUAL_WINDOW_BARS * QUAL_N_WINDOWS + QUAL_WARMUP_BARS + 3000
+    if DEFAULT_TF == QUAL_TIMEFRAME
+    else 70000
+)
 DEFAULT_BARS = int(os.environ.get("HIST_BARS", str(_DEFAULT_BARS)))
 # ~1000 bars/page. 300 pages capped a deep 5m fetch around ~280d; 2500
 # is enough for multi-year tape (e.g. ~600k bars / ~5y) with overlap.

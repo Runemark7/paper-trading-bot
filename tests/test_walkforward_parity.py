@@ -9,8 +9,8 @@ Exercises the live path used by ``scripts/discovery_worker.py``:
 (not ``hedge_fund.backtest.fast_quant``).
 
 Fixture is trimmed: QUAL_N_WINDOWS × 960 5m bars/symbol (~3.3d/window), not
-jensa's QUAL_N_WINDOWS × 25920. Same window count, stride, 70/30 cut, rm_v1,
-and frozen gates. See ``tests/fixtures/walkforward_parity.py``.
+jensa's QUAL_N_WINDOWS × 25920. Same window count, stride, 70/30 cut, warm-up
+prefix, rm_v1, and frozen gates. See ``tests/fixtures/walkforward_parity.py``.
 """
 from __future__ import annotations
 
@@ -25,6 +25,7 @@ from hedge_fund.trading.constants import (
     QUAL_N_WINDOWS,
     QUAL_STRIDE,
     QUAL_TIMEFRAME,
+    QUAL_WARMUP_BARS,
     QUAL_WINDOW_BARS,
     RISK_POLICY,
 )
@@ -97,7 +98,9 @@ class FrozenQualifyGatesTests(unittest.TestCase):
         self.assertEqual(QUAL_TIMEFRAME, "5m")
         self.assertEqual(RISK_POLICY, "rm_v1")
         self.assertEqual(QUAL_WINDOW_BARS, 90 * 24 * 12)
+        self.assertEqual(QUAL_WARMUP_BARS, 14 * 24 * 12)
         self.assertLess(PARITY_WINDOW_BARS, QUAL_WINDOW_BARS)
+        self.assertLess(QUAL_WARMUP_BARS, QUAL_WINDOW_BARS)
 
     def test_fast_quant_is_not_on_qualify_path(self):
         import scripts.discovery_worker as worker
@@ -126,10 +129,12 @@ class WalkForwardParityTests(unittest.TestCase):
         self.assertEqual(meta["window_bars"], PARITY_WINDOW_BARS)
         self.assertEqual(meta["stride"], 1)
         self.assertEqual(meta["live_window_bars"], QUAL_WINDOW_BARS)
+        self.assertEqual(meta["live_warmup_bars"], QUAL_WARMUP_BARS)
         self.assertEqual(meta["timeframe"], "5m")
         self.assertEqual(meta["risk_policy"], "rm_v1")
         self.assertEqual(meta["n_windows"], gmeta["n_windows"])
         self.assertEqual(meta["window_bars"], gmeta["window_bars"])
+        self.assertEqual(meta["live_warmup_bars"], gmeta["live_warmup_bars"])
         self.assertEqual(meta["seed"], gmeta["seed"])
 
     def test_golden_covers_htf_mom_and_structure(self):

@@ -282,13 +282,18 @@ def _sharpe(pnl_pcts):
 def backtest(closes, highs, lows, strategy, start_cash=10_000.0,
              risk_frac=None, taker_fee=None, slippage=None,
              rr=None, atr_mult=None, momentum_lookback=12, momentum_thr=0.03,
-             long_stack=(7, 25, 50)):
+             long_stack=(7, 25, 50), score_from: int | None = None,
+             score_to: int | None = None):
     """Backtest one strategy on OHLC bars using frozen ``rm_v1`` stop/size.
 
     Same fee model as PaperBroker (0.1% taker + 2 bps) and the same ATR stop
     (2.0× ATR, 1.5–4% band), 1% risk, pyramid max 3 lots / in-profit-only,
     and 5% open-risk cap. ``atr_mult`` is ignored: qualification must not
     run a second engine. Confidence is 1.0 (no live posterior on history).
+
+    ``score_from`` / ``score_to`` (exclusive end) bound the bars that may
+    open or close counted trades. Prefix bars still seed ATR / EMA / SMA /
+    HTF. Default is the full series (engine still skips a tiny seed).
     """
     taker_fee = FEE_TAKER if taker_fee is None else taker_fee
     slippage = FEE_SLIPPAGE if slippage is None else slippage
@@ -309,6 +314,9 @@ def backtest(closes, highs, lows, strategy, start_cash=10_000.0,
     atr_vals = _cached_atr_series(highs, lows, closes, ATR_PERIOD)
 
     warmup = max(long_stack[2], momentum_lookback, 14, 20) + 2
+    start = 0 if score_from is None else max(0, int(score_from))
+    end = n if score_to is None else max(0, min(n, int(score_to)))
+    trade_start = max(warmup, start)
 
     def mark_equity(px: float) -> float:
         return cash + sum(lot["qty"] * px for lot in lots)
@@ -330,7 +338,15 @@ def backtest(closes, highs, lows, strategy, start_cash=10_000.0,
         dd = (peak - eq) / peak if peak > 0 else 0.0
         max_dd = max(max_dd, dd)
 
-    for i in range(warmup, n):
+    if end <= trade_start:
+        return BacktestResult(
+            strategy=strategy if isinstance(strategy, str) else getattr(strategy, "__name__", ""),
+            trades=0, wins=0, win_rate=0.0,
+            total_pnl=0.0, final_equity=cash,
+            sharpe=0.0, max_drawdown=0.0, fees_paid=0.0,
+        )
+
+    for i in range(trade_start, end):
         cur = closes[i]
         take = eval_predicate(pred, closes, i, highs=highs, lows=lows)
         high_i = highs[i] if i < len(highs) else cur
@@ -395,7 +411,8 @@ def backtest(closes, highs, lows, strategy, start_cash=10_000.0,
         lots.append({"qty": qty, "entry": entry_px, "stop": stop})
 
     if lots:
-        exit_px = closes[-1] * (1 - slippage)
+        last_i = end - 1 if end else n - 1
+        exit_px = closes[last_i] * (1 - slippage)
         for lot in list(lots):
             close_lot(lot, exit_px, "eod")
         lots = []

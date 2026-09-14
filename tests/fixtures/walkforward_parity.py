@@ -16,8 +16,9 @@ Reduced size (documented, topology only — not a live-gate change):
     PARITY_STRIDE = QUAL_STRIDE        # 1, native 5m, no skip
 
 Train/test cut stays 70/30 inside each window (``_prepare_sample``).
-Admit semantics stay the frozen OOS gates (trades ≥ 30, Sharpe ≥ 0.30,
-beat B&H, beat sma_stack, fail-once, 5m, rm_v1).
+Prior bars (``QUAL_WARMUP_BARS``) seed indicators; OOS trades/PnL/Sharpe
+exclude the pad. Admit semantics stay the frozen OOS gates (trades ≥ 30,
+Sharpe ≥ 0.30, beat B&H, beat sma_stack, fail-once, 5m, rm_v1).
 """
 from __future__ import annotations
 
@@ -32,6 +33,7 @@ from hedge_fund.trading.constants import (
     QUAL_STRIDE,
     QUAL_SYMBOLS,
     QUAL_TIMEFRAME,
+    QUAL_WARMUP_BARS,
     QUAL_WINDOW_BARS,
     RISK_POLICY,
 )
@@ -114,9 +116,10 @@ def make_parity_history(
     *,
     window_bars: int = PARITY_WINDOW_BARS,
     n_windows: int = PARITY_N_WINDOWS,
+    warmup_bars: int = QUAL_WARMUP_BARS,
 ) -> dict[str, list[list]]:
-    """Two-symbol 5m history covering ``window_bars * n_windows`` bars each."""
-    n = window_bars * n_windows
+    """Two-symbol 5m history covering scored windows plus a warm-up prefix."""
+    n = window_bars * n_windows + max(0, int(warmup_bars))
     starts = {"BTC/USDT": 42_000.0, "ETH/USDT": 2_400.0}
     out: dict[str, list[list]] = {}
     for offset, sym in enumerate(QUAL_SYMBOLS):
@@ -129,9 +132,14 @@ def make_parity_slices(
     window_bars: int = PARITY_WINDOW_BARS,
     n_windows: int = PARITY_N_WINDOWS,
     stride: int = PARITY_STRIDE,
+    warmup_bars: int = QUAL_WARMUP_BARS,
 ) -> list[dict]:
-    data = make_parity_history(window_bars=window_bars, n_windows=n_windows)
-    slices = _window_slices(data, window_bars, n_windows, stride)
+    data = make_parity_history(
+        window_bars=window_bars, n_windows=n_windows, warmup_bars=warmup_bars,
+    )
+    slices = _window_slices(
+        data, window_bars, n_windows, stride, warmup_bars=warmup_bars,
+    )
     if len(slices) != n_windows:
         raise RuntimeError(f"expected {n_windows} slices, got {len(slices)}")
     return slices
@@ -194,14 +202,16 @@ def build_golden_payload(
             "window_bars": window_bars,
             "stride": stride,
             "live_window_bars": QUAL_WINDOW_BARS,
+            "live_warmup_bars": QUAL_WARMUP_BARS,
             "timeframe": QUAL_TIMEFRAME,
             "risk_policy": RISK_POLICY,
             "symbols": list(QUAL_SYMBOLS),
             "seed": PARITY_SEED,
             "note": (
                 "Reduced per-window bar count for CI. Same evaluate_strategy_record "
-                "/ evaluate_windows / rm_v1 / 70-30 split / QUAL_N_WINDOWS path "
-                "as discovery_worker. Live windows stay QUAL_N_WINDOWS × 25920."
+                "/ evaluate_windows / rm_v1 / 70-30 split / QUAL_WARMUP_BARS path "
+                "as discovery_worker. Live windows stay QUAL_N_WINDOWS × 25920 "
+                "with a 14d indicator pad."
             ),
         },
         "bh_oos_pnl": None if bh is None else round(bh, 2),

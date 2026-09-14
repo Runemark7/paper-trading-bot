@@ -46,6 +46,7 @@ from hedge_fund.trading.constants import (
     QUAL_N_WINDOWS,
     QUAL_STRIDE,
     QUAL_WINDOW_BARS,
+    qual_keep_bars,
 )
 from hedge_fund.trading.discovery import (
     append_discovery_evaluation,
@@ -341,7 +342,7 @@ def run_batch(
     token: str | None,
     n_windows: int = QUAL_N_WINDOWS,
 ) -> dict:
-    data = _load_qual_history(keep_bars=QUAL_WINDOW_BARS * n_windows)
+    data = _load_qual_history(keep_bars=qual_keep_bars(n_windows=n_windows))
     if not data:
         raise SystemExit(
             "crypto_history_5m.json missing or empty under PAPER_STATE. "

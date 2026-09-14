@@ -52,6 +52,7 @@ from hedge_fund.trading.constants import (
     QUAL_STRIDE,
     QUAL_SYMBOLS,
     QUAL_TIMEFRAME,
+    QUAL_WARMUP_BARS,
     QUAL_WINDOW_BARS,
     RISK_POLICY,
     TRADE_EVALUATION_LIMIT,
@@ -89,15 +90,20 @@ def log_discovery_evaluations(eval_records: list[dict]):
 def _load_qual_history(keep_bars: int | None = None) -> dict | None:
     """5m tape only. A 4h-only state dir must not admit anyone.
 
-    Qualification windows only need the last ``window_size * n_windows`` bars
-    (default 23×25920 ≈ 2070 calendar days, ~5.67y). Extra history and unused
-    symbols (SOL/XRP) are dropped immediately after parse so peak RSS is not
-    the full fetch file.
+    Qualification windows need the last ``window_size * n_windows`` scored
+    bars plus ``QUAL_WARMUP_BARS`` of prior tape (default 23×25920 + 4032
+    ≈ 2070 calendar days of hold-outs plus ~14d of indicator seed). Extra
+    history and unused symbols (SOL/XRP) are dropped immediately after parse
+    so peak RSS is not the full fetch file.
     """
     path = _hist_qual()
     if not path.exists():
         return None
-    keep = QUAL_WINDOW_BARS * QUAL_N_WINDOWS if keep_bars is None else keep_bars
+    keep = (
+        QUAL_WINDOW_BARS * QUAL_N_WINDOWS + QUAL_WARMUP_BARS
+        if keep_bars is None
+        else keep_bars
+    )
     try:
         with path.open() as fh:
             data = json.load(fh)
@@ -117,40 +123,83 @@ def _load_qual_history(keep_bars: int | None = None) -> dict | None:
     return out or None
 
 
-_SPLIT_MEMO: dict[tuple[int, bool], tuple[list[float], list[float], list[float]]] = {}
+_SPLIT_MEMO: dict[tuple, tuple[list[float], list[float], list[float]]] = {}
 
 
-def _prepare_sample(w_sample: dict) -> dict:
-    """Extract OHLC once per window; train/test share the arrays + a cut index."""
+def _prepare_sample(w_sample: dict, warmup_len: int) -> dict:
+    """Extract OHLC once per window; train/test share arrays + cut indices.
+
+    ``warmup_len`` is the prefix of prior bars (not part of the 90d window).
+    ``cut`` is where OOS begins: warmup + 70% of the scored window.
+    """
     prepared = {}
+    warm = max(0, int(warmup_len))
     for s, rows in w_sample.items():
         closes, highs, lows = _ohlc(rows)
-        cut = int(len(rows) * 0.70)
-        prepared[s] = (closes, highs, lows, cut)
+        window_len = max(0, len(rows) - warm)
+        cut = warm + int(window_len * 0.70)
+        prepared[s] = (closes, highs, lows, warm, cut)
     return prepared
 
 
-def _window_slices(data: dict, window_size: int, n_windows: int, stride: int) -> list[dict]:
+def _window_slices(
+    data: dict,
+    window_size: int,
+    n_windows: int,
+    stride: int,
+    warmup_bars: int | None = None,
+) -> list[dict]:
+    """End-aligned scored windows, each prefixed with prior ``warmup_bars``.
+
+    Scored span is the last ``min(len, window_size * n_windows)`` bars.
+    Warm-up is clipped at tape start so the first window may be partial.
+    ``warmup_bars=0`` restores isolated-window slices (no pad).
+    """
     # New list identities; drop caches so id() reuse cannot serve stale series.
     bs.clear_qual_caches()
     _SPLIT_MEMO.clear()
+    pad = QUAL_WARMUP_BARS if warmup_bars is None else max(0, int(warmup_bars))
     min_available_bars = min(len(data[s]) for s in data)
-    total_span = min(min_available_bars, window_size * n_windows)
+    scored_span = min(min_available_bars, window_size * n_windows)
     slices = []
-    step = total_span // n_windows
+    step = scored_span // n_windows
     for w_i in range(n_windows):
-        start_idx = -(total_span - (w_i * step))
-        end_idx = start_idx + step if w_i < n_windows - 1 else None
         w_sample = {}
+        warmup_len: int | None = None
         for s, rows in data.items():
-            chunk = rows[start_idx:end_idx]
+            n = len(rows)
+            scored_start = n - scored_span + (w_i * step)
+            scored_end = n - scored_span + ((w_i + 1) * step) if w_i < n_windows - 1 else n
+            warm_start = max(0, scored_start - pad)
+            chunk = rows[warm_start:scored_end]
             w_sample[s] = downsample(chunk, stride) if stride > 1 else chunk
-        slices.append(_prepare_sample(w_sample))
+            this_warm = scored_start - warm_start
+            if stride > 1:
+                this_warm = this_warm // stride
+            warmup_len = this_warm if warmup_len is None else min(warmup_len, this_warm)
+        slices.append(_prepare_sample(w_sample, warmup_len or 0))
     return slices
 
 
 def _ohlc(rows: list) -> tuple[list[float], list[float], list[float]]:
     return [r[4] for r in rows], [r[2] for r in rows], [r[3] for r in rows]
+
+
+def _tape_bounds(tape) -> tuple[list[float], list[float], list[float], int, int] | None:
+    """closes, highs, lows, warmup_len, oos_cut from a prepared tape or raw rows."""
+    if isinstance(tape, tuple) and len(tape) == 5:
+        closes, highs, lows, warmup, cut = tape
+        return closes, highs, lows, int(warmup), int(cut)
+    if isinstance(tape, tuple) and len(tape) == 4:
+        closes, highs, lows, cut = tape
+        return closes, highs, lows, 0, int(cut)
+    if isinstance(tape, list):
+        if not tape:
+            return None
+        closes, highs, lows = _ohlc(tape)
+        cut = int(len(tape) * 0.70)
+        return closes, highs, lows, 0, cut
+    return None
 
 
 def _split_tape(tape, train: bool) -> tuple[list[float], list[float], list[float]] | None:
@@ -159,37 +208,45 @@ def _split_tape(tape, train: bool) -> tuple[list[float], list[float], list[float
     Prepared tuples are stable for a window-slice batch. Memoize the 70/30
     copies so ATR/SMA/HTF caches keyed by ``id(closes)`` stay valid across
     names (and are not poisoned when CPython reuses a freed list id).
+    Qual evals pass the full series into ``backtest`` with ``score_from``;
+    this helper still returns the scored-segment copies for B&H and the
+    raw-list fallback.
     """
-    if isinstance(tape, tuple) and len(tape) == 4:
-        memo_key = (id(tape), train)
-        hit = _SPLIT_MEMO.get(memo_key)
-        if hit is not None:
-            return hit
-        closes, highs, lows, cut = tape
-        split = (closes[:cut], highs[:cut], lows[:cut]) if train else (
-            closes[cut:], highs[cut:], lows[cut:]
-        )
-        _SPLIT_MEMO[memo_key] = split
-        return split
-    if isinstance(tape, list):
-        if not tape:
-            return None
-        closes, highs, lows = _ohlc(tape)
-        cut = int(len(tape) * 0.70)
-        if train:
-            return closes[:cut], highs[:cut], lows[:cut]
-        return closes[cut:], highs[cut:], lows[cut:]
-    return None
+    parts = _tape_bounds(tape)
+    if parts is None:
+        return None
+    closes, highs, lows, warmup, cut = parts
+    memo_key = (id(tape) if not isinstance(tape, list) else id(closes), train, warmup, cut)
+    hit = _SPLIT_MEMO.get(memo_key)
+    if hit is not None:
+        return hit
+    split = (closes[warmup:cut], highs[warmup:cut], lows[warmup:cut]) if train else (
+        closes[cut:], highs[cut:], lows[cut:]
+    )
+    _SPLIT_MEMO[memo_key] = split
+    return split
 
 
 def _eval_slice(pred, sample: dict, train: bool) -> list:
     results = []
     for _sym, tape in sample.items():
-        series = _split_tape(tape, train)
-        if series is None or len(series[0]) < 30:
+        parts = _tape_bounds(tape)
+        if parts is None:
+            continue
+        closes, highs, lows, warmup, cut = parts
+        if train:
+            score_from, score_to = warmup, cut
+        else:
+            score_from, score_to = cut, len(closes)
+        if score_to - score_from < 30:
             continue
         try:
-            results.append(bs.backtest(series[0], series[1], series[2], pred))
+            results.append(
+                bs.backtest(
+                    closes, highs, lows, pred,
+                    score_from=score_from, score_to=score_to,
+                )
+            )
         except Exception:
             continue
     return results
@@ -353,7 +410,7 @@ def discover_and_qualify(
     still run ``run_isolated`` in the same 300s tick. ``batch_size`` is a
     leftover-prefix test hook, not a random sample of 30.
     """
-    data = _load_qual_history(keep_bars=window_size * n_windows)
+    data = _load_qual_history(keep_bars=window_size * n_windows + QUAL_WARMUP_BARS)
     if not data:
         return [], []
 

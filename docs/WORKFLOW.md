@@ -25,10 +25,14 @@ this file is the living topology.
 **Current walk-forward (full jensa 5m tape):**
 `QUAL_N_WINDOWS` = 23, `QUAL_WINDOW_DAYS` = 90, `QUAL_COVERAGE_DAYS` = 2070
 (~5.67y of native 5m; 23 × 90). Per-window size stays 90d (honest hold-outs,
-not one giant in-sample). Existing discovery_log admits were under 8 × 90d
-(~720d) — no automatic re-qualify. Parked 8-window and 3-window evals stay
-parked (fail-once). Ingest requalify needs stored `regimes_tested` = 23.
-jensa `crypto_history_5m.json` already covers this span (~600787 bars).
+not one giant in-sample). Each window is prefixed with `QUAL_WARMUP_BARS` =
+4032 (~14d of 5m) so EMA/SMA/HTF/ATR are warm when scored bars begin.
+OOS trades/PnL/Sharpe exclude the pad (and train). First window uses a
+partial prefix if the file is short. Existing discovery_log admits were
+under 8 × 90d (~720d) — no automatic re-qualify. Parked 8-window and
+3-window evals stay parked (fail-once). Ingest requalify needs stored
+`regimes_tested` = 23. jensa `crypto_history_5m.json` already covers this
+span (~600787 bars).
 
 **FROZEN OOS gates** (do not edit here to "make names pass"):
 
@@ -63,7 +67,7 @@ flowchart TB
 
   guard{"structure lookback > 96?\nor eval_timeout 600s"}
   parse["parse_strategy(name) in dynamic.py\nAND atoms on native 5m\n+ causal HTF regime from 5m"]
-  wf["Walk-forward 23 x 90d"]
+  wf["Walk-forward 23 x 90d\n+ 14d indicator pad"]
   bt["Backtest rm_v1"]
   gate["Aggregate OOS gate\nhedge_fund/trading/qualify.py"]
   worker --> guard
@@ -179,7 +183,7 @@ flowchart TB
   shipped["SHIPPED v1 + densify + 2026-09-14 neighbors + unused:\nh1_ema_abv_12/15/18/20/24/30/36/40/50/60/70\nh1_sma_abv_12/15/20/24/30/36/40/50/60\nh4_ema_abv_12/15/20/24/30/36/40/48/60\nh4_sma_abv_12/15/20/24/30/36/40/50"]
   order["fresh 3-5 / unused HTF-mom first:\nHTF x mom x sma_abv_30 / ema_abv_30 / rsi\nthen drained winner 3-atoms\nthen 4-7 atom role-bucket stacks\n(depth 4-5 then 6-7; near_swing last)\nthen mom-before-dip:\nHTF x mom 2-atom only vs expensive structure\nthen HTF x dip 2-atom"]
   mintOnly["AND into refill recipe only\nnew names in discovery_extended.json"]
-  sameEval["Same 5m walk-forward + rm_v1\n23 x 90d"]
+  sameEval["Same 5m walk-forward + rm_v1\n23 x 90d + 14d pad"]
   sameGate["Same frozen OOS gates\nin qualify.py"]
 
   shipped --> order --> mintOnly --> sameEval --> sameGate

@@ -37,7 +37,8 @@ def qual_n_windows_for_bars(n_bars: int, window_bars: int = QUAL_WINDOW_BARS) ->
 
 
 # Chronological walk-forward — not one giant in-sample. Loader keeps the
-# last ``QUAL_WINDOW_BARS * QUAL_N_WINDOWS`` bars (scales with the constant).
+# last ``QUAL_WINDOW_BARS * QUAL_N_WINDOWS + QUAL_WARMUP_BARS`` bars (scales
+# with the constants).
 # jensa ``crypto_history_5m.json`` 2026-09-14: 600787 5m bars/symbol
 # (2020-12-26 → 2026-09-12 ≈ 2086.8d ≈ 5.71y). floor(600787/25920)=23;
 # 23×25920=596160. 24 would overshoot. 8 × 90d was only ~720d (~2y) of
@@ -48,6 +49,24 @@ QUAL_N_WINDOWS = qual_n_windows_for_bars(QUAL_TAPE_BARS_MEASURED)  # 23
 QUAL_COVERAGE_DAYS = QUAL_N_WINDOWS * QUAL_WINDOW_DAYS  # 2070
 QUAL_STRIDE = 1  # native 5m; do not downsample
 RISK_POLICY = "rm_v1"
+# Prior bars fed into each window so EMA/SMA/HTF/ATR are warm when scored
+# bars begin. Binding HTF: parser-allowed ``h4_ema_abv_N`` with N=70 needs
+# 70 completed 4h closes = 70×48=3360 five-minute bars, plus up to 47 for
+# an incomplete 4h bucket. 14 calendar days = 4032. Structure lookbacks
+# (≤96) and ``sma_abv_200`` are far smaller. Loader keeps
+# ``QUAL_WINDOW_BARS * QUAL_N_WINDOWS + QUAL_WARMUP_BARS``. First window
+# uses whatever prefix exists if the file is short (partial warm-up).
+# OOS trades/PnL/Sharpe exclude the pad; B&H stays on the scored OOS
+# closes only. Does not steal 90d window length — pad is extra prefix.
+QUAL_WARMUP_DAYS = 14
+QUAL_WARMUP_BARS = QUAL_WARMUP_DAYS * 24 * 12  # 4032
+
+
+def qual_keep_bars(n_windows: int | None = None, warmup_bars: int | None = None) -> int:
+    """Loader/fetch span: scored windows plus warm-up prefix."""
+    n = QUAL_N_WINDOWS if n_windows is None else n_windows
+    w = QUAL_WARMUP_BARS if warmup_bars is None else warmup_bars
+    return QUAL_WINDOW_BARS * int(n) + int(w)
 
 # Discovery qualification (scripts/tournament_engine.py). Gates use OOS/test
 # only. Train PnL is logged, never scored, never an admit rule.

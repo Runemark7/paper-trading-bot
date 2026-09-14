@@ -117,6 +117,7 @@ over a meaningful sample, AND calibration is demonstrated independently of P&L.
 | 2026-09-14 | Same-date later: `GET /api/discovery/summary?compact=1` omits tested / queued / extended_names / in-flight name lists so Champions teaser and farm polls do not ship the unique-tested log (grew with mint #59/#60). Full lists stay on `/discovery`. UI error boundary on Champions/detail. Paper only; OOS gates unchanged. |
 | 2026-09-14 | Same-date later: refill mint un-dries again. Unused distinct HTF periods / mom lookbacks/% (`REGIME_ATOMS_FRESH` / `MOM_FILTERS_HTF_FRESH`) and winner-shaped 3–5 stacks (`sma_abv_30` / `ema_abv_30` continuation × rsi-or-mild-dip, `rsi_14_>55`) emit **first**. Farm was eligible=0 after ~7200 unique / last eval ~12:49Z; depth-7 `near_swing` mostly 0-trade fails. Fail-once stays. `STRUCTURE_NS` still ≤96. No named candlesticks. Static list unchanged. Paper only; OOS gates unchanged. |
 | 2026-09-14 | Same-date later: walk-forward calendar coverage extends to 23 × ~90d of native 5m (`QUAL_N_WINDOWS` = 23, `QUAL_WINDOW_DAYS` = 90, `QUAL_COVERAGE_DAYS` = 2070, ~5.67y) so new evals use the whole jensa 5m tape (~600787 bars). Per-window size stays 90d. OOS **thresholds** unchanged. Existing 8-window admits stay; no automatic re-qualify; fail-once parks stay parked. Throughput ~3× slower per name on jensa; sync worker/constants out of band. Still paper. |
+| 2026-09-14 | Same-date later: indicator warm-up padding. Each ~90d window is prefixed with prior bars (`QUAL_WARMUP_BARS` = 4032, 14d of 5m) so EMA/SMA/HTF/ATR are seeded before scored OOS. `backtest(..., score_from=cut)` counts only the true OOS segment. First window uses a partial prefix if history is short. Pad is extra tape, not stolen from the 90d windows. OOS **thresholds** unchanged. No automatic re-qualify. Still paper. |
 
 ### Amendment 2026-08-30 — what actually runs
 
@@ -960,6 +961,31 @@ This amendment does not rewrite original §§ 1–8 or prior amendments. Qual/li
 **Superseded on this date** (prior text kept above for history):
 
 - 2026-09-12 "multi-year walk-forward calendar coverage" insofar as it froze `QUAL_N_WINDOWS` = 8 and ~720d of tape. Per-window 90d, `QUAL_WINDOW_BARS` = 25920, `QUAL_STRIDE` = 1, and the OOS **thresholds** are not superseded.
+
+### Amendment 2026-09-14 — indicator warm-up padding
+
+This amendment does not rewrite original §§ 1–8 or prior amendments. Qual/live remain 5m, risk policy remains `rm_v1`. OOS **thresholds** are unchanged: `MIN_BACKTEST_TRADES` = 30, `MIN_BACKTEST_SHARPE` = 0.30, must beat buy-and-hold, must beat `sma_stack`, all-windows non-negative is diagnostic only, fail-once never-retest stays. `QUAL_N_WINDOWS` = 23, `QUAL_WINDOW_DAYS` = 90, `QUAL_WINDOW_BARS` = 25920, `QUAL_COVERAGE_DAYS` = 2070, `QUAL_STRIDE` = 1 stay. Discovery walk-forwards stay on the Windows farm; cluster `live_cycle` keeps discovery off (`DISCOVERY_ON_CYCLE=0`). **Still paper.** Do not cull existing champions. Do not retest parked fails. Do not mint structure `N>96`.
+
+**Why.** Each ~90d window was isolated. Train/test was a 70/30 cut on that chunk only; the OOS backtest ran on `closes[cut:]` with no prior bars, so EMA/SMA/HTF/ATR returned NaN until the period filled. Longer HTF EMAs (parser-allowed `h4_ema_abv_70` needs 70 completed 4h closes = 3360 five-minute bars, plus up to 47 for an incomplete 4h bucket) were especially cold at the start of scored OOS.
+
+**What changed.** Prefix each window with prior chronological bars and score only the true OOS segment:
+
+- `QUAL_WARMUP_DAYS` = 14
+- `QUAL_WARMUP_BARS` = 4032 (14 × 24 × 12). Covers `h4_ema_abv_70` (3360+47) and structure lookbacks ≤96. Binding HTF, not a 2–4 week grab; leftover tape after 23 × 25920 is 4627 bars, so the first window gets a full pad on the measured jensa file without shrinking the 90d hold-outs.
+- Loader keep / worker keep is `QUAL_WINDOW_BARS * QUAL_N_WINDOWS + QUAL_WARMUP_BARS` (`qual_keep_bars()`, 600192). Fetch `_DEFAULT_BARS` tracks that plus 3000 slack.
+- `_window_slices` still end-aligns the last `window_size * n_windows` scored bars. Each slice is `[max(0, scored_start - pad):scored_end]`. First window uses whatever prefix exists (partial warm-up) rather than failing the eval. Warm-up is previous history, never future bars.
+- `backtest(..., score_from=, score_to=)` opens counted trades only inside the scored range. Qual OOS: `score_from=cut` (warmup + 70% of the 90d window). Train is also warm-started (`score_from=warmup`) as a diagnostic. Cash starts at 10k at the scored start — no warmup PnL.
+- B&H stays on OOS closes only (`closes[cut:]`). `sma_stack` OOS uses the same warm path as strategies. Discovery records' OOS trades/PnL/Sharpe exclude the pad.
+
+**Existing log.** No automatic re-qualify. Fail-once stays. Admits already in `discovery_log.json` keep their prior window-count / cold-start metrics.
+
+**Cost.** Slightly more bars per window (the pad). Window **count** is still 23; throughput remains the ~3× vs 8-window note from the same-day full-tape amendment, not a further k8s change. Discovery stays off-cluster.
+
+**What did not change.** Sharpe 0.30, 30 OOS trades, beat B&H, beat `sma_stack`, 5m, `rm_v1`, all-windows diagnostic only, fail-once. Per-window 90d, `QUAL_N_WINDOWS` = 23, `QUAL_WINDOW_BARS` = 25920. Recipe mint families unchanged. Existing champions are not culled.
+
+**Superseded on this date** (prior text kept above for history):
+
+- Same-date "full-tape walk-forward" insofar as `_load_qual_history` / fetch `_DEFAULT_BARS` kept only `window_size * n_windows` (no pad) and OOS `backtest` ran on `closes[cut:]` alone. 23 × 90d coverage, `QUAL_WINDOW_BARS` = 25920, `QUAL_STRIDE` = 1, and the OOS **thresholds** are not superseded.
 
 
 
