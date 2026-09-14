@@ -204,11 +204,16 @@ the farm stays idle until Start.
   `h4_ema_abv_30` / `h4_ema_abv_36` / `h4_ema_abv_48` /
   `h4_sma_abv_20` / `h4_sma_abv_24` / `h4_sma_abv_30` / `h4_sma_abv_50`,
   plus `h1_ema_abv_{12,40,50}` / `h1_sma_abv_{15,36,40}`,
-  winner `regime&mom&mild_dip` 3-atoms first (not structure),
+  then unused `h1_ema_abv_{60,70}` / `h1_sma_abv_{12,50,60}` /
+  `h4_ema_abv_{15,40,60}` / `h4_sma_abv_{12,15,36,40}`,
+  **fresh** winner-shaped 3–5 first (`sma_abv_30` / `ema_abv_30` /
+  `rsi_14_>55`, not depth-7 `near_swing` spam),
+  then drained `regime&mom&mild_dip` 3-atoms (not structure),
   then 4–7 atom admit-island stacks (depth 4–5 first),
   mom-before-dip, `REGIME_DIP_PRIORITY`
   (`dip_24b_lt5pc` / `dip_24b_lt6pc` / `dip_18b_lt2pc`),
-  plus `MOM_FILTERS_HTF_DENSE` / `MOM_FILTERS_HTF_EXPAND`).
+  plus `MOM_FILTERS_HTF_DENSE` / `MOM_FILTERS_HTF_EXPAND` /
+  `MOM_FILTERS_HTF_FRESH`).
 - No culling champions.
 - Do not point `PAPER_STATE` at the cluster PVC.
 - Do not raise `DISCOVERY_STRUCTURE_LOOKBACK_MAX` / disable the timeout
