@@ -16,18 +16,19 @@ this file is the living topology.
 |---|---|---|
 | **Mint** | `hedge_fund/trading/refill.py` on the farm | Bounded DIP/MOM + structure AND recipe (`STRUCTURE_NS` through **96** — no `don_hi` / `don_lo` / `near_swing_*` / `dbl_bot` `N>96`), plus densified HTF buyer-regime ANDs (`h1_ema_abv_{12,15,18,20,24,30,36,40,50,60,70}` / `h1_sma_abv_{12,15,20,24,30,36,40,50,60}` / `h4_ema_abv_{12,15,20,24,30,36,40,48,60}` / `h4_sma_abv_{12,15,20,24,30,36,40,50}`). **Fresh never-tested families first**: unused HTF/mom (`REGIME_ATOMS_FRESH` / `MOM_FILTERS_HTF_FRESH`) and winner-shaped 3–5 stacks (REGIME+MOM × `sma_abv_30` / `ema_abv_30` × rsi-or-mild-dip, plus `rsi_14_>55`). Then drained admit-island **3-atoms first**: `regime&mom&mild_dip` then `regime&mom&sma_abv_50` / `ema_abv_20` (not HTF×mom×structure). Then **4–7 atom role-bucket stacks** on that island (depth 4–5 first, then 6–7; REGIME+MOM spine, 0–2 continuation, 0–1 mild dip, 0–1 RSI, cheap `near_swing_hi` N≤48 only at depth 7 — deprioritized). Then HTF×mom 2-atom (`regime&mom`, including `MOM_FILTERS_HTF_DENSE` / `MOM_FILTERS_HTF_EXPAND` / `MOM_FILTERS_HTF_FRESH`) — 2-atom only vs expensive structure — then HTF×dip 2-atom only. Mom-before-dip: `mom_18b_gt2pc` first among regime mom bases, `dip_24b_lt5pc` / `dip_24b_lt6pc` / `dip_18b_lt2pc` first among regime dip bases (`REGIME_DIP_PRIORITY`). When never-tested leftovers run dry, the next handful is appended to `state/discovery_extended.json`. Static `generate_universe()` stays inside the ~40–120 compiled-list band. |
 | **Farm** | Alexander's Windows PC (`jensa`) | `scripts/discovery_worker.py` evaluates names against local `state/crypto_history_5m.json` (Binance 5m, **BTC/USDT and ETH/USDT only**). Same fail-once / auto-refill / aggregate-OOS / `rm_v1` / 5m rules as `scripts/tournament_engine.py`. Before walk-forward: structure lookback cap (`DISCOVERY_STRUCTURE_LOOKBACK_MAX` = 96) fail-parks `lookback_too_expensive`; 600s eval timeout is a backstop only. Ops/throughput, not a gate softening. |
-| **Eval** | lookback guard → `parse_strategy` → walk-forward → backtest → gate | Name string → structure lookback cap → AND atoms on native 5m → 8 chronological ~90d windows → `rm_v1` paper backtest → aggregate OOS in `hedge_fund/trading/qualify.py`. |
+| **Eval** | lookback guard → `parse_strategy` → walk-forward → backtest → gate | Name string → structure lookback cap → AND atoms on native 5m → 23 chronological ~90d windows → `rm_v1` paper backtest → aggregate OOS in `hedge_fund/trading/qualify.py`. |
 | **Ingest** | `POST /api/discovery/ingest` | Token-gated. Pass → champion + isolated paper book on k8s. Fail → parked forever (fail-once). Ingest never culls existing champions. |
 | **Prod** | k8s cycle sidecar | `DISCOVERY_ON_CYCLE=0` — live trading only (`run_isolated` → collect → report). Do not turn discovery back on in-cluster. UI: `/discovery`. |
 | **Farm Start/Stop** | `/discovery` → `POST /api/discovery/farm` | Same ingest token. Worker **idles** (does not exit). Start cannot relaunch a dead process. |
 | **Champion pool ops** | `POST /api/champions/retain` and `POST /api/champions/cull_undated` | Same ingest token. Explicit paper-ops exception: drop names from `champions.json` so `live_cycle` stops them. Does not delete trade DBs. `cull_undated` keeps only non-empty `champion_since`. |
 
-**Current walk-forward (after [#43](https://github.com/Runemark7/paper-trading-bot/pull/43)):**
-`QUAL_N_WINDOWS` = 8, `QUAL_WINDOW_DAYS` = 90, `QUAL_COVERAGE_DAYS` = 720
-(~2y of native 5m). Per-window size stays 90d (honest hold-outs, not one
-giant in-sample). Parked 3-window evals stay parked — ingest requalify
-needs stored `regimes_tested` = 8. Re-fetch `crypto_history_5m.json` on
-jensa so the tape actually covers the span.
+**Current walk-forward (full jensa 5m tape):**
+`QUAL_N_WINDOWS` = 23, `QUAL_WINDOW_DAYS` = 90, `QUAL_COVERAGE_DAYS` = 2070
+(~5.67y of native 5m; 23 × 90). Per-window size stays 90d (honest hold-outs,
+not one giant in-sample). Existing discovery_log admits were under 8 × 90d
+(~720d) — no automatic re-qualify. Parked 8-window and 3-window evals stay
+parked (fail-once). Ingest requalify needs stored `regimes_tested` = 23.
+jensa `crypto_history_5m.json` already covers this span (~600787 bars).
 
 **FROZEN OOS gates** (do not edit here to "make names pass"):
 
@@ -62,7 +63,7 @@ flowchart TB
 
   guard{"structure lookback > 96?\nor eval_timeout 600s"}
   parse["parse_strategy(name) in dynamic.py\nAND atoms on native 5m\n+ causal HTF regime from 5m"]
-  wf["Walk-forward 8 x 90d"]
+  wf["Walk-forward 23 x 90d"]
   bt["Backtest rm_v1"]
   gate["Aggregate OOS gate\nhedge_fund/trading/qualify.py"]
   worker --> guard
@@ -108,7 +109,7 @@ flowchart LR
   cap{"don_hi / don_lo / near_swing / dbl_bot N > 96?"}
   atoms["Atoms on native 5m\nAND joins"]
   pred["Predicate pred"]
-  windows["8 chronological windows\n70/30 train/test each"]
+  windows["23 chronological windows\n70/30 train/test each"]
   score["Aggregate OOS score\ntrades, Sharpe, beat B and H, beat sma_stack"]
   decision{"qualify.py"}
   passNode["Pass: ingest admit"]
@@ -178,7 +179,7 @@ flowchart TB
   shipped["SHIPPED v1 + densify + 2026-09-14 neighbors + unused:\nh1_ema_abv_12/15/18/20/24/30/36/40/50/60/70\nh1_sma_abv_12/15/20/24/30/36/40/50/60\nh4_ema_abv_12/15/20/24/30/36/40/48/60\nh4_sma_abv_12/15/20/24/30/36/40/50"]
   order["fresh 3-5 / unused HTF-mom first:\nHTF x mom x sma_abv_30 / ema_abv_30 / rsi\nthen drained winner 3-atoms\nthen 4-7 atom role-bucket stacks\n(depth 4-5 then 6-7; near_swing last)\nthen mom-before-dip:\nHTF x mom 2-atom only vs expensive structure\nthen HTF x dip 2-atom"]
   mintOnly["AND into refill recipe only\nnew names in discovery_extended.json"]
-  sameEval["Same 5m walk-forward + rm_v1\n8 x 90d"]
+  sameEval["Same 5m walk-forward + rm_v1\n23 x 90d"]
   sameGate["Same frozen OOS gates\nin qualify.py"]
 
   shipped --> order --> mintOnly --> sameEval --> sameGate

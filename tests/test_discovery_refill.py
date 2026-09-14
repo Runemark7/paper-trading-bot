@@ -554,7 +554,7 @@ class RecipeBoundsTests(unittest.TestCase):
         # Frozen OOS gate — recipe expansion must not touch these.
         self.assertEqual(MIN_BACKTEST_TRADES, 30)
         self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
-        self.assertEqual(QUAL_N_WINDOWS, 8)
+        self.assertEqual(QUAL_N_WINDOWS, 23)
         # Later passes sit on top of 09-11 / morning near-level, not a rewrite.
         self.assertGreater(len(names), len(_snapshot_2026_09_11_recipe(STRUCTURE_NS)))
         self.assertGreater(len(names), len(_snapshot_2026_09_12_morning()))
@@ -1091,7 +1091,7 @@ class RefillBatchTests(unittest.TestCase):
         self.assertNotIn("h1_ema_abv_24&dip_24b_lt4pc", added)
         self.assertEqual(MIN_BACKTEST_TRADES, 30)
         self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
-        self.assertEqual(QUAL_N_WINDOWS, 8)
+        self.assertEqual(QUAL_N_WINDOWS, 23)
 
     def test_refill_skips_when_eligible_already_feeds_the_slice(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1256,7 +1256,7 @@ class RefillBatchTests(unittest.TestCase):
         self.assertGreaterEqual(len(added), 200, msg=f"new distinct keys={len(added)}")
         self.assertEqual(MIN_BACKTEST_TRADES, 30)
         self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
-        self.assertEqual(QUAL_N_WINDOWS, 8)
+        self.assertEqual(QUAL_N_WINDOWS, 23)
         self.assertEqual(max(STRUCTURE_NS), 96)
 
     def test_refill_after_5037_taken_still_full_batch(self):
@@ -1327,7 +1327,7 @@ class RefillBatchTests(unittest.TestCase):
         self.assertTrue(name_is_parseable(seven))
         self.assertEqual(MIN_BACKTEST_TRADES, 30)
         self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
-        self.assertEqual(QUAL_N_WINDOWS, 8)
+        self.assertEqual(QUAL_N_WINDOWS, 23)
 
     def test_deep_stack_family_adds_farm_feasible_new_keys(self):
         from hedge_fund.trading.refill import _regime_deep_stacks
@@ -1358,7 +1358,7 @@ class RefillBatchTests(unittest.TestCase):
         self.assertEqual(max(STRUCTURE_NS), 96)
         self.assertEqual(MIN_BACKTEST_TRADES, 30)
         self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
-        self.assertEqual(QUAL_N_WINDOWS, 8)
+        self.assertEqual(QUAL_N_WINDOWS, 23)
 
     def test_next_refill_batch_fills_deep_stacks_against_large_taken(self):
         taken = set(_snapshot_pre_deep_stack_recipe()) | set(generate_universe())
@@ -1403,7 +1403,7 @@ class RefillBatchTests(unittest.TestCase):
         self.assertEqual(added[0], "h1_ema_abv_20&mom_18b_gt2pc&sma_abv_30")
         self.assertEqual(MIN_BACKTEST_TRADES, 30)
         self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
-        self.assertEqual(QUAL_N_WINDOWS, 8)
+        self.assertEqual(QUAL_N_WINDOWS, 23)
 
     def test_max_names_one_refills_only_when_eligible_empty(self):
         self.assertEqual(DISCOVER_CYCLE_MAX_NAMES, 1)

@@ -90,9 +90,9 @@ def _load_qual_history(keep_bars: int | None = None) -> dict | None:
     """5m tape only. A 4h-only state dir must not admit anyone.
 
     Qualification windows only need the last ``window_size * n_windows`` bars
-    (default 8×25920 ≈ 720 calendar days). Extra history and unused symbols
-    (SOL/XRP) are dropped immediately after parse so peak RSS is not the
-    full fetch file.
+    (default 23×25920 ≈ 2070 calendar days, ~5.67y). Extra history and unused
+    symbols (SOL/XRP) are dropped immediately after parse so peak RSS is not
+    the full fetch file.
     """
     path = _hist_qual()
     if not path.exists():

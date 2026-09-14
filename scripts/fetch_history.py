@@ -10,7 +10,7 @@ Discovery qualification reads crypto_history_5m.json (HIST_TIMEFRAME=5m).
 
 Usage:
   python scripts/fetch_history.py
-  HIST_TIMEFRAME=5m HIST_BARS=210000 python scripts/fetch_history.py
+  HIST_TIMEFRAME=5m HIST_BARS=599000 python scripts/fetch_history.py
   HIST_TIMEFRAME=4h HIST_BARS=20000 python scripts/fetch_history.py
   HIST_SYMBOLS=BTC/USDT,ETH/USDT python scripts/fetch_history.py
 """
@@ -22,7 +22,7 @@ from hedge_fund.trading.constants import QUAL_TIMEFRAME, QUAL_N_WINDOWS, QUAL_WI
 from datetime import datetime, timezone
 
 DEFAULT_TF = os.environ.get("HIST_TIMEFRAME", QUAL_TIMEFRAME)
-# Cover QUAL_N_WINDOWS × ~90d of 5m (8 × 25920 → 207360 bars, ~720d) plus slack.
+# Cover QUAL_N_WINDOWS × ~90d of 5m (23 × 25920 → 596160 bars, ~2070d) plus slack.
 # Tracks the walk-forward constants so a longer span fetches more tape.
 _DEFAULT_BARS = QUAL_WINDOW_BARS * QUAL_N_WINDOWS + 3000 if DEFAULT_TF == QUAL_TIMEFRAME else 70000
 DEFAULT_BARS = int(os.environ.get("HIST_BARS", str(_DEFAULT_BARS)))

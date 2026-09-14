@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch
 from hedge_fund.trading.constants import (
     MIN_BACKTEST_SHARPE,
     MIN_BACKTEST_TRADES,
+    QUAL_N_WINDOWS,
     QUAL_TIMEFRAME,
     RISK_POLICY,
 )
@@ -200,8 +201,8 @@ class SharedEvalEntryTests(unittest.TestCase):
         with patch("scripts.tournament_engine.evaluate_windows") as windows:
             rec = evaluate_strategy_record(
                 "dbl_bot_168",
-                [{}] * 8,
-                n_windows=8,
+                [{}] * QUAL_N_WINDOWS,
+                n_windows=QUAL_N_WINDOWS,
                 bh_oos_pnl=1.0,
                 sma_stack_oos_pnl=1.0,
             )
@@ -235,7 +236,7 @@ class WorkerLookbackAndTimeoutTests(unittest.TestCase):
                     return_value={"BTC/USDT": [1]},
                 ), patch(
                     "scripts.discovery_worker._window_slices",
-                    return_value=[{}] * 8,
+                    return_value=[{}] * QUAL_N_WINDOWS,
                 ), patch(
                     "scripts.discovery_worker._benchmark_oos",
                     return_value=(1.0, 1.0),
@@ -332,7 +333,7 @@ class WorkerLookbackAndTimeoutTests(unittest.TestCase):
                     return_value={"BTC/USDT": [1]},
                 ), patch(
                     "scripts.discovery_worker._window_slices",
-                    return_value=[{}] * 8,
+                    return_value=[{}] * QUAL_N_WINDOWS,
                 ), patch(
                     "scripts.discovery_worker._benchmark_oos",
                     return_value=(1.0, 1.0),

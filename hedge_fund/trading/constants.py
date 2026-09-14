@@ -18,17 +18,34 @@ from hedge_fund.data.binance import DEFAULT_TIMEFRAME, SUPPORTED_SYMBOLS
 # on disk unused; it must not admit champions.
 QUAL_TIMEFRAME = DEFAULT_TIMEFRAME  # "5m"
 QUAL_SYMBOLS = SUPPORTED_SYMBOLS  # BTC/USDT, ETH/USDT
-# More sequential ~90d windows once multi-year 5m tape exists — not one
-# giant in-sample. Chronological walk-forward; loader keeps the last
-# ``QUAL_WINDOW_BARS * QUAL_N_WINDOWS`` bars (scales with the constant).
-# 8 × 90d = 720 calendar days (~2y). 3 × 90d was only ~270d of the same
-# tape. Per-window size stays 90d so OOS is still a real hold-out.
-QUAL_N_WINDOWS = 8
 # ~90 calendar days of 5m per window (90 * 24 * 12). 2500 was ~1.4y of 4h
 # and would be only ~9 days of 5m — too short for OOS to mean anything.
 QUAL_WINDOW_DAYS = 90
 QUAL_WINDOW_BARS = QUAL_WINDOW_DAYS * 24 * 12  # 25920
-QUAL_COVERAGE_DAYS = QUAL_N_WINDOWS * QUAL_WINDOW_DAYS  # 720
+
+
+def qual_n_windows_for_bars(n_bars: int, window_bars: int = QUAL_WINDOW_BARS) -> int:
+    """Whole ~90d windows that fit in ``n_bars``. No partial window.
+
+    Sizes ``QUAL_N_WINDOWS`` from tape length so a deeper fetch expands
+    coverage with the same formula. Per-window size stays ``QUAL_WINDOW_BARS``.
+    """
+    wb = int(window_bars)
+    if wb <= 0:
+        return 0
+    return max(0, int(n_bars) // wb)
+
+
+# Chronological walk-forward — not one giant in-sample. Loader keeps the
+# last ``QUAL_WINDOW_BARS * QUAL_N_WINDOWS`` bars (scales with the constant).
+# jensa ``crypto_history_5m.json`` 2026-09-14: 600787 5m bars/symbol
+# (2020-12-26 → 2026-09-12 ≈ 2086.8d ≈ 5.71y). floor(600787/25920)=23;
+# 23×25920=596160. 24 would overshoot. 8 × 90d was only ~720d (~2y) of
+# the same tape. Per-window size stays 90d so OOS is still a real hold-out.
+# Update ``QUAL_TAPE_BARS_MEASURED`` when a deeper fetch lands.
+QUAL_TAPE_BARS_MEASURED = 600787
+QUAL_N_WINDOWS = qual_n_windows_for_bars(QUAL_TAPE_BARS_MEASURED)  # 23
+QUAL_COVERAGE_DAYS = QUAL_N_WINDOWS * QUAL_WINDOW_DAYS  # 2070
 QUAL_STRIDE = 1  # native 5m; do not downsample
 RISK_POLICY = "rm_v1"
 

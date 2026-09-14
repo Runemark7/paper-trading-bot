@@ -116,6 +116,7 @@ over a meaningful sample, AND calibration is demonstrated independently of P&L.
 | 2026-09-14 | Same-date amendment: refill mint expands around the winning HTF×mom island. Extra distinct `h1`/`h4` EMA/SMA periods and unused mom lookbacks/% (`MOM_FILTERS_HTF_EXPAND`) stay distinct under `near_duplicate_key`. Selective 3-atoms `regime&mom&mild_dip` and `regime&mom&sma_abv_50` / `ema_abv_20` emit first (not HTF×mom×structure). Farm was eligible=0 after ~5037 unique fails. Fail-once stays. `STRUCTURE_NS` still ≤96. No named candlesticks. Static list unchanged. Paper only; OOS gates unchanged. |
 | 2026-09-14 | Same-date later: `GET /api/discovery/summary?compact=1` omits tested / queued / extended_names / in-flight name lists so Champions teaser and farm polls do not ship the unique-tested log (grew with mint #59/#60). Full lists stay on `/discovery`. UI error boundary on Champions/detail. Paper only; OOS gates unchanged. |
 | 2026-09-14 | Same-date later: refill mint un-dries again. Unused distinct HTF periods / mom lookbacks/% (`REGIME_ATOMS_FRESH` / `MOM_FILTERS_HTF_FRESH`) and winner-shaped 3–5 stacks (`sma_abv_30` / `ema_abv_30` continuation × rsi-or-mild-dip, `rsi_14_>55`) emit **first**. Farm was eligible=0 after ~7200 unique / last eval ~12:49Z; depth-7 `near_swing` mostly 0-trade fails. Fail-once stays. `STRUCTURE_NS` still ≤96. No named candlesticks. Static list unchanged. Paper only; OOS gates unchanged. |
+| 2026-09-14 | Same-date later: walk-forward calendar coverage extends to 23 × ~90d of native 5m (`QUAL_N_WINDOWS` = 23, `QUAL_WINDOW_DAYS` = 90, `QUAL_COVERAGE_DAYS` = 2070, ~5.67y) so new evals use the whole jensa 5m tape (~600787 bars). Per-window size stays 90d. OOS **thresholds** unchanged. Existing 8-window admits stay; no automatic re-qualify; fail-once parks stay parked. Throughput ~3× slower per name on jensa; sync worker/constants out of band. Still paper. |
 
 ### Amendment 2026-08-30 — what actually runs
 
@@ -930,6 +931,35 @@ Then the drained prefix: winner 3-atoms (`regime&mom&mild_dip` / old continuatio
 **Superseded on this date** (prior text kept above for history):
 
 - Same-date "densify 4–7 atom admit-island stacks" insofar as `_regime_ands` froze with winner 3-atoms first and the HTF/mom grids omitted unused 60/70/sma-12/gt8 canons. Depth-7 cheap `near_swing_hi` N≤48 may remain last in that family; do not expand it. Fail-once, farm ingest, cycle budget, OOS **thresholds**, `QUAL_N_WINDOWS`, `STRUCTURE_NS` ≤96, the shipped v1 HTF parser, and the static 40–120 compiled-list band are not superseded.
+
+### Amendment 2026-09-14 — full-tape walk-forward (23 × ~90d)
+
+This amendment does not rewrite original §§ 1–8 or prior amendments. Qual/live remain 5m, risk policy remains `rm_v1`. OOS **thresholds** are unchanged: `MIN_BACKTEST_TRADES` = 30, `MIN_BACKTEST_SHARPE` = 0.30, must beat buy-and-hold, must beat `sma_stack`, all-windows non-negative is diagnostic only, fail-once never-retest stays. `DISCOVERY_LOG_CAP` = 10000, `DISCOVERY_REFILL_BATCH_SIZE` = 16 stay. Discovery walk-forwards stay on the Windows farm (`scripts/discovery_worker.py` → `/api/discovery/ingest`); cluster `live_cycle` keeps discovery off (`DISCOVERY_ON_CYCLE=0`). Do not raise the k8s cycle discovery budget — longer tape is a jensa cost. Cycle remains 24/7. No live-slot cap. **Still paper.** `GRADUATED_PAPER` meaning is unchanged. Do not cull existing champions. Do not retest parked fails. Do not mint structure `N>96`.
+
+**Why.** Alexander wants discovery OOS tested on the **whole** ~5.7y of 5m BTC/ETH on jensa, not 8 × 90d ≈ 2y. Measured `state/crypto_history_5m.json` on 2026-09-14: BTC/USDT and ETH/USDT ~600787 bars each, 2020-12-26 → 2026-09-12 ≈ 2086.8 days ≈ 5.71y. Bars/day at 5m = 288 → max full 90d windows that fit: floor(600787/25920) = **23** (23×25920=596160 ≤ 600787). 24 would overshoot. Qual still loaded only the last `QUAL_WINDOW_BARS * QUAL_N_WINDOWS` bars; with `QUAL_N_WINDOWS` = 8 that was ~720 calendar days of a tape that already covers ~5.7y.
+
+**What changed.** More sequential ~90d windows, same per-window size (honest walk-forward: train/test split inside each window, chronological, no single giant in-sample):
+
+- `QUAL_N_WINDOWS` = 23 (was 8)
+- `QUAL_WINDOW_DAYS` = 90 (unchanged)
+- `QUAL_WINDOW_BARS` = 25920 (unchanged; 90 × 24 × 12)
+- `QUAL_COVERAGE_DAYS` = 2070 (23 × 90)
+- `QUAL_STRIDE` = 1 (unchanged)
+- `qual_n_windows_for_bars(n_bars)` sizes window count from tape length (`n_bars // QUAL_WINDOW_BARS`). `QUAL_N_WINDOWS` is that value for the measured jensa tape (`QUAL_TAPE_BARS_MEASURED` = 600787). A deeper future fetch: update the measured bar count so keep_bars / fetch default expand.
+
+`_load_qual_history` / the Windows worker still keep the last `window_size * n_windows` bars. That pattern scales with the constants: 23 windows → ~596160 five-minute bars loaded from the same file; leftover bars past 23 whole windows are trimmed.
+
+**Fetch.** `scripts/fetch_history.py` `_DEFAULT_BARS` still tracks `QUAL_WINDOW_BARS * QUAL_N_WINDOWS + 3000` (~599k five-minute bars for the 23 × 90d span). `HIST_FETCH_PAGE_CAP` = 2500 unchanged. jensa tape already covers this span — no re-fetch required unless the file is shorter than 23 × 25920.
+
+**Existing log.** Admits and fails already in `discovery_log.json` were evaluated under 8 × 90d (or earlier 3 × 90d). This change applies to **new** evals going forward. No automatic re-qualify. Do not clear `discovery_log`. Fail-once stays: parked names are not re-walked. Ingest requalify from stored aggregates still requires `regimes_tested` to match the current window count (23), so an 8-window row cannot flip to a 23-window admit.
+
+**Cost.** Twenty-three 90d windows is slower than eight on jensa (~3× bars per `evaluate_windows`). Mention it; do not throttle the live k8s sidecar to compensate. Discovery stays off-cluster. Sync `hedge_fund/trading/constants.py` (and `scripts/tournament_engine.py` / `scripts/discovery_worker.py` if they are copied rather than imported) to jensa after merge — out of band for this PR.
+
+**What did not change.** Sharpe 0.30, 30 OOS trades, beat B&H, beat `sma_stack`, 5m, `rm_v1`, all-windows diagnostic only, fail-once. Per-window 90d, `QUAL_WINDOW_BARS` = 25920, `QUAL_STRIDE` = 1. Recipe mint families unchanged. Existing champions are not culled.
+
+**Superseded on this date** (prior text kept above for history):
+
+- 2026-09-12 "multi-year walk-forward calendar coverage" insofar as it froze `QUAL_N_WINDOWS` = 8 and ~720d of tape. Per-window 90d, `QUAL_WINDOW_BARS` = 25920, `QUAL_STRIDE` = 1, and the OOS **thresholds** are not superseded.
 
 
 

@@ -10,7 +10,7 @@ path as ``scripts/discovery_worker.py``:
 
 Reduced size (documented, topology only — not a live-gate change):
 
-    PARITY_N_WINDOWS = QUAL_N_WINDOWS  # 8, same as live
+    PARITY_N_WINDOWS = QUAL_N_WINDOWS  # 23, same as live
     PARITY_WINDOW_BARS = 960           # ~3.3 calendar days of 5m
     live QUAL_WINDOW_BARS              # 25920 = 90 calendar days of 5m
     PARITY_STRIDE = QUAL_STRIDE        # 1, native 5m, no skip
@@ -200,8 +200,8 @@ def build_golden_payload(
             "seed": PARITY_SEED,
             "note": (
                 "Reduced per-window bar count for CI. Same evaluate_strategy_record "
-                "/ evaluate_windows / rm_v1 / 70-30 split / QUAL_N_WINDOWS=8 path "
-                "as discovery_worker. Live windows stay 8 × 25920."
+                "/ evaluate_windows / rm_v1 / 70-30 split / QUAL_N_WINDOWS path "
+                "as discovery_worker. Live windows stay QUAL_N_WINDOWS × 25920."
             ),
         },
         "bh_oos_pnl": None if bh is None else round(bh, 2),

@@ -31,7 +31,10 @@ from hedge_fund.trading.constants import (
     GRADUATED_PAPER,
     MIN_BACKTEST_SHARPE,
     MIN_BACKTEST_TRADES,
+    QUAL_COVERAGE_DAYS,
+    QUAL_N_WINDOWS,
     QUAL_TIMEFRAME,
+    QUAL_WINDOW_DAYS,
     RISK_POLICY,
     TRADE_EVALUATION_LIMIT,
 )
@@ -171,7 +174,7 @@ Discovery qualifies on the same {QUAL_TIMEFRAME} tape and <code>{RISK_POLICY}</c
 <div class="wrap"><table><thead><tr>
 <th>Piece</th><th>What actually runs</th>
 </tr></thead><tbody>
-<tr><td>Universe</td><td>Explicit ~50-name 5m list (was 3546 combinatorial clones). Lookbacks in names are bar counts (e.g. <code>dip_24b</code> = 24×5m = 2 hours). <code>daily()</code>/<code>h1()</code>/<code>m5()</code> and MFI are not generated. Empty-pool fallback: <code>PAPER_STRATEGY=sma_stack</code>. Never-tested leftover names drain 24/7 across cycles: each tournament invocation takes a time-shared slice (not a 30-name sample, not the whole leftover list in one blocking run). A non-qualified discovery eval parks that name forever — no 24h retest cooldown. One eval is cheaper (causal EMA/WaveTrend cache, trim 5m history to the 8×90d span, ~720 calendar days) without changing OOS gates or per-window length.</td></tr>
+<tr><td>Universe</td><td>Explicit ~50-name 5m list (was 3546 combinatorial clones). Lookbacks in names are bar counts (e.g. <code>dip_24b</code> = 24×5m = 2 hours). <code>daily()</code>/<code>h1()</code>/<code>m5()</code> and MFI are not generated. Empty-pool fallback: <code>PAPER_STRATEGY=sma_stack</code>. Never-tested leftover names drain 24/7 across cycles: each tournament invocation takes a time-shared slice (not a 30-name sample, not the whole leftover list in one blocking run). A non-qualified discovery eval parks that name forever — no 24h retest cooldown. One eval is cheaper (causal EMA/WaveTrend cache, trim 5m history to the {QUAL_N_WINDOWS}×{QUAL_WINDOW_DAYS}d span, ~{QUAL_COVERAGE_DAYS} calendar days) without changing OOS gates or per-window length.</td></tr>
 <tr><td>Decision cycle</td><td>Every {CYCLE_INTERVAL_SECONDS}s on {QUAL_TIMEFRAME} closes, around the clock. Heartbeat stays frequent and does not open trades.</td></tr>
 <tr><td>Accounts</td><td>One €10k paper book per champion (<code>run_isolated</code>). No homemade live-slot cap; universe size (~40–120) is the combinatorial bound. <code>run.py</code> uses the same cycle on a single account (champion override, else sma_stack).</td></tr>
 <tr><td>Stated probability</td><td>Beta-Binomial calibration of a deterministic RSI/score heuristic — not an LLM, not a constant 0.60. Cold-start blends the proposal; after 20 trials the posterior mean dominates.</td></tr>

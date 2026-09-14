@@ -204,7 +204,7 @@ class HistoryTrimTests(unittest.TestCase):
         self.assertEqual(data["BTC/USDT"][0], payload["BTC/USDT"][-keep])
         self.assertEqual(data["BTC/USDT"][-1], payload["BTC/USDT"][-1])
 
-    def test_eight_windows_are_chronological_full_size_holdouts(self):
+    def test_qual_windows_are_chronological_full_size_holdouts(self):
         from hedge_fund.trading.constants import QUAL_N_WINDOWS
 
         window_size = 10

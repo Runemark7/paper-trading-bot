@@ -8,9 +8,9 @@ Exercises the live path used by ``scripts/discovery_worker.py``:
 ``evaluate_strategy_record`` → ``evaluate_windows`` → ``bs.backtest``
 (not ``hedge_fund.backtest.fast_quant``).
 
-Fixture is trimmed: 8 × 960 5m bars/symbol (~3.3d/window), not jensa's
-8 × 25920. Same window count, stride, 70/30 cut, rm_v1, and frozen
-gates. See ``tests/fixtures/walkforward_parity.py``.
+Fixture is trimmed: QUAL_N_WINDOWS × 960 5m bars/symbol (~3.3d/window), not
+jensa's QUAL_N_WINDOWS × 25920. Same window count, stride, 70/30 cut, rm_v1,
+and frozen gates. See ``tests/fixtures/walkforward_parity.py``.
 """
 from __future__ import annotations
 
@@ -90,7 +90,7 @@ class FrozenQualifyGatesTests(unittest.TestCase):
     def test_oos_gate_thresholds_untouched(self):
         self.assertEqual(MIN_BACKTEST_TRADES, 30)
         self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
-        self.assertEqual(QUAL_N_WINDOWS, 8)
+        self.assertEqual(QUAL_N_WINDOWS, 23)
         self.assertEqual(PARITY_N_WINDOWS, QUAL_N_WINDOWS)
         self.assertEqual(QUAL_STRIDE, 1)
         self.assertEqual(PARITY_STRIDE, QUAL_STRIDE)
@@ -122,7 +122,7 @@ class WalkForwardParityTests(unittest.TestCase):
     def test_fixture_meta_matches_live_topology(self):
         meta = self.payload["meta"]
         gmeta = self.golden["meta"]
-        self.assertEqual(meta["n_windows"], 8)
+        self.assertEqual(meta["n_windows"], QUAL_N_WINDOWS)
         self.assertEqual(meta["window_bars"], PARITY_WINDOW_BARS)
         self.assertEqual(meta["stride"], 1)
         self.assertEqual(meta["live_window_bars"], QUAL_WINDOW_BARS)
@@ -175,8 +175,8 @@ class WalkForwardParityTests(unittest.TestCase):
                     exp["record"].get(key),
                     path=f"{name}.record.{key}",
                 )
-            self.assertEqual(len(got["windows"]), 8, name)
-            self.assertEqual(len(exp["windows"]), 8, name)
+            self.assertEqual(len(got["windows"]), QUAL_N_WINDOWS, name)
+            self.assertEqual(len(exp["windows"]), QUAL_N_WINDOWS, name)
             for i, (gw, ew) in enumerate(zip(got["windows"], exp["windows"])):
                 for key in WINDOW_COMPARE_KEYS:
                     _assert_close(
@@ -191,7 +191,7 @@ class WalkForwardParityTests(unittest.TestCase):
             rec = row["record"]
             self.assertEqual(rec["timeframe"], "5m")
             self.assertEqual(rec["risk_policy"], "rm_v1")
-            self.assertEqual(rec["regimes_tested"], 8)
+            self.assertEqual(rec["regimes_tested"], QUAL_N_WINDOWS)
             self.assertIsInstance(rec["qualified"], bool)
             self.assertIsInstance(rec["fail_reasons"], list)
             self.assertIsInstance(rec["trades"], int)
