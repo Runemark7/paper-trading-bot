@@ -51,7 +51,11 @@ emit **first** so dry refill does not stall on already-parked depth-7
 ``near_swing`` names. Same-date later: never AND ``mom_*_gt*`` with
 ``dip_*`` in the same stack (trades=0 on the full tape; RSI siblings
 stay). Already-queued mom∧dip extended names may still drain once
-(fail-once). Still no named candlesticks. OOS gates unchanged.
+(fail-once). Same-date later: un-dry from the admit island —
+unused continuation ``sma_abv_40`` / ``ema_abv_40`` (distinct from
+20/30/50), ``rsi_14_>60``, intermediate mom (not short-12),
+``h1_sma_abv_70``, and DEEP 4–5 stacks on paid-off ``h1_*_abv_50/60``
+spines emit **first**. Still no named candlesticks. OOS gates unchanged.
 """
 from __future__ import annotations
 
@@ -171,13 +175,16 @@ REGIME_ATOMS_PRIOR: tuple[str, ...] = (
 # 2026-09-14 later: unused canons. Verified against _round_period:
 # 60→60, 70→70, 12→10 (h1/h4 sma; h1 ema 12 already minted),
 # 15→15, 36→35, 40→40. Do not mint h1_ema_abv_8 (8→10, same as 12)
-# or h4_ema_abv_50 / h4_sma_abv_48 (48→50).
+# or h4_ema_abv_50 / h4_sma_abv_48 (48→50). Same-date later:
+# h1_sma_abv_70 (70→70, twin of minted ema_70). Skip 25 (24→25)
+# and 80/90 (far from the 20–60 admit island).
 REGIME_ATOMS_FRESH: tuple[str, ...] = (
     "h1_ema_abv_60",
     "h1_ema_abv_70",
     "h1_sma_abv_12",
     "h1_sma_abv_50",
     "h1_sma_abv_60",
+    "h1_sma_abv_70",
     "h4_ema_abv_15",
     "h4_ema_abv_40",
     "h4_ema_abv_60",
@@ -222,9 +229,12 @@ DEEP_STACK_REGIME: tuple[str, ...] = (
     "h1_ema_abv_24",
     "h1_ema_abv_30",
     "h1_ema_abv_50",
+    "h1_ema_abv_60",
     "h1_sma_abv_20",
     "h1_sma_abv_24",
     "h1_sma_abv_30",
+    "h1_sma_abv_50",
+    "h1_sma_abv_60",
 )
 DEEP_STACK_TREND: tuple[str, ...] = (
     "sma_abv_50",
@@ -249,11 +259,67 @@ FRESH_CONT_ATOMS: tuple[str, ...] = (
     "ema_abv_30",
 )
 FRESH_RSI: str = "rsi_14_>55"
-FRESH_STACK_REGIME: tuple[str, ...] = REGIME_ADMIT_ATOMS + (
-    "h1_sma_abv_12",
+# 2026-09-14 later: unused continuation 40 (40→40, distinct from
+# 20/30/50) and rsi_14_>60 (60→60, distinct from >50/>55). Skip
+# sma_abv_25 (too close to 20/30 in spirit, still free) as the
+# primary undry — 40 sits between paid-off 30 and 50.
+UNDRY_CONT_ATOMS: tuple[str, ...] = (
+    "sma_abv_40",
+    "ema_abv_40",
+)
+UNDRY_RSI: str = "rsi_14_>60"
+# Admit-island first so dry refill hits highest-EV spines before
+# drained leftovers. Neighbors (15/18/36/12/40/70) follow.
+# h1_ema_abv_70 already had 2-atoms; it lacked winner stacks.
+FRESH_STACK_REGIME: tuple[str, ...] = (
+    "h1_ema_abv_20",
+    "h1_ema_abv_24",
+    "h1_ema_abv_30",
+    "h1_ema_abv_50",
+    "h1_ema_abv_60",
+    "h1_sma_abv_20",
+    "h1_sma_abv_24",
+    "h1_sma_abv_30",
     "h1_sma_abv_50",
     "h1_sma_abv_60",
+    "h1_ema_abv_15",
+    "h1_ema_abv_18",
+    "h1_ema_abv_36",
+    "h1_ema_abv_12",
+    "h1_ema_abv_40",
+    "h1_ema_abv_70",
+    "h1_sma_abv_15",
+    "h1_sma_abv_36",
+    "h1_sma_abv_40",
+    "h1_sma_abv_12",
+    "h1_sma_abv_70",
+)
+# Paid-off 50/60 spines were FRESH 3–4 only; they lacked
+# REGIME_CONT (sma_abv_50 / ema_abv_20) 3-atoms. Emit those in
+# the undry prefix. ema_50 is already in REGIME_ADMIT_ATOMS.
+UNDRY_GAP_REGIME: tuple[str, ...] = (
     "h1_ema_abv_60",
+    "h1_sma_abv_50",
+    "h1_sma_abv_60",
+)
+UNDRY_GAP_CONT: tuple[str, ...] = (
+    "sma_abv_50",
+    "ema_abv_20",
+)
+# Skip mom_12b on the undry prefix (research + Sharpe near-miss).
+UNDRY_MOM_PRIORITY: tuple[str, ...] = (
+    "mom_18b_gt2pc",
+    "mom_24b_gt2pc",
+)
+# Intermediate mom lookbacks/% unused vs MOM_FILTERS + DENSE +
+# EXPAND + FRESH. Not short-12. 36b–66b = 3h–5.5h on 5m.
+MOM_FILTERS_HTF_INTERMEDIATE: tuple[str, ...] = (
+    "mom_36b_gt8pc",
+    "mom_42b_gt6pc",
+    "mom_48b_gt8pc",
+    "mom_54b_gt6pc",
+    "mom_60b_gt4pc",
+    "mom_66b_gt4pc",
 )
 # Short-continuation mom around the first admit (12–24b / gt2–gt4).
 # near_duplicate_key: lb rounds to 6, thr to even. gt3pc→gt4pc so
@@ -690,6 +756,50 @@ def _regime_pair_ands(
             yield f"{regime}&{entry}"
 
 
+def _regime_undry_winner_shaped() -> Iterator[str]:
+    """Admit-island densify. Emit first on dry refill.
+
+    Unused continuation ``sma_abv_40`` / ``ema_abv_40`` and
+    ``rsi_14_>60`` on ``FRESH_STACK_REGIME`` (island first). Gap-fill
+    ``sma_abv_50`` / ``ema_abv_20`` 3-atoms on paid-off 50/60 spines
+    that lacked ``REGIME_CONT`` coverage. Intermediate mom (not
+    short-12) on ``DEEP_STACK_REGIME`` only — 3-atom winner
+    continuation before 2-atom. Spine is REGIME+MOM. Skip
+    ``mom_12b_*`` on this prefix. Never AND a dip. No ``near_swing``
+    / ``don_hi``.
+    """
+    for regime in FRESH_STACK_REGIME:
+        for mom in UNDRY_MOM_PRIORITY:
+            for cont in UNDRY_CONT_ATOMS:
+                yield f"{regime}&{mom}&{cont}"
+    for regime in FRESH_STACK_REGIME:
+        for mom in UNDRY_MOM_PRIORITY:
+            yield f"{regime}&{mom}&{UNDRY_RSI}"
+    for regime in UNDRY_GAP_REGIME:
+        for mom in UNDRY_MOM_PRIORITY:
+            for cont in UNDRY_GAP_CONT:
+                yield f"{regime}&{mom}&{cont}"
+    for regime in FRESH_STACK_REGIME:
+        for mom in UNDRY_MOM_PRIORITY:
+            for cont in UNDRY_CONT_ATOMS:
+                yield f"{regime}&{mom}&{cont}&{DEEP_STACK_RSI}"
+    for regime in FRESH_STACK_REGIME:
+        for mom in UNDRY_MOM_PRIORITY:
+            for cont in UNDRY_CONT_ATOMS:
+                yield f"{regime}&{mom}&{cont}&{UNDRY_RSI}"
+    for regime in DEEP_STACK_REGIME:
+        for mom in MOM_FILTERS_HTF_INTERMEDIATE:
+            yield f"{regime}&{mom}&sma_abv_50"
+            yield f"{regime}&{mom}&ema_abv_20"
+    for regime in DEEP_STACK_REGIME:
+        for mom in MOM_FILTERS_HTF_INTERMEDIATE:
+            for cont in UNDRY_CONT_ATOMS:
+                yield f"{regime}&{mom}&{cont}"
+    for regime in DEEP_STACK_REGIME:
+        for mom in MOM_FILTERS_HTF_INTERMEDIATE:
+            yield f"{regime}&{mom}"
+
+
 def _regime_fresh_winner_shaped() -> Iterator[str]:
     """Never-tested 3–4 atom winner-shaped stacks. Emit first on dry refill.
 
@@ -857,8 +967,12 @@ def _regime_ands() -> Iterator[str]:
     before leftover 3), then ``regime&mom`` then ``regime&dip``.
     Same-date later: **fresh** winner-shaped continuation / rsi and
     unused HTF/mom 2-atoms emit before that drained prefix so dry
-    refill is not idle. Same-date later: never AND ``mom_*_gt*`` with
-    ``dip_*`` — HTF×dip without mom stays. No ``don_hi`` /
+    refill is not idle.     Same-date later: never AND ``mom_*_gt*`` with
+    ``dip_*`` — HTF×dip without mom stays. Same-date later: **undry**
+    admit-island densify (``sma_abv_40`` / ``ema_abv_40``,
+    ``rsi_14_>60``, intermediate mom, gap-fill 50/60 continuation,
+    ``h1_sma_abv_70``) emits before the drained fresh-30 / rsi-55
+    prefix so dry refill is not idle. No ``don_hi`` /
     ``near_swing_lo``. Cheap ``near_swing_hi`` N≤48 only on depth-7
     stacks (not minted without a dip extra). HTF False → no new long
     (flat). No named candlesticks.
@@ -867,6 +981,7 @@ def _regime_ands() -> Iterator[str]:
 
 
 def _regime_ands_raw() -> Iterator[str]:
+    yield from _regime_undry_winner_shaped()
     yield from _regime_fresh_winner_shaped()
     yield from _regime_fresh_pairs()
     yield from _regime_winner_3atoms()
@@ -906,12 +1021,14 @@ def iter_recipe_names() -> Iterator[str]:
     """Deterministic bounded stream. Not a full cartesian of every atom.
 
     Fresh never-tested families are first so a dry refill mints unused
-    HTF/mom canons and winner-shaped stacks (``sma_abv_30`` /
-    ``ema_abv_30`` continuation, ``rsi_14_>55``, extra-regime
-    ``rsi_14_>50``, continuation × rsi) immediately. Then admit-island
-    ``regime&mom&continuation`` 3-atoms, then role-bucket stacks
-    (depth 4–5 continuation / RSI; never mom∧dip), then
-    ``regime&mom`` 2-atoms, then HTF×dip (no mom_gt). No HTF×mom×expensive
+    admit-island densify (``sma_abv_40`` / ``ema_abv_40`` continuation,
+    ``rsi_14_>60``, intermediate mom on paid-off spines, gap-fill
+    ``sma_abv_50`` / ``ema_abv_20`` on 50/60 HTF) immediately. Then
+    drained winner-shaped stacks (``sma_abv_30`` / ``ema_abv_30``,
+    ``rsi_14_>55``, extra-regime ``rsi_14_>50``, continuation × rsi).
+    Then admit-island ``regime&mom&continuation`` 3-atoms, then
+    role-bucket stacks (depth 4–5 continuation / RSI; never mom∧dip),
+    then ``regime&mom`` 2-atoms, then HTF×dip (no mom_gt). No HTF×mom×expensive
     structure (``don_hi`` / ``near_swing_lo`` / N>48). Cheap
     ``near_swing_hi`` N≤48 only at depth 7 is not minted without a
     dip extra. Grind 1% 2-atoms and wide / short-MA continuation

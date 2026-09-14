@@ -119,6 +119,7 @@ over a meaningful sample, AND calibration is demonstrated independently of P&L.
 | 2026-09-14 | Same-date later: walk-forward calendar coverage extends to 23 × ~90d of native 5m (`QUAL_N_WINDOWS` = 23, `QUAL_WINDOW_DAYS` = 90, `QUAL_COVERAGE_DAYS` = 2070, ~5.67y) so new evals use the whole jensa 5m tape (~600787 bars). Per-window size stays 90d. OOS **thresholds** unchanged. Existing 8-window admits stay; no automatic re-qualify; fail-once parks stay parked. Throughput ~3× slower per name on jensa; sync worker/constants out of band. Still paper. |
 | 2026-09-14 | Same-date later: indicator warm-up padding. Each ~90d window is prefixed with prior bars (`QUAL_WARMUP_BARS` = 4032, 14d of 5m) so EMA/SMA/HTF/ATR are seeded before scored OOS. `backtest(..., score_from=cut)` counts only the true OOS segment. First window uses a partial prefix if history is short. Pad is extra tape, not stolen from the 90d windows. OOS **thresholds** unchanged. No automatic re-qualify. Still paper. |
 | 2026-09-14 | Same-date later: refill mint never ANDs a momentum-up atom (`mom_*_gt*`) with a dip atom (`dip_*`) in the same `&` stack. Those names print trades=0 over the full ~5.7y tape (`mom_18b_gt2pc&dip_24b_lt5pc` ~7–19 bars; + HTF + ema_abv → 0 OOS entries). RSI / continuation siblings stay. HTF×dip without mom_gt stays. Central guard in `iter_recipe_names` / `next_refill_batch`. Already-queued mom∧dip extended names may still drain once (fail-once). `STRUCTURE_NS` still ≤96. Sync `refill.py` to jensa after merge (out of band). Paper only; OOS gates unchanged. |
+| 2026-09-14 | Same-date later: refill mint un-dries from the admit island. Unused continuation `sma_abv_40` / `ema_abv_40` (distinct from 20/30/50), `rsi_14_>60`, intermediate mom (`MOM_FILTERS_HTF_INTERMEDIATE`, not short-12), `h1_sma_abv_70`, gap-fill `sma_abv_50` / `ema_abv_20` on paid-off `h1_*_abv_50/60` spines, and DEEP 4–5 stacks on those spines emit **first**. Farm was eligible=0 / in_flight=0 after ~8726 unique. Fail-once stays. `STRUCTURE_NS` still ≤96. No named candlesticks. Static list unchanged. Paper only; OOS gates unchanged. |
 
 ### Amendment 2026-08-30 — what actually runs
 
@@ -1021,6 +1022,40 @@ Central guard: `name_has_mom_gt_and_dip` is true when any `&` stack contains bot
 **Superseded on this date** (prior text kept above for history):
 
 - Same-date "combine winning HTF×mom with mild-dip / continuation 3-atoms", "densify 4–7 atom admit-island stacks", and "un-dry mint: unused HTF/mom + winner-shaped 3–5 first" insofar as `_regime_ands` / `_regime_fresh_winner_shaped` / `_regime_winner_3atoms` / `_regime_deep_stacks` still minted `mom_*_gt*` ∧ `dip_*` stacks. HTF×mom×continuation / RSI, HTF×dip without mom, fail-once, farm ingest, cycle budget, OOS **thresholds**, `QUAL_N_WINDOWS`, `STRUCTURE_NS` ≤96, the shipped v1 HTF parser, and the static 40–120 compiled-list band are not superseded.
+
+### Amendment 2026-09-14 — un-dry mint: admit-island densify
+
+This amendment does not rewrite original §§ 1–8 or prior amendments. Qual/live remain 5m, risk policy remains `rm_v1`. OOS **thresholds** are unchanged: `MIN_BACKTEST_TRADES` = 30, `MIN_BACKTEST_SHARPE` = 0.30, must beat buy-and-hold, must beat `sma_stack`, all-windows non-negative is diagnostic only, fail-once never-retest stays. `QUAL_N_WINDOWS` = 23, `QUAL_WINDOW_DAYS` = 90, `QUAL_WINDOW_BARS` = 25920, `QUAL_COVERAGE_DAYS` = 2070, `QUAL_STRIDE` = 1, `DISCOVERY_LOG_CAP` = 10000, `DISCOVERY_REFILL_BATCH_SIZE` = 16 stay. Discovery walk-forwards stay on the Windows farm (`scripts/discovery_worker.py` → `/api/discovery/ingest`); cluster `live_cycle` keeps discovery off (`DISCOVERY_ON_CYCLE=0`). **Still paper.** `GRADUATED_PAPER` meaning is unchanged. Do not cull existing champions. Do not retest parked fails. Do not mint structure `N>96`. Do not clear `discovery_log`. Do not Stop/Start the farm from this PR.
+
+**Why.** Prod 2026-09-14 later (~23:08 Europe/Stockholm): jensa discovery farm is recipe-dry — eligible=0, in_flight=0, `next_refill_batch` returns `[]`, workers alive but looping "no never-tested names" — after unique_tested ≈ 8726 / tested_pass = 112. Natural champions cluster on `h1_ema`/`sma_abv_{20,24,30,50,60}&mom_18b_gt2pc` ± continuation (`sma`/`ema_abv_20/30/50`) ± `rsi_14_>50/55`, plus a few bare dips. Fail mix still dominated by oos_pnl_vs_bh then Sharpe — do not soften gates. Peer-reviewed momentum literature (Agyei-Ampomah 2007 EFM; Lesmond/Schill/Zhou 2004 JFE; Novy-Marx/Velikov 2016 RFS) fits WEAK and argues **against** densifying short high-turnover `mom_12b_*`; prefer intermediate mom / winner multi-AND stacks. Undry is still required from admit-island densify.
+
+**What was added** (`hedge_fund.trading.refill.iter_recipe_names` / `_regime_undry_winner_shaped`). Parser / `_ALLOWED_ATOM_RES` already accept the tokens. No new atom type. `STRUCTURE_NS` stays `{6…96}`. `RECIPE_MAX_ATOMS` stays 7. Central `name_has_mom_gt_and_dip` guard stays.
+
+Undry families emit **first** (never-tested keys immediately on dry refill):
+
+- Unused continuation `UNDRY_CONT_ATOMS`: `sma_abv_40` / `ema_abv_40` (40→40, distinct from 20/30/50). Skip `h1_sma_abv_18` / `sma_abv_25` as the primary undry
+- `UNDRY_RSI`: `rsi_14_>60` (60→60, distinct from >50/>55)
+- Gap-fill `UNDRY_GAP_CONT` (`sma_abv_50` / `ema_abv_20`) 3-atoms on paid-off `h1_ema_abv_60` / `h1_sma_abv_50` / `h1_sma_abv_60` spines that lacked `REGIME_CONT` coverage
+- Intermediate mom `MOM_FILTERS_HTF_INTERMEDIATE` on `DEEP_STACK_REGIME` only: `mom_36b_gt8pc` / `mom_42b_gt6pc` / `mom_48b_gt8pc` / `mom_54b_gt6pc` / `mom_60b_gt4pc` / `mom_66b_gt4pc`. Not short-12. 3-atom winner continuation before 2-atom
+- `h1_sma_abv_70` (70→70, twin of minted `h1_ema_abv_70`). Skip 8→10 / 18→20 / 25 (24→25) collapses
+- `DEEP_STACK_REGIME` adds `h1_ema_abv_60` / `h1_sma_abv_50` / `h1_sma_abv_60` so those spines get depth 4–5 continuation × RSI stacks
+- `UNDRY_MOM_PRIORITY` is `mom_18b_gt2pc` then `mom_24b_gt2pc` — do not emit `mom_12b_*` on this prefix
+- `FRESH_STACK_REGIME` re-orders admit-island 20/24/30/50/60 first
+
+Then the drained prefix: `#62` `sma_abv_30` / `ema_abv_30` / `rsi_14_>55`, winner 3-atoms, 4–7 role-bucket stacks, HTF×mom / HTF×dip 2-atoms. `#64` mom∧dip guard unchanged. Target a meaningful dry-refill batch (≥20 distinct names), not 100k cartesian spam.
+
+**Skipped.** Exact names and `near_duplicate_key` collisions against champions, graduated, the static universe, already-emitted extended names, and any `discovery_log.json` row (pass or fail). No HTF×mom×expensive structure (`don_hi` / `near_swing_lo` / N>96). No short-12 mom grid as the primary undry. No H&S / flags / triangles / engulfing / hammer / doji / morning_star / evening_star / candlestick encyclopedia / chart_patterns zoo; no Market Cipher scrape; no new `wt_*` WaveTrend spam; no MFI; no `dbl_top` longs; no `daily()`/`h1()`/`m5()` wrappers.
+
+**Topology.** Still mint → farm → gate. [docs/WORKFLOW.md](docs/WORKFLOW.md) §3 records undry admit-island densify **first**.
+
+**What did not change.** Sharpe 0.30, 30 OOS trades, beat B&H, beat `sma_stack`, 5m, `rm_v1`, all-windows diagnostic only, fail-once, `QUAL_N_WINDOWS` = 23. `STRUCTURE_NS` cap at 96. Live risk unchanged.
+
+**How to evaluate after merge.** Natural `tested_pass` / unique tested, plus the fail-reason mix (beat-B&H, Sharpe, trades, beat `sma_stack`). Do not change gate constants to move those numbers. Sync `hedge_fund/trading/refill.py` to jensa after merge (out of band for the PR).
+
+**Superseded on this date** (prior text kept above for history):
+
+- Same-date "un-dry mint: unused HTF/mom + winner-shaped 3–5 first" and "never mint mom∧dip stacks" insofar as `_regime_ands` froze with `sma_abv_30` / `rsi_14_>55` first and `DEEP_STACK_REGIME` omitted paid-off 50/60 SMA / ema-60 spines. `#64` mom∧dip guard, HTF×mom×continuation / RSI, HTF×dip without mom, fail-once, farm ingest, cycle budget, OOS **thresholds**, `QUAL_N_WINDOWS`, `STRUCTURE_NS` ≤96, the shipped v1 HTF parser, and the static 40–120 compiled-list band are not superseded.
+
 
 
 

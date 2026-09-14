@@ -1623,7 +1623,7 @@ class ProtocolAmendmentTests(unittest.TestCase):
             parse_strategy(atom)
         self.assertNotIn("h1_sma_abv_18", REGIME_ATOMS)
         names = list(iter_recipe_names())
-        self.assertEqual(names[0], "h1_ema_abv_20&mom_18b_gt2pc&sma_abv_30")
+        self.assertEqual(names[0], "h1_ema_abv_20&mom_18b_gt2pc&sma_abv_40")
         self.assertNotIn("h1_ema_abv_20&mom_18b_gt2pc&dip_24b_lt5pc", names)
         self.assertNotIn("h1_ema_abv_24&mom_18b_gt2pc&dip_24b_lt6pc", names)
         self.assertIn("h1_sma_abv_30&mom_12b_gt2pc&sma_abv_50", names)
@@ -1644,7 +1644,7 @@ class ProtocolAmendmentTests(unittest.TestCase):
             n=DISCOVERY_REFILL_BATCH_SIZE,
         )
         self.assertEqual(len(added), DISCOVERY_REFILL_BATCH_SIZE)
-        self.assertEqual(added[0], "h1_ema_abv_20&mom_18b_gt2pc&sma_abv_30")
+        self.assertEqual(added[0], "h1_ema_abv_20&mom_18b_gt2pc&sma_abv_40")
         self.assertNotEqual(
             near_duplicate_key("h1_ema_abv_40"),
             near_duplicate_key("h1_ema_abv_30"),
@@ -1705,7 +1705,7 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertEqual(RECIPE_MAX_ATOMS, 7)
         self.assertIn("h1_ema_abv_50", DEEP_STACK_REGIME)
         names = list(iter_recipe_names())
-        self.assertEqual(names[0], "h1_ema_abv_20&mom_18b_gt2pc&sma_abv_30")
+        self.assertEqual(names[0], "h1_ema_abv_20&mom_18b_gt2pc&sma_abv_40")
         four = "h1_ema_abv_20&mom_18b_gt2pc&sma_abv_50&rsi_14_>50"
         seven = (
             "h1_ema_abv_20&mom_18b_gt2pc&sma_abv_50&ema_abv_20"
@@ -1793,12 +1793,17 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertIn("h1_ema_abv_60", REGIME_ATOMS_FRESH)
         self.assertIn("mom_18b_gt8pc", MOM_FILTERS_HTF_FRESH)
         names = list(iter_recipe_names())
-        self.assertEqual(names[0], "h1_ema_abv_20&mom_18b_gt2pc&sma_abv_30")
+        self.assertEqual(names[0], "h1_ema_abv_20&mom_18b_gt2pc&sma_abv_40")
+        self.assertIn("h1_ema_abv_20&mom_18b_gt2pc&sma_abv_30", names)
         self.assertIn("h1_ema_abv_20&mom_18b_gt2pc&rsi_14_>55", names)
         self.assertNotIn("h1_ema_abv_20&mom_18b_gt2pc&sma_abv_30&dip_24b_lt5pc", names)
         self.assertIn("h1_ema_abv_60&mom_18b_gt2pc", names)
         self.assertIn("h4_sma_abv_36&mom_78b_gt2pc", names)
         self.assertNotIn("h1_ema_abv_20&mom_18b_gt2pc&don_hi_12", names)
+        self.assertLess(
+            names.index("h1_ema_abv_20&mom_18b_gt2pc&sma_abv_40"),
+            names.index("h1_ema_abv_20&mom_18b_gt2pc&sma_abv_30"),
+        )
         self.assertLess(
             names.index("h1_ema_abv_20&mom_18b_gt2pc&sma_abv_30"),
             names.index("h1_ema_abv_20&dip_24b_lt5pc"),
@@ -1813,9 +1818,10 @@ class ProtocolAmendmentTests(unittest.TestCase):
         for atom in (*REGIME_ATOMS_FRESH, *MOM_FILTERS_HTF_FRESH, *FRESH_CONT_ATOMS, FRESH_RSI):
             self.assertTrue(name_is_parseable(atom), msg=atom)
             parse_strategy(atom)
-        combo = "h1_ema_abv_20&mom_18b_gt2pc&sma_abv_30"
+        combo = "h1_ema_abv_20&mom_18b_gt2pc&sma_abv_40"
         self.assertTrue(name_is_parseable(combo))
         parse_strategy(combo)
+        self.assertTrue(name_is_parseable("h1_ema_abv_20&mom_18b_gt2pc&sma_abv_30"))
         added = next_refill_batch(
             taken_names=set(generate_universe()),
             n=DISCOVERY_REFILL_BATCH_SIZE,
@@ -1924,6 +1930,115 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertIn("mom_*_gt*", readme)
         runbook = (REPO / "docs" / "WINDOWS_DISCOVERY.md").read_text()
         self.assertIn("never mom", runbook.lower())
+
+    def test_amendment_2026_09_14_island_undry_mint(self):
+        from hedge_fund.trading.constants import (
+            DISCOVERY_REFILL_BATCH_SIZE,
+            MIN_BACKTEST_SHARPE,
+            MIN_BACKTEST_TRADES,
+            QUAL_N_WINDOWS,
+            QUAL_TIMEFRAME,
+            RISK_POLICY,
+        )
+        from hedge_fund.signals.dynamic import parse_strategy
+        from hedge_fund.trading.discovery_guard import (
+            DEFAULT_STRUCTURE_LOOKBACK_MAX,
+            structure_lookbacks,
+        )
+        from hedge_fund.trading.refill import (
+            DEEP_STACK_REGIME,
+            MOM_FILTERS_HTF_INTERMEDIATE,
+            STRUCTURE_NS,
+            STRUCTURE_NS_THROUGH_96,
+            UNDRY_CONT_ATOMS,
+            UNDRY_MOM_PRIORITY,
+            UNDRY_RSI,
+            iter_recipe_names,
+            name_has_mom_gt_and_dip,
+            name_is_parseable,
+            next_refill_batch,
+        )
+        from hedge_fund.trading.universe import generate_universe, near_duplicate_key
+
+        self.assertEqual(QUAL_TIMEFRAME, "5m")
+        self.assertEqual(RISK_POLICY, "rm_v1")
+        self.assertEqual(MIN_BACKTEST_TRADES, 30)
+        self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
+        self.assertEqual(QUAL_N_WINDOWS, 23)
+        self.assertEqual(DISCOVERY_REFILL_BATCH_SIZE, 16)
+        self.assertEqual(STRUCTURE_NS, STRUCTURE_NS_THROUGH_96)
+        self.assertEqual(max(STRUCTURE_NS), DEFAULT_STRUCTURE_LOOKBACK_MAX)
+        self.assertEqual(UNDRY_CONT_ATOMS, ("sma_abv_40", "ema_abv_40"))
+        self.assertEqual(UNDRY_RSI, "rsi_14_>60")
+        self.assertEqual(UNDRY_MOM_PRIORITY, ("mom_18b_gt2pc", "mom_24b_gt2pc"))
+        self.assertNotIn("mom_12b_gt2pc", UNDRY_MOM_PRIORITY)
+        self.assertIn("h1_ema_abv_60", DEEP_STACK_REGIME)
+        self.assertIn("h1_sma_abv_50", DEEP_STACK_REGIME)
+        self.assertIn("h1_sma_abv_60", DEEP_STACK_REGIME)
+        names = list(iter_recipe_names())
+        self.assertEqual(names[0], "h1_ema_abv_20&mom_18b_gt2pc&sma_abv_40")
+        self.assertIn("h1_ema_abv_20&mom_18b_gt2pc&rsi_14_>60", names)
+        self.assertIn("h1_ema_abv_60&mom_18b_gt2pc&sma_abv_50", names)
+        self.assertIn("h1_sma_abv_50&mom_18b_gt2pc&ema_abv_20", names)
+        self.assertIn("h1_ema_abv_20&mom_36b_gt8pc&sma_abv_50", names)
+        self.assertIn("h1_sma_abv_70&mom_18b_gt2pc", names)
+        self.assertNotIn("h1_ema_abv_20&mom_12b_gt2pc&sma_abv_40", names)
+        self.assertNotIn("h1_ema_abv_20&mom_18b_gt2pc&sma_abv_40&dip_24b_lt5pc", names)
+        self.assertFalse(any(name_has_mom_gt_and_dip(n) for n in names))
+        self.assertLess(
+            names.index("h1_ema_abv_20&mom_18b_gt2pc&sma_abv_40"),
+            names.index("h1_ema_abv_20&mom_18b_gt2pc&sma_abv_30"),
+        )
+        self.assertLessEqual(len(names), 8000)
+        for name in names:
+            for _atom, n in structure_lookbacks(name):
+                self.assertLessEqual(n, 96, msg=name)
+        for atom in (*UNDRY_CONT_ATOMS, UNDRY_RSI, *MOM_FILTERS_HTF_INTERMEDIATE, "h1_sma_abv_70"):
+            self.assertTrue(name_is_parseable(atom), msg=atom)
+            parse_strategy(atom)
+        self.assertNotEqual(near_duplicate_key("sma_abv_40"), near_duplicate_key("sma_abv_30"))
+        self.assertNotEqual(near_duplicate_key("sma_abv_40"), near_duplicate_key("sma_abv_50"))
+        self.assertNotEqual(near_duplicate_key("rsi_14_>60"), near_duplicate_key("rsi_14_>55"))
+        self.assertNotEqual(
+            near_duplicate_key("h1_sma_abv_70"),
+            near_duplicate_key("h1_sma_abv_60"),
+        )
+        new_atoms = set(UNDRY_CONT_ATOMS) | {UNDRY_RSI, "h1_sma_abv_70"} | set(
+            MOM_FILTERS_HTF_INTERMEDIATE
+        )
+        drained = [n for n in names if not (set(n.split("&")) & new_atoms)]
+        taken = set(drained) | set(generate_universe())
+        i = 0
+        while len(taken) < 8726:
+            taken.add(f"parked_dummy_{i}")
+            i += 1
+        added = next_refill_batch(taken_names=taken, n=20)
+        self.assertGreaterEqual(len(added), 20)
+        self.assertEqual(added[0], "h1_ema_abv_20&mom_18b_gt2pc&sma_abv_40")
+        self.assertFalse(any(name_has_mom_gt_and_dip(n) for n in added))
+        self.assertFalse(any("mom_12b_gt2pc" in n.split("&") for n in added))
+        self.assertEqual(MIN_BACKTEST_TRADES, 30)
+        self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
+        self.assertEqual(QUAL_N_WINDOWS, 23)
+
+        text = (REPO / "PROTOCOL.md").read_text()
+        self.assertIn("Amendment 2026-09-14 — un-dry mint: admit-island densify", text)
+        self.assertIn("UNDRY_CONT_ATOMS", text)
+        self.assertIn("sma_abv_40", text)
+        self.assertIn("rsi_14_>60", text)
+        self.assertIn("MOM_FILTERS_HTF_INTERMEDIATE", text)
+        self.assertIn("OOS **thresholds** are unchanged", text)
+        self.assertIn("No named candlesticks", text)
+        self.assertIn("STRUCTURE_NS", text)
+        workflow = (REPO / "docs" / "WORKFLOW.md").read_text()
+        self.assertIn("sma_abv_40", workflow)
+        self.assertIn("rsi_14_>60", workflow)
+        self.assertIn("MOM_FILTERS_HTF_INTERMEDIATE", workflow)
+        self.assertIn("mom-before-dip", workflow)
+        readme = (REPO / "README.md").read_text()
+        self.assertIn("sma_abv_40", readme)
+        runbook = (REPO / "docs" / "WINDOWS_DISCOVERY.md").read_text()
+        self.assertIn("sma_abv_40", runbook)
 
 
 class IsolatedRunnerTests(unittest.TestCase):

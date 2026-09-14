@@ -211,10 +211,11 @@ the farm stays idle until Start.
   `h4_ema_abv_30` / `h4_ema_abv_36` / `h4_ema_abv_48` /
   `h4_sma_abv_20` / `h4_sma_abv_24` / `h4_sma_abv_30` / `h4_sma_abv_50`,
   plus `h1_ema_abv_{12,40,50}` / `h1_sma_abv_{15,36,40}`,
-  then unused `h1_ema_abv_{60,70}` / `h1_sma_abv_{12,50,60}` /
+  then unused `h1_ema_abv_{60,70}` / `h1_sma_abv_{12,50,60,70}` /
   `h4_ema_abv_{15,40,60}` / `h4_sma_abv_{12,15,36,40}`,
-  **fresh** winner-shaped 3–5 first (`sma_abv_30` / `ema_abv_30` /
-  `rsi_14_>55`, not depth-7 `near_swing` spam),
+  **fresh** winner-shaped 3–5 first (`sma_abv_40` / `ema_abv_40` /
+  `rsi_14_>60` and intermediate mom on the admit island, then drained
+  `sma_abv_30` / `ema_abv_30` / `rsi_14_>55`, not depth-7 `near_swing` spam),
   then drained `regime&mom&continuation` 3-atoms (not structure;
   recipe no longer ANDs `mom_gt` with `mild_dip`),
   then 4–7 atom admit-island stacks (depth 4–5 continuation / RSI;
