@@ -1624,8 +1624,8 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertNotIn("h1_sma_abv_18", REGIME_ATOMS)
         names = list(iter_recipe_names())
         self.assertEqual(names[0], "h1_ema_abv_20&mom_18b_gt2pc&sma_abv_30")
-        self.assertIn("h1_ema_abv_20&mom_18b_gt2pc&dip_24b_lt5pc", names)
-        self.assertIn("h1_ema_abv_24&mom_18b_gt2pc&dip_24b_lt6pc", names)
+        self.assertNotIn("h1_ema_abv_20&mom_18b_gt2pc&dip_24b_lt5pc", names)
+        self.assertNotIn("h1_ema_abv_24&mom_18b_gt2pc&dip_24b_lt6pc", names)
         self.assertIn("h1_sma_abv_30&mom_12b_gt2pc&sma_abv_50", names)
         self.assertIn("h1_ema_abv_20&mom_24b_gt2pc&ema_abv_20", names)
         self.assertIn("h1_ema_abv_12&mom_18b_gt2pc", names)
@@ -1635,9 +1635,10 @@ class ProtocolAmendmentTests(unittest.TestCase):
         for name in names:
             for _atom, n in structure_lookbacks(name):
                 self.assertLessEqual(n, 96, msg=name)
-        combo = "h1_ema_abv_20&mom_18b_gt2pc&dip_24b_lt5pc"
+        combo = "h1_ema_abv_20&mom_18b_gt2pc&sma_abv_50"
         self.assertTrue(name_is_parseable(combo))
         parse_strategy(combo)
+        self.assertTrue(name_is_parseable("h1_ema_abv_20&mom_18b_gt2pc&dip_24b_lt5pc"))
         added = next_refill_batch(
             taken_names=set(generate_universe()),
             n=DISCOVERY_REFILL_BATCH_SIZE,
@@ -1705,23 +1706,24 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertIn("h1_ema_abv_50", DEEP_STACK_REGIME)
         names = list(iter_recipe_names())
         self.assertEqual(names[0], "h1_ema_abv_20&mom_18b_gt2pc&sma_abv_30")
-        four = "h1_ema_abv_20&mom_18b_gt2pc&sma_abv_50&dip_24b_lt5pc"
+        four = "h1_ema_abv_20&mom_18b_gt2pc&sma_abv_50&rsi_14_>50"
         seven = (
             "h1_ema_abv_20&mom_18b_gt2pc&sma_abv_50&ema_abv_20"
             "&dip_24b_lt5pc&rsi_14_>50&near_swing_hi_24"
         )
         self.assertIn(four, names)
-        self.assertIn(seven, names)
-        self.assertEqual(max(n.count("&") + 1 for n in names), 7)
+        self.assertNotIn(seven, names)
+        self.assertLessEqual(max(n.count("&") + 1 for n in names), 7)
         self.assertLess(names.index(four), names.index("dip_6b_lt2pc&don_lo_6"))
         self.assertNotIn("h1_ema_abv_20&mom_18b_gt2pc&don_hi_12", names)
         self.assertLessEqual(len(names), 8000)
         for name in names:
             for _atom, n in structure_lookbacks(name):
                 self.assertLessEqual(n, 96, msg=name)
-        for name in (four, seven):
-            self.assertTrue(name_is_parseable(name), msg=name)
-            parse_strategy(name)
+        self.assertTrue(name_is_parseable(four))
+        parse_strategy(four)
+        self.assertTrue(name_is_parseable(seven))
+        parse_strategy(seven)
         self.assertFalse(name_is_parseable(seven + "&sma_abv_100"))
         added = next_refill_batch(
             taken_names=set(generate_universe()),
@@ -1793,19 +1795,17 @@ class ProtocolAmendmentTests(unittest.TestCase):
         names = list(iter_recipe_names())
         self.assertEqual(names[0], "h1_ema_abv_20&mom_18b_gt2pc&sma_abv_30")
         self.assertIn("h1_ema_abv_20&mom_18b_gt2pc&rsi_14_>55", names)
-        self.assertIn("h1_ema_abv_20&mom_18b_gt2pc&sma_abv_30&dip_24b_lt5pc", names)
+        self.assertNotIn("h1_ema_abv_20&mom_18b_gt2pc&sma_abv_30&dip_24b_lt5pc", names)
         self.assertIn("h1_ema_abv_60&mom_18b_gt2pc", names)
         self.assertIn("h4_sma_abv_36&mom_78b_gt2pc", names)
         self.assertNotIn("h1_ema_abv_20&mom_18b_gt2pc&don_hi_12", names)
         self.assertLess(
             names.index("h1_ema_abv_20&mom_18b_gt2pc&sma_abv_30"),
-            names.index("h1_ema_abv_20&mom_18b_gt2pc&dip_24b_lt5pc"),
+            names.index("h1_ema_abv_20&dip_24b_lt5pc"),
         )
-        seven = (
-            "h1_ema_abv_20&mom_18b_gt2pc&sma_abv_50&ema_abv_20"
-            "&dip_24b_lt5pc&rsi_14_>50&near_swing_hi_24"
-        )
-        self.assertLess(names.index(names[0]), names.index(seven))
+        rsi_four = "h1_ema_abv_20&mom_18b_gt2pc&sma_abv_30&rsi_14_>50"
+        self.assertIn(rsi_four, names)
+        self.assertLess(names.index(names[0]), names.index(rsi_four))
         self.assertLessEqual(len(names), 8000)
         for name in names:
             for _atom, n in structure_lookbacks(name):
@@ -1853,6 +1853,77 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertIn("sma_abv_30", readme)
         runbook = (REPO / "docs" / "WINDOWS_DISCOVERY.md").read_text()
         self.assertIn("sma_abv_30", runbook)
+
+    def test_amendment_2026_09_14_no_mom_and_dip_stacks(self):
+        from hedge_fund.trading.constants import (
+            DISCOVERY_REFILL_BATCH_SIZE,
+            MIN_BACKTEST_SHARPE,
+            MIN_BACKTEST_TRADES,
+            QUAL_N_WINDOWS,
+            QUAL_TIMEFRAME,
+            RISK_POLICY,
+        )
+        from hedge_fund.signals.dynamic import parse_strategy
+        from hedge_fund.trading.discovery_guard import (
+            DEFAULT_STRUCTURE_LOOKBACK_MAX,
+            structure_lookbacks,
+        )
+        from hedge_fund.trading.refill import (
+            STRUCTURE_NS,
+            STRUCTURE_NS_THROUGH_96,
+            iter_recipe_names,
+            name_has_mom_gt_and_dip,
+            name_is_parseable,
+            next_refill_batch,
+        )
+        from hedge_fund.trading.universe import generate_universe
+
+        self.assertEqual(QUAL_TIMEFRAME, "5m")
+        self.assertEqual(RISK_POLICY, "rm_v1")
+        self.assertEqual(MIN_BACKTEST_TRADES, 30)
+        self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
+        self.assertEqual(QUAL_N_WINDOWS, 23)
+        self.assertEqual(DISCOVERY_REFILL_BATCH_SIZE, 16)
+        self.assertEqual(STRUCTURE_NS, STRUCTURE_NS_THROUGH_96)
+        self.assertEqual(max(STRUCTURE_NS), DEFAULT_STRUCTURE_LOOKBACK_MAX)
+        names = list(iter_recipe_names())
+        self.assertFalse(any(name_has_mom_gt_and_dip(n) for n in names))
+        self.assertNotIn("h1_ema_abv_20&mom_18b_gt2pc&dip_24b_lt5pc", names)
+        self.assertNotIn("h1_ema_abv_20&mom_18b_gt2pc&sma_abv_30&dip_24b_lt5pc", names)
+        self.assertIn("h1_ema_abv_20&mom_18b_gt2pc&sma_abv_30", names)
+        self.assertIn("h1_ema_abv_20&mom_18b_gt2pc&sma_abv_30&rsi_14_>50", names)
+        self.assertIn("h1_ema_abv_20&mom_18b_gt2pc&sma_abv_50", names)
+        self.assertIn("h1_ema_abv_20&dip_24b_lt5pc", names)
+        queued = "h1_ema_abv_20&mom_18b_gt2pc&dip_24b_lt5pc"
+        self.assertTrue(name_has_mom_gt_and_dip(queued))
+        self.assertTrue(name_is_parseable(queued))
+        parse_strategy(queued)
+        self.assertLessEqual(len(names), 8000)
+        for name in names:
+            for _atom, n in structure_lookbacks(name):
+                self.assertLessEqual(n, 96, msg=name)
+        added = next_refill_batch(
+            taken_names=set(generate_universe()),
+            n=DISCOVERY_REFILL_BATCH_SIZE,
+        )
+        self.assertEqual(len(added), DISCOVERY_REFILL_BATCH_SIZE)
+        self.assertFalse(any(name_has_mom_gt_and_dip(n) for n in added))
+
+        text = (REPO / "PROTOCOL.md").read_text()
+        self.assertIn("Amendment 2026-09-14 — never mint mom∧dip stacks", text)
+        self.assertIn("name_has_mom_gt_and_dip", text)
+        self.assertIn("OOS **thresholds** are unchanged", text)
+        self.assertIn("Do not clear `discovery_log`", text)
+        self.assertIn("STRUCTURE_NS", text)
+        self.assertIn("Sync `hedge_fund/trading/refill.py` to jensa", text)
+        workflow = (REPO / "docs" / "WORKFLOW.md").read_text()
+        self.assertIn("name_has_mom_gt_and_dip", workflow)
+        self.assertIn("mild_dip", workflow)
+        self.assertIn("mom-before-dip", workflow)
+        readme = (REPO / "README.md").read_text()
+        self.assertIn("mom_*_gt*", readme)
+        runbook = (REPO / "docs" / "WINDOWS_DISCOVERY.md").read_text()
+        self.assertIn("never mom", runbook.lower())
 
 
 class IsolatedRunnerTests(unittest.TestCase):
