@@ -46,6 +46,7 @@ from hedge_fund.trading.refill import (
     MOM_FILTERS_WIDE,
     MOM_FILTERS_HTF_EXPAND,
     MOM_FILTERS_HTF_FRESH,
+    MOM_FILTERS_HTF_INTERMEDIATE,
     RECIPE_MAX_ATOMS,
     REGIME_ADMIT_ATOMS,
     REGIME_ATOMS,
@@ -65,6 +66,11 @@ from hedge_fund.trading.refill import (
     SUPPORT_EXTRA_TRENDS,
     THREE_ATOM_EXTRA_TRENDS,
     TREND_FILTERS,
+    UNDRY_CONT_ATOMS,
+    UNDRY_GAP_CONT,
+    UNDRY_GAP_REGIME,
+    UNDRY_MOM_PRIORITY,
+    UNDRY_RSI,
     _REGIME_PREFIXES,
     discovery_universe,
     iter_recipe_names,
@@ -442,6 +448,7 @@ class RecipeBoundsTests(unittest.TestCase):
                 "h1_sma_abv_12",
                 "h1_sma_abv_50",
                 "h1_sma_abv_60",
+                "h1_sma_abv_70",
                 "h4_ema_abv_15",
                 "h4_ema_abv_40",
                 "h4_ema_abv_60",
@@ -458,6 +465,24 @@ class RecipeBoundsTests(unittest.TestCase):
         self.assertEqual(REGIME_CONT_ATOMS, ("sma_abv_50", "ema_abv_20"))
         self.assertEqual(FRESH_CONT_ATOMS, ("sma_abv_30", "ema_abv_30"))
         self.assertEqual(FRESH_RSI, "rsi_14_>55")
+        self.assertEqual(UNDRY_CONT_ATOMS, ("sma_abv_40", "ema_abv_40"))
+        self.assertEqual(UNDRY_RSI, "rsi_14_>60")
+        self.assertEqual(UNDRY_MOM_PRIORITY, ("mom_18b_gt2pc", "mom_24b_gt2pc"))
+        self.assertEqual(UNDRY_GAP_CONT, ("sma_abv_50", "ema_abv_20"))
+        self.assertEqual(
+            UNDRY_GAP_REGIME,
+            ("h1_ema_abv_60", "h1_sma_abv_50", "h1_sma_abv_60"),
+        )
+        self.assertEqual(FRESH_STACK_REGIME[:5], (
+            "h1_ema_abv_20",
+            "h1_ema_abv_24",
+            "h1_ema_abv_30",
+            "h1_ema_abv_50",
+            "h1_ema_abv_60",
+        ))
+        self.assertIn("h1_sma_abv_70", FRESH_STACK_REGIME)
+        self.assertIn("h1_ema_abv_70", FRESH_STACK_REGIME)
+        self.assertNotIn("mom_12b_gt2pc", UNDRY_MOM_PRIORITY)
         self.assertEqual(
             DEEP_STACK_REGIME,
             (
@@ -465,9 +490,12 @@ class RecipeBoundsTests(unittest.TestCase):
                 "h1_ema_abv_24",
                 "h1_ema_abv_30",
                 "h1_ema_abv_50",
+                "h1_ema_abv_60",
                 "h1_sma_abv_20",
                 "h1_sma_abv_24",
                 "h1_sma_abv_30",
+                "h1_sma_abv_50",
+                "h1_sma_abv_60",
             ),
         )
         self.assertTrue(set(DEEP_STACK_REGIME).issubset(REGIME_ATOMS))
@@ -508,6 +536,17 @@ class RecipeBoundsTests(unittest.TestCase):
                 "mom_72b_gt4pc",
                 "mom_60b_gt6pc",
                 "mom_18b_gt8pc",
+            ),
+        )
+        self.assertEqual(
+            MOM_FILTERS_HTF_INTERMEDIATE,
+            (
+                "mom_36b_gt8pc",
+                "mom_42b_gt6pc",
+                "mom_48b_gt8pc",
+                "mom_54b_gt6pc",
+                "mom_60b_gt4pc",
+                "mom_66b_gt4pc",
             ),
         )
         self.assertIn("h1_sma_abv_", _REGIME_PREFIXES)
@@ -735,17 +774,31 @@ class RecipeBoundsTests(unittest.TestCase):
         self.assertIn("h4_ema_abv_12&mom_18b_gt2pc", names)
         self.assertIn("h4_ema_abv_48&mom_18b_gt4pc", names)
         self.assertIn("h4_sma_abv_24&mom_12b_gt6pc", names)
-        # Fresh never-tested 3-atoms first: unused continuation, not structure.
+        # Admit-island undry first: unused continuation 40 / rsi 60, not structure.
+        self.assertIn("h1_ema_abv_20&mom_18b_gt2pc&sma_abv_40", names)
+        self.assertIn("h1_ema_abv_20&mom_18b_gt2pc&ema_abv_40", names)
+        self.assertIn("h1_ema_abv_20&mom_18b_gt2pc&rsi_14_>60", names)
+        self.assertIn("h1_ema_abv_60&mom_18b_gt2pc&sma_abv_50", names)
+        self.assertIn("h1_sma_abv_50&mom_18b_gt2pc&ema_abv_20", names)
+        self.assertIn("h1_ema_abv_20&mom_36b_gt8pc&sma_abv_50", names)
+        self.assertIn("h1_sma_abv_70&mom_18b_gt2pc", names)
+        self.assertNotIn("h1_ema_abv_20&mom_12b_gt2pc&sma_abv_40", names)
+        # Drained leftover 30-cont / rsi55 still in the stream.
         self.assertIn("h1_ema_abv_20&mom_18b_gt2pc&sma_abv_30", names)
         self.assertIn("h1_ema_abv_20&mom_18b_gt2pc&ema_abv_30", names)
         self.assertIn("h1_ema_abv_20&mom_18b_gt2pc&rsi_14_>55", names)
         self.assertIn("h1_ema_abv_15&mom_18b_gt2pc&rsi_14_>50", names)
         self.assertIn("h1_ema_abv_20&mom_18b_gt2pc&sma_abv_30&rsi_14_>50", names)
         self.assertNotIn("h1_ema_abv_20&mom_18b_gt2pc&sma_abv_30&dip_24b_lt5pc", names)
+        self.assertNotIn("h1_ema_abv_20&mom_18b_gt2pc&sma_abv_40&dip_24b_lt5pc", names)
         self.assertIn("h1_ema_abv_60&mom_18b_gt2pc", names)
         self.assertIn("h1_sma_abv_12&mom_78b_gt2pc", names)
         self.assertIn("h4_ema_abv_15&mom_18b_gt8pc", names)
-        self.assertEqual(names[0], "h1_ema_abv_20&mom_18b_gt2pc&sma_abv_30")
+        self.assertEqual(names[0], "h1_ema_abv_20&mom_18b_gt2pc&sma_abv_40")
+        self.assertLess(
+            names.index("h1_ema_abv_20&mom_18b_gt2pc&sma_abv_40"),
+            names.index("h1_ema_abv_20&mom_18b_gt2pc&sma_abv_30"),
+        )
         self.assertLess(
             names.index("h1_ema_abv_20&mom_18b_gt2pc&sma_abv_30"),
             names.index("h1_ema_abv_20&dip_24b_lt5pc"),
@@ -905,7 +958,12 @@ class RecipeBoundsTests(unittest.TestCase):
         self.assertNotIn("dip_24b_lt4pc", REGIME_DIP_BASES)
         parked_mom = {near_duplicate_key(n) for n in MOM_FILTERS}
         seen_mom = set(parked_mom)
-        for atom in MOM_FILTERS_HTF_DENSE + MOM_FILTERS_HTF_EXPAND + MOM_FILTERS_HTF_FRESH:
+        for atom in (
+            MOM_FILTERS_HTF_DENSE
+            + MOM_FILTERS_HTF_EXPAND
+            + MOM_FILTERS_HTF_FRESH
+            + MOM_FILTERS_HTF_INTERMEDIATE
+        ):
             self.assertTrue(name_is_parseable(atom), msg=atom)
             parse_strategy(atom)
             key = near_duplicate_key(atom)
@@ -920,8 +978,20 @@ class RecipeBoundsTests(unittest.TestCase):
             near_duplicate_key("sma_abv_50"),
         )
         self.assertNotEqual(
+            near_duplicate_key("sma_abv_40"),
+            near_duplicate_key("sma_abv_30"),
+        )
+        self.assertNotEqual(
+            near_duplicate_key("sma_abv_40"),
+            near_duplicate_key("sma_abv_50"),
+        )
+        self.assertNotEqual(
             near_duplicate_key("rsi_14_>55"),
             near_duplicate_key("rsi_14_>50"),
+        )
+        self.assertNotEqual(
+            near_duplicate_key("rsi_14_>60"),
+            near_duplicate_key("rsi_14_>55"),
         )
         self.assertNotEqual(
             near_duplicate_key("mom_18b_gt8pc"),
@@ -934,6 +1004,10 @@ class RecipeBoundsTests(unittest.TestCase):
         self.assertNotEqual(
             near_duplicate_key("h1_sma_abv_12"),
             near_duplicate_key("h1_sma_abv_15"),
+        )
+        self.assertNotEqual(
+            near_duplicate_key("h1_sma_abv_70"),
+            near_duplicate_key("h1_sma_abv_60"),
         )
         # gt3pc is the same canon as the emitted gt4; 16b/20b collapse onto 18b_gt2.
         self.assertEqual(near_duplicate_key("mom_18b_gt3pc"), near_duplicate_key("mom_18b_gt4pc"))
@@ -959,6 +1033,7 @@ class RecipeBoundsTests(unittest.TestCase):
         for name in MOM_FILTERS_HTF_DENSE + MOM_FILTERS_HTF_EXPAND + MOM_FILTERS_HTF_FRESH:
             key = near_duplicate_key(name)
             self.assertNotIn(key, parked_mom, msg=f"{name} collapses onto {key}")
+        fresh_keys = {near_duplicate_key(n) for n in MOM_FILTERS_HTF_FRESH}
         for name in MOM_FILTERS_HTF_EXPAND + MOM_FILTERS_HTF_FRESH:
             key = near_duplicate_key(name)
             self.assertNotIn(key, dense_keys, msg=f"{name} collapses onto {key}")
@@ -966,6 +1041,10 @@ class RecipeBoundsTests(unittest.TestCase):
         for name in MOM_FILTERS_HTF_FRESH:
             key = near_duplicate_key(name)
             self.assertNotIn(key, expand_keys, msg=f"{name} collapses onto {key}")
+        parked_plus = parked_mom | dense_keys | expand_keys | fresh_keys
+        for name in MOM_FILTERS_HTF_INTERMEDIATE:
+            key = near_duplicate_key(name)
+            self.assertNotIn(key, parked_plus, msg=f"{name} collapses onto {key}")
         prior = _snapshot_2026_09_12_leftover()
         prior_keys = {near_duplicate_key(n) for n in prior}
         novel = 0
@@ -1013,15 +1092,16 @@ class RefillBatchTests(unittest.TestCase):
         uni = generate_universe()
         added = next_refill_batch(taken_names=uni, n=DISCOVERY_REFILL_BATCH_SIZE)
         self.assertEqual(len(added), DISCOVERY_REFILL_BATCH_SIZE)
-        self.assertEqual(added[0], "h1_ema_abv_20&mom_18b_gt2pc&sma_abv_30")
+        self.assertEqual(added[0], "h1_ema_abv_20&mom_18b_gt2pc&sma_abv_40")
         hit = [
             n for n in added
             if n.count("&") == 2
             and any(tok.startswith("h1_") for tok in n.split("&"))
             and any(tok.startswith("mom_") for tok in n.split("&"))
-            and any(tok in ("sma_abv_30", "ema_abv_30") for tok in n.split("&"))
+            and any(tok in ("sma_abv_40", "ema_abv_40") for tok in n.split("&"))
         ]
-        self.assertTrue(hit, msg=f"expected HTF×mom×sma/ema_abv_30 in {added}")
+        self.assertTrue(hit, msg=f"expected HTF×mom×sma/ema_abv_40 in {added}")
+        self.assertFalse(any("mom_12b_" in n for n in added))
         for name in added:
             self.assertTrue(name_is_parseable(name), msg=name)
             self.assertTrue(_has_mint_tag(name), msg=name)
@@ -1466,7 +1546,51 @@ class RefillBatchTests(unittest.TestCase):
                 msg=name,
             )
             self.assertFalse(name_has_mom_gt_and_dip(name), msg=name)
-        self.assertEqual(added[0], "h1_ema_abv_20&mom_18b_gt2pc&sma_abv_30")
+        self.assertEqual(added[0], "h1_ema_abv_20&mom_18b_gt2pc&sma_abv_40")
+        self.assertEqual(MIN_BACKTEST_TRADES, 30)
+        self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
+        self.assertEqual(QUAL_N_WINDOWS, 23)
+
+    def test_next_refill_batch_fills_undry_against_8726_taken(self):
+        """Farm-dry: unique_tested ≈ 8726 drained the #64 recipe. Undry prefix must refill."""
+        new_atoms = set(UNDRY_CONT_ATOMS) | {UNDRY_RSI, "h1_sma_abv_70"} | set(
+            MOM_FILTERS_HTF_INTERMEDIATE
+        )
+        drained = [
+            n
+            for n in iter_recipe_names()
+            if not (set(n.split("&")) & new_atoms)
+        ]
+        taken = set(drained) | set(generate_universe())
+        i = 0
+        while len(taken) < 8726:
+            taken.add(f"parked_dummy_{i}")
+            i += 1
+        self.assertGreaterEqual(len(taken), 8726)
+        added = next_refill_batch(taken_names=taken, n=20)
+        self.assertGreaterEqual(len(added), 20)
+        taken_keys = {near_duplicate_key(n) for n in taken}
+        seen = set()
+        for name in added:
+            self.assertNotIn(name, taken)
+            key = near_duplicate_key(name)
+            self.assertNotIn(key, taken_keys, msg=name)
+            self.assertNotIn(key, seen)
+            seen.add(key)
+            self.assertTrue(name_is_parseable(name), msg=name)
+            self.assertTrue(_has_mint_tag(name), msg=name)
+            self.assertFalse(name_has_mom_gt_and_dip(name), msg=name)
+            self.assertFalse(
+                any(tok.startswith(("don_hi_", "near_swing_")) for tok in name.split("&")),
+                msg=name,
+            )
+            self.assertNotIn("mom_12b_gt2pc", name.split("&"), msg=name)
+            for _atom, n in structure_lookbacks(name):
+                self.assertLessEqual(n, 96, msg=name)
+        self.assertEqual(added[0], "h1_ema_abv_20&mom_18b_gt2pc&sma_abv_40")
+        self.assertTrue(
+            any(tok in ("sma_abv_40", "ema_abv_40") for tok in added[0].split("&"))
+        )
         self.assertEqual(MIN_BACKTEST_TRADES, 30)
         self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
         self.assertEqual(QUAL_N_WINDOWS, 23)
