@@ -39,7 +39,10 @@ around the admit island and emit ``mom_18b_gt2pc`` first on the
 regime path. Same-date later: mint non-collapsing ``h1_sma_abv_{20,24,30}``
 twins of that island and emit mild pullback dips
 (``dip_24b_lt5pc`` / ``dip_24b_lt6pc`` / ``dip_18b_lt2pc``) first on
-the regime×dip path. Still no named candlesticks. OOS gates unchanged.
+the regime×dip path. Same-date 2026-09-14: un-dry the farm by
+combining winning HTF×mom with mild dip / continuation 3-atoms
+(not structure) and densifying unused distinct HTF periods + mom
+grids. Still no named candlesticks. OOS gates unchanged.
 """
 from __future__ import annotations
 
@@ -125,7 +128,7 @@ GRIND_FILTERS: tuple[str, ...] = CONTINUATION_TRENDS
 # Extra periods stay distinct under near_duplicate_key / _round_period
 # vs the shipped three (24→25, sma_50, h1/24→25), except 18→20
 # (same canon as 20; still minted). Skip 10 (collides with 12→10)
-# and ema_50 (collides with ema_48→50).
+# and ema_50 (collides with ema_48→50) on the same tf+kind.
 REGIME_ATOMS: tuple[str, ...] = (
     "h4_ema_abv_24",
     "h4_sma_abv_50",
@@ -141,6 +144,46 @@ REGIME_ATOMS: tuple[str, ...] = (
     "h4_ema_abv_12",
     "h4_ema_abv_48",
     "h4_sma_abv_24",
+    # 2026-09-14: unused canons around the admit island. Verified
+    # against _round_period: 12→10, 40→40, 50→50, 15→15, 36→35,
+    # 20→20, 30→30. Do not mint h1_sma_abv_18 (18→20) or
+    # h4_ema_abv_50 (48→50) or h4_sma_abv_48 (50).
+    "h1_ema_abv_12",
+    "h1_ema_abv_40",
+    "h1_ema_abv_50",
+    "h1_sma_abv_15",
+    "h1_sma_abv_36",
+    "h1_sma_abv_40",
+    "h4_ema_abv_20",
+    "h4_ema_abv_30",
+    "h4_ema_abv_36",
+    "h4_sma_abv_20",
+    "h4_sma_abv_30",
+)
+# Winning HTF island + nearby distinct (or exact-period 18) for
+# selective 3-atoms. Not the full REGIME_ATOMS cartesian — h4
+# leftovers stay 2-atom. Combine what already works.
+REGIME_ADMIT_ATOMS: tuple[str, ...] = (
+    "h1_ema_abv_20",
+    "h1_ema_abv_24",
+    "h1_ema_abv_30",
+    "h1_sma_abv_24",
+    "h1_sma_abv_30",
+    "h1_sma_abv_20",
+    "h1_ema_abv_15",
+    "h1_ema_abv_18",
+    "h1_ema_abv_36",
+    "h1_ema_abv_12",
+    "h1_ema_abv_40",
+    "h1_ema_abv_50",
+    "h1_sma_abv_15",
+    "h1_sma_abv_36",
+    "h1_sma_abv_40",
+)
+# Parser-allowed 5m continuation tags for regime&mom&trend 3-atoms.
+REGIME_CONT_ATOMS: tuple[str, ...] = (
+    "sma_abv_50",
+    "ema_abv_20",
 )
 # Short-continuation mom around the first admit (12–24b / gt2–gt4).
 # near_duplicate_key: lb rounds to 6, thr to even. gt3pc→gt4pc so
@@ -158,6 +201,19 @@ MOM_FILTERS_HTF_DENSE: tuple[str, ...] = (
     "mom_18b_gt6pc",
     "mom_12b_gt6pc",
 )
+# Unused lookbacks / % that stay distinct from MOM_FILTERS + DENSE.
+# 54/66 are unused lbs (gt1 would collapse onto gt2 — emit gt2).
+# gt4 at 6/30/42 does not share canon with legacy gt3/gt5 or grind gt1.
+# gt6 at 24/36 is distinct from 24b_gt5→gt4 and 36b_gt4 / 36b_gt2.
+MOM_FILTERS_HTF_EXPAND: tuple[str, ...] = (
+    "mom_54b_gt2pc",
+    "mom_66b_gt2pc",
+    "mom_6b_gt4pc",
+    "mom_30b_gt4pc",
+    "mom_42b_gt4pc",
+    "mom_24b_gt6pc",
+    "mom_36b_gt6pc",
+)
 # Regime-path mom order: winning-neighborhood first so dry refill
 # emits HTF×mom_18b_gt2pc before leftover mom / dense / grind.
 # Public MOM_FILTERS (leftover structure families) stay as-is.
@@ -168,7 +224,12 @@ REGIME_MOM_PRIORITY: tuple[str, ...] = (
 )
 REGIME_MOM_BASES: tuple[str, ...] = REGIME_MOM_PRIORITY + tuple(
     m
-    for m in (MOM_FILTERS + MOM_FILTERS_HTF_DENSE + GRIND_FILTERS)
+    for m in (
+        MOM_FILTERS
+        + MOM_FILTERS_HTF_DENSE
+        + MOM_FILTERS_HTF_EXPAND
+        + GRIND_FILTERS
+    )
     if m not in REGIME_MOM_PRIORITY
 )
 # Mild pullback-in-trend first on HTF×dip. lt5 is the winning 2-atom
@@ -495,21 +556,39 @@ def _regime_pair_ands(entries: tuple[str, ...]) -> Iterator[str]:
             yield f"{regime}&{entry}"
 
 
+def _regime_winner_3atoms() -> Iterator[str]:
+    """Admit-island 3-atoms: combine HTF×mom with mild dip / continuation.
+
+    Not HTF×mom×structure (burned). Parser already ANDs three atoms.
+    ``h1_ema_abv_18`` shares canon with 20 — exact 18 name is still
+    emitted; ``next_refill_batch`` skips it when the 20 twin is taken.
+    """
+    for regime in REGIME_ADMIT_ATOMS:
+        for mom in REGIME_MOM_PRIORITY:
+            for dip in REGIME_DIP_PRIORITY:
+                yield f"{regime}&{mom}&{dip}"
+    for regime in REGIME_ADMIT_ATOMS:
+        for mom in REGIME_MOM_PRIORITY:
+            for cont in REGIME_CONT_ATOMS:
+                yield f"{regime}&{mom}&{cont}"
+
+
 def _regime_ands() -> Iterator[str]:
     """2026-09-13: HTF buyer-regime AND existing 5m DIP/MOM/WIDE/GRIND.
 
     Same-date later: denser HTF periods + short-continuation mom.
-    Same-date later: 2-atom only. Structure ANDs on HTF×mom (and
-    HTF×dip) destroy the mild-continuation edge that clears the
-    frozen gate. Same-date later: ``h1_ema_abv_18`` / ``36`` and
+    Same-date later: no structure AND on HTF×mom / HTF×dip.
+    Same-date later: ``h1_ema_abv_18`` / ``36`` and
     ``mom_18b_gt2pc`` first among regime mom bases. Same-date later:
     ``h1_sma_abv_{20,24,30}`` twins and ``REGIME_DIP_PRIORITY``
     (``dip_24b_lt5pc`` / ``dip_24b_lt6pc`` / ``dip_18b_lt2pc``)
-    first among regime dip bases. Emit ``regime&mom`` then
-    ``regime&dip`` — no ``regime&entry&don_hi`` / ``near_swing_lo``.
-    Dry refill mints never-tested HTF×mom 2-atoms ahead of HTF×dip.
-    HTF False → no new long (flat). No named candlesticks.
+    first among regime dip bases. 2026-09-14: winner 3-atoms first
+    (``regime&mom&mild_dip`` then ``regime&mom&continuation``), then
+    ``regime&mom`` then ``regime&dip``. No ``don_hi`` / ``near_swing_lo``.
+    Dry refill hits combined admits immediately. HTF False → no new
+    long (flat). No named candlesticks.
     """
+    yield from _regime_winner_3atoms()
     yield from _regime_pair_ands(REGIME_MOM_BASES)
     yield from _regime_pair_ands(REGIME_DIP_BASES)
 
@@ -545,12 +624,12 @@ def iter_recipe_names() -> Iterator[str]:
     """Deterministic bounded stream. Not a full cartesian of every atom.
 
     HTF buyer-regime families are first so a dry refill mints
-    ``regime&mom`` (2-atom only) ahead of HTF×dip and leftover
-    mean-reversion. No HTF×mom×structure. Grind 1% 2-atoms and
-    wide / short-MA continuation follow, then legacy 2026-09-11
-    families, the 2026-09-12 near-level pass, then leftover TREND
-    / ema_stack / 3-atom families. Dip×support and short-horizon
-    mom stay on the frozen 3×3. No WaveTrend, no MFI.
+    admit-island ``regime&mom&mild_dip`` / continuation 3-atoms,
+    then ``regime&mom`` 2-atoms, then HTF×dip. No HTF×mom×structure.
+    Grind 1% 2-atoms and wide / short-MA continuation follow, then
+    legacy 2026-09-11 families, the 2026-09-12 near-level pass, then
+    leftover TREND / ema_stack / 3-atom families. Dip×support and
+    short-horizon mom stay on the frozen 3×3. No WaveTrend, no MFI.
     """
     yield from _regime_ands()
     for n in STRUCTURE_NS:
