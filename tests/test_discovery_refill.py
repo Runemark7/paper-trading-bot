@@ -66,6 +66,12 @@ from hedge_fund.trading.refill import (
     SUPPORT_EXTRA_TRENDS,
     THREE_ATOM_EXTRA_TRENDS,
     TREND_FILTERS,
+    ISLAND2B_CONT,
+    ISLAND2B_H4,
+    ISLAND2B_H4_CORE,
+    ISLAND2B_MOM,
+    ISLAND2B_RSI,
+    ISLAND2B_TF_PAIRS,
     UNDRY_CONT_ATOMS,
     UNDRY_GAP_CONT,
     UNDRY_GAP_REGIME,
@@ -483,6 +489,19 @@ class RecipeBoundsTests(unittest.TestCase):
         self.assertIn("h1_sma_abv_70", FRESH_STACK_REGIME)
         self.assertIn("h1_ema_abv_70", FRESH_STACK_REGIME)
         self.assertNotIn("mom_12b_gt2pc", UNDRY_MOM_PRIORITY)
+        self.assertEqual(ISLAND2B_CONT, ("sma_abv_30", "ema_abv_30"))
+        self.assertEqual(ISLAND2B_RSI, "rsi_14_>50")
+        self.assertEqual(ISLAND2B_MOM, ("mom_18b_gt2pc", "mom_24b_gt2pc"))
+        self.assertNotIn("mom_12b_gt2pc", ISLAND2B_MOM)
+        self.assertEqual(ISLAND2B_H4_CORE[:3], (
+            "h4_ema_abv_20",
+            "h4_ema_abv_24",
+            "h4_ema_abv_30",
+        ))
+        self.assertTrue(set(ISLAND2B_H4).issubset(REGIME_ATOMS))
+        self.assertNotIn("h4_ema_abv_40", ISLAND2B_H4)
+        self.assertNotIn("h4_sma_abv_40", ISLAND2B_H4)
+        self.assertNotIn("h4_ema_abv_50", ISLAND2B_H4)
         self.assertEqual(
             DEEP_STACK_REGIME,
             (
@@ -794,7 +813,10 @@ class RecipeBoundsTests(unittest.TestCase):
         self.assertIn("h1_ema_abv_60&mom_18b_gt2pc", names)
         self.assertIn("h1_sma_abv_12&mom_78b_gt2pc", names)
         self.assertIn("h4_ema_abv_15&mom_18b_gt8pc", names)
-        self.assertEqual(names[0], "h1_ema_abv_20&mom_18b_gt2pc&sma_abv_40")
+        self.assertEqual(
+            names[0],
+            "h4_ema_abv_20&mom_18b_gt2pc&sma_abv_30&rsi_14_>50",
+        )
         self.assertLess(
             names.index("h1_ema_abv_20&mom_18b_gt2pc&sma_abv_40"),
             names.index("h1_ema_abv_20&mom_18b_gt2pc&sma_abv_30"),
@@ -1092,15 +1114,19 @@ class RefillBatchTests(unittest.TestCase):
         uni = generate_universe()
         added = next_refill_batch(taken_names=uni, n=DISCOVERY_REFILL_BATCH_SIZE)
         self.assertEqual(len(added), DISCOVERY_REFILL_BATCH_SIZE)
-        self.assertEqual(added[0], "h1_ema_abv_20&mom_18b_gt2pc&sma_abv_40")
+        self.assertEqual(
+            added[0],
+            "h4_ema_abv_20&mom_18b_gt2pc&sma_abv_30&rsi_14_>50",
+        )
         hit = [
             n for n in added
-            if n.count("&") == 2
-            and any(tok.startswith("h1_") for tok in n.split("&"))
-            and any(tok.startswith("mom_") for tok in n.split("&"))
-            and any(tok in ("sma_abv_40", "ema_abv_40") for tok in n.split("&"))
+            if n.count("&") == 3
+            and any(tok.startswith("h4_") for tok in n.split("&"))
+            and "mom_18b_gt2pc" in n.split("&")
+            and any(tok in ("sma_abv_30", "ema_abv_30") for tok in n.split("&"))
+            and "rsi_14_>50" in n.split("&")
         ]
-        self.assertTrue(hit, msg=f"expected HTF×mom×sma/ema_abv_40 in {added}")
+        self.assertTrue(hit, msg=f"expected h4×mom×abv_30×rsi_>50 in {added}")
         self.assertFalse(any("mom_12b_" in n for n in added))
         for name in added:
             self.assertTrue(name_is_parseable(name), msg=name)
@@ -1546,7 +1572,10 @@ class RefillBatchTests(unittest.TestCase):
                 msg=name,
             )
             self.assertFalse(name_has_mom_gt_and_dip(name), msg=name)
-        self.assertEqual(added[0], "h1_ema_abv_20&mom_18b_gt2pc&sma_abv_40")
+        self.assertEqual(
+            added[0],
+            "h4_ema_abv_20&mom_18b_gt2pc&sma_abv_30&rsi_14_>50",
+        )
         self.assertEqual(MIN_BACKTEST_TRADES, 30)
         self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
         self.assertEqual(QUAL_N_WINDOWS, 23)
@@ -1594,6 +1623,76 @@ class RefillBatchTests(unittest.TestCase):
         self.assertEqual(MIN_BACKTEST_TRADES, 30)
         self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
         self.assertEqual(QUAL_N_WINDOWS, 23)
+
+    def test_next_refill_batch_fills_island_2b_against_drained_recipe(self):
+        """Farm-dry after #65: abv_40 / rsi_>60 taken. Island #2b must refill."""
+        names = list(iter_recipe_names())
+        old_first = "h1_ema_abv_20&mom_18b_gt2pc&sma_abv_40"
+        cut = names.index(old_first)
+        prefix = names[:cut]
+        self.assertGreaterEqual(len(prefix), 80)
+        self.assertLessEqual(len(prefix), 400)
+        prefix_keys = {near_duplicate_key(n) for n in prefix}
+        rest_keys = {near_duplicate_key(n) for n in names[cut:]}
+        self.assertEqual(len(prefix_keys), len(prefix))
+        self.assertTrue(prefix_keys.isdisjoint(rest_keys))
+        self.assertEqual(prefix[0], "h4_ema_abv_20&mom_18b_gt2pc&sma_abv_30&rsi_14_>50")
+        self.assertIn("h4_ema_abv_24&mom_18b_gt2pc&ema_abv_30&rsi_14_>50", prefix)
+        self.assertIn("h4_sma_abv_30&mom_18b_gt2pc&sma_abv_30", prefix)
+        self.assertIn(
+            "h1_ema_abv_20&h4_ema_abv_20&mom_18b_gt2pc&sma_abv_30&ema_abv_30&rsi_14_>50",
+            prefix,
+        )
+        self.assertIn(
+            "h1_ema_abv_20&mom_18b_gt2pc&sma_abv_30&ema_abv_30&sma_abv_20&ema_abv_20&rsi_14_>50",
+            prefix,
+        )
+        self.assertLess(prefix.index(prefix[0]), prefix.index("h4_ema_abv_20&mom_18b_gt2pc&sma_abv_30"))
+        for name in prefix:
+            self.assertTrue(name_is_parseable(name), msg=name)
+            self.assertFalse(name_has_mom_gt_and_dip(name), msg=name)
+            self.assertNotIn("mom_12b_gt2pc", name.split("&"), msg=name)
+            self.assertNotIn("sma_abv_40", name.split("&"), msg=name)
+            self.assertNotIn("ema_abv_40", name.split("&"), msg=name)
+            self.assertNotIn("rsi_14_>60", name.split("&"), msg=name)
+            self.assertNotIn("h4_ema_abv_40", name.split("&"), msg=name)
+            self.assertNotIn("h4_sma_abv_40", name.split("&"), msg=name)
+            self.assertLessEqual(name.count("&") + 1, 7, msg=name)
+            self.assertFalse(
+                any(tok.startswith(("don_hi_", "don_lo_", "near_swing_", "dbl_bot_")) for tok in name.split("&")),
+                msg=name,
+            )
+        taken = set(names[cut:]) | set(generate_universe())
+        i = 0
+        while len(taken) < 9498:
+            taken.add(f"parked_dummy_{i}")
+            i += 1
+        added = next_refill_batch(taken_names=taken, n=20)
+        self.assertGreaterEqual(len(added), 20)
+        taken_keys = {near_duplicate_key(n) for n in taken}
+        seen = set()
+        for name in added:
+            self.assertNotIn(name, taken)
+            key = near_duplicate_key(name)
+            self.assertNotIn(key, taken_keys, msg=name)
+            self.assertNotIn(key, seen)
+            seen.add(key)
+            self.assertTrue(name_is_parseable(name), msg=name)
+            self.assertFalse(name_has_mom_gt_and_dip(name), msg=name)
+            self.assertIn("h4_", name)
+            self.assertTrue(
+                any(tok in ("sma_abv_30", "ema_abv_30") for tok in name.split("&")),
+                msg=name,
+            )
+        self.assertEqual(added[0], "h4_ema_abv_20&mom_18b_gt2pc&sma_abv_30&rsi_14_>50")
+        self.assertNotEqual(
+            near_duplicate_key(added[0]),
+            near_duplicate_key("h1_ema_abv_20&mom_18b_gt2pc&sma_abv_30&rsi_14_>50"),
+        )
+        self.assertEqual(MIN_BACKTEST_TRADES, 30)
+        self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
+        self.assertEqual(QUAL_N_WINDOWS, 23)
+        self.assertEqual(len(ISLAND2B_TF_PAIRS), 9)
 
     def test_max_names_one_refills_only_when_eligible_empty(self):
         self.assertEqual(DISCOVER_CYCLE_MAX_NAMES, 1)

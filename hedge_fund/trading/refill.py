@@ -55,7 +55,12 @@ stay). Already-queued mom∧dip extended names may still drain once
 unused continuation ``sma_abv_40`` / ``ema_abv_40`` (distinct from
 20/30/50), ``rsi_14_>60``, intermediate mom (not short-12),
 ``h1_sma_abv_70``, and DEEP 4–5 stacks on paid-off ``h1_*_abv_50/60``
-spines emit **first**. Still no named candlesticks. OOS gates unchanged.
+spines emit **first**. 2026-10-02: that ``sma_abv_40`` / ``rsi_14_>60``
+neighborhood drained with +0 admits. Next prefix is h4 twins of the
+paying ``h1_* & mom_18b_gt2pc & *_abv_30 & rsi_14_>50`` shape, plus
+sparse h4×mom×``*_abv_30`` and under-emitted 5–7 atom stacks (dual
+h1+h4, both mild MAs). Not another ``*_abv_40`` / ``rsi_>60`` lead.
+Still no named candlesticks. OOS gates unchanged.
 """
 from __future__ import annotations
 
@@ -306,6 +311,62 @@ UNDRY_GAP_CONT: tuple[str, ...] = (
     "sma_abv_50",
     "ema_abv_20",
 )
+# 2026-10-02 admit-island densify #2b. #65 ``*_abv_40`` / ``rsi_14_>60``
+# drained with +0 OOS admits. Paying shape already tested on h1 is
+# ``h1_* & mom_18b_gt2pc & *_abv_30 & rsi_14_>50``. h4 regimes were
+# 2-atom only — mint those twins and under-emitted 4–7 stacks.
+# Periods already live in REGIME_ATOMS (no new HTF 2-atom cartesian).
+# Skip ``h4_*_abv_40`` (burned neighborhood) and ``h4_ema_abv_50``
+# (48→50, same canon as ``h4_ema_abv_48``). No mom_12. No mom∧dip.
+# No structure. ``rsi_14_>50`` / ``*_abv_30`` stay the confirmation
+# (not rsi_>60 / abv_40).
+ISLAND2B_H4_CORE: tuple[str, ...] = (
+    "h4_ema_abv_20",
+    "h4_ema_abv_24",
+    "h4_ema_abv_30",
+    "h4_sma_abv_20",
+    "h4_sma_abv_24",
+    "h4_sma_abv_30",
+)
+ISLAND2B_H4_NEIGHBOR: tuple[str, ...] = (
+    "h4_ema_abv_15",
+    "h4_ema_abv_36",
+    "h4_sma_abv_15",
+    "h4_sma_abv_36",
+    "h4_ema_abv_48",
+    "h4_sma_abv_50",
+    "h4_ema_abv_60",
+)
+ISLAND2B_H4: tuple[str, ...] = ISLAND2B_H4_CORE + ISLAND2B_H4_NEIGHBOR
+ISLAND2B_MOM: tuple[str, ...] = (
+    "mom_18b_gt2pc",
+    "mom_24b_gt2pc",
+)
+ISLAND2B_CONT: tuple[str, ...] = (
+    "sma_abv_30",
+    "ema_abv_30",
+)
+ISLAND2B_RSI: str = "rsi_14_>50"
+# Same-kind twins. ``h1_ema_abv_50`` pairs with ``h4_ema_abv_48``
+# (48→50). Keys stay distinct (h1 vs h4). No period-40 pairs.
+ISLAND2B_TF_PAIRS_CORE: tuple[tuple[str, str], ...] = (
+    ("h1_ema_abv_20", "h4_ema_abv_20"),
+    ("h1_ema_abv_24", "h4_ema_abv_24"),
+    ("h1_ema_abv_30", "h4_ema_abv_30"),
+    ("h1_sma_abv_20", "h4_sma_abv_20"),
+    ("h1_sma_abv_24", "h4_sma_abv_24"),
+    ("h1_sma_abv_30", "h4_sma_abv_30"),
+)
+ISLAND2B_TF_PAIRS_PAID: tuple[tuple[str, str], ...] = (
+    ("h1_ema_abv_50", "h4_ema_abv_48"),
+    ("h1_sma_abv_50", "h4_sma_abv_50"),
+    ("h1_ema_abv_60", "h4_ema_abv_60"),
+)
+ISLAND2B_TF_PAIRS: tuple[tuple[str, str], ...] = (
+    ISLAND2B_TF_PAIRS_CORE + ISLAND2B_TF_PAIRS_PAID
+)
+# Paid-off h1 spines. Deeper 5–7 use both mild MAs, not abv_40.
+ISLAND2B_H1_SPINE: tuple[str, ...] = DEEP_STACK_REGIME
 # Skip mom_12b on the undry prefix (research + Sharpe near-miss).
 UNDRY_MOM_PRIORITY: tuple[str, ...] = (
     "mom_18b_gt2pc",
@@ -756,6 +817,65 @@ def _regime_pair_ands(
             yield f"{regime}&{entry}"
 
 
+def _regime_island_2b(blocked_keys: set[str]) -> Iterator[str]:
+    """h4 twins and deeper stacks around the paying admit island.
+
+    Emit first on dry refill. The h1 4-atom
+    ``regime & mom_18b_gt2pc & *_abv_30 & rsi_14_>50`` is already in
+    the drained stream. This prefix is the h4 twin of that shape,
+    sparse h4×mom×``*_abv_30``, then 5–7 atom stacks (both mild MAs,
+    optional h1+h4). ``blocked_keys`` are near-duplicate keys of the
+    already-emitted recipe. No ``*_abv_40``, no ``rsi_14_>60``, no
+    ``mom_12b_*``, no dip, no structure.
+    """
+    seen = set(blocked_keys)
+
+    def emit(name: str) -> Iterator[str]:
+        key = near_duplicate_key(name)
+        if key in seen:
+            return
+        seen.add(key)
+        yield name
+
+    def h4_shaped(regimes: tuple[str, ...], moms: tuple[str, ...]) -> Iterator[str]:
+        for regime in regimes:
+            for mom in moms:
+                for cont in ISLAND2B_CONT:
+                    yield from emit(f"{regime}&{mom}&{cont}&{ISLAND2B_RSI}")
+        for regime in regimes:
+            for mom in moms:
+                for cont in ISLAND2B_CONT:
+                    yield from emit(f"{regime}&{mom}&{cont}")
+        for regime in regimes:
+            for mom in moms:
+                yield from emit(
+                    f"{regime}&{mom}&sma_abv_30&ema_abv_30&{ISLAND2B_RSI}"
+                )
+
+    yield from h4_shaped(ISLAND2B_H4_CORE, ISLAND2B_MOM)
+    yield from h4_shaped(ISLAND2B_H4_NEIGHBOR, ("mom_18b_gt2pc",))
+    mom = "mom_18b_gt2pc"
+    for h1, h4 in ISLAND2B_TF_PAIRS:
+        yield from emit(f"{h1}&{h4}&{mom}&sma_abv_30&{ISLAND2B_RSI}")
+        yield from emit(f"{h1}&{h4}&{mom}&ema_abv_30&{ISLAND2B_RSI}")
+    for h1, h4 in ISLAND2B_TF_PAIRS:
+        yield from emit(f"{h1}&{h4}&{mom}&sma_abv_30&ema_abv_30&{ISLAND2B_RSI}")
+    for h1, h4 in ISLAND2B_TF_PAIRS:
+        yield from emit(
+            f"{h1}&{h4}&{mom}&sma_abv_30&ema_abv_30&sma_abv_20&{ISLAND2B_RSI}"
+        )
+    for regime in ISLAND2B_H1_SPINE:
+        yield from emit(f"{regime}&{mom}&sma_abv_30&ema_abv_30&{ISLAND2B_RSI}")
+    for regime in ISLAND2B_H1_SPINE:
+        yield from emit(
+            f"{regime}&{mom}&sma_abv_30&ema_abv_30&sma_abv_20&{ISLAND2B_RSI}"
+        )
+    for regime in ISLAND2B_H1_SPINE:
+        yield from emit(
+            f"{regime}&{mom}&sma_abv_30&ema_abv_30&sma_abv_20&ema_abv_20&{ISLAND2B_RSI}"
+        )
+
+
 def _regime_undry_winner_shaped() -> Iterator[str]:
     """Admit-island densify. Emit first on dry refill.
 
@@ -972,15 +1092,18 @@ def _regime_ands() -> Iterator[str]:
     admit-island densify (``sma_abv_40`` / ``ema_abv_40``,
     ``rsi_14_>60``, intermediate mom, gap-fill 50/60 continuation,
     ``h1_sma_abv_70``) emits before the drained fresh-30 / rsi-55
-    prefix so dry refill is not idle. No ``don_hi`` /
-    ``near_swing_lo``. Cheap ``near_swing_hi`` N≤48 only on depth-7
-    stacks (not minted without a dip extra). HTF False → no new long
-    (flat). No named candlesticks.
+    prefix. 2026-10-02: that abv_40 / rsi_60 prefix drained (+0 admits).
+    **Island #2b** emits first: h4 twins of
+    ``mom_18b_gt2pc & *_abv_30 & rsi_14_>50``, sparse h4×mom×abv_30,
+    then 5–7 atom stacks. No ``don_hi`` / ``near_swing_lo``. Cheap
+    ``near_swing_hi`` N≤48 only on depth-7 stacks (not minted without
+    a dip extra). HTF False → no new long (flat). No named candlesticks.
     """
     yield from _iter_without_mom_and_dip(_regime_ands_raw())
 
 
-def _regime_ands_raw() -> Iterator[str]:
+def _drained_regime_raw() -> Iterator[str]:
+    """Recipe families already walked by the farm before island #2b."""
     yield from _regime_undry_winner_shaped()
     yield from _regime_fresh_winner_shaped()
     yield from _regime_fresh_pairs()
@@ -988,6 +1111,13 @@ def _regime_ands_raw() -> Iterator[str]:
     yield from _regime_deep_stacks()
     yield from _regime_pair_ands(REGIME_MOM_BASES_PRIOR, regimes=REGIME_ATOMS_PRIOR)
     yield from _regime_pair_ands(REGIME_DIP_BASES, regimes=REGIME_ATOMS_PRIOR)
+
+
+def _regime_ands_raw() -> Iterator[str]:
+    drained = list(_drained_regime_raw())
+    blocked = {near_duplicate_key(name) for name in drained}
+    yield from _regime_island_2b(blocked)
+    yield from drained
 
 
 def _trend_participation_ands(n: int) -> Iterator[str]:
@@ -1020,11 +1150,12 @@ def _trend_participation_ands(n: int) -> Iterator[str]:
 def iter_recipe_names() -> Iterator[str]:
     """Deterministic bounded stream. Not a full cartesian of every atom.
 
-    Fresh never-tested families are first so a dry refill mints unused
-    admit-island densify (``sma_abv_40`` / ``ema_abv_40`` continuation,
-    ``rsi_14_>60``, intermediate mom on paid-off spines, gap-fill
-    ``sma_abv_50`` / ``ema_abv_20`` on 50/60 HTF) immediately. Then
-    drained winner-shaped stacks (``sma_abv_30`` / ``ema_abv_30``,
+    Island #2b is first so a dry refill mints h4 twins of the paying
+    ``h1_* & mom_18b_gt2pc & *_abv_30 & rsi_14_>50`` shape (and sparse
+    h4×mom×``*_abv_30``, then 5–7 atom stacks) immediately. The drained
+    #65 prefix (``sma_abv_40`` / ``ema_abv_40``, ``rsi_14_>60``,
+    intermediate mom, gap-fill ``sma_abv_50`` / ``ema_abv_20``) follows.
+    Then drained winner-shaped stacks (``sma_abv_30`` / ``ema_abv_30``,
     ``rsi_14_>55``, extra-regime ``rsi_14_>50``, continuation × rsi).
     Then admit-island ``regime&mom&continuation`` 3-atoms, then
     role-bucket stacks (depth 4–5 continuation / RSI; never mom∧dip),
