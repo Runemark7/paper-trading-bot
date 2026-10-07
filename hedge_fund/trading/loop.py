@@ -41,7 +41,7 @@ from hedge_fund.risk.rm_v1 import (
 )
 from hedge_fund.signals.momentum import Signal, compute_signal
 from hedge_fund.trading.buy_and_hold import overlay_equity
-from hedge_fund.trading.constants import PAPER_START_CASH, QUAL_TIMEFRAME
+from hedge_fund.trading.constants import PAPER_START_CASH, QUAL_TIMEFRAME, live_signal_eval_bars
 from hedge_fund.trading.store import TradeStore
 from hedge_fund.backtest.strategies import atr
 
@@ -75,7 +75,7 @@ class TradingLoop:
         regime: "RegimeGate | None" = None,
         timeframe: str = QUAL_TIMEFRAME,
         horizon_bars: int = 6,  # ~30 min at 5m; success = close above entry at horizon
-        kline_limit: int = 300,
+        kline_limit: int | None = None,
         strategy: str = "sma_stack",
         strategies: list[str] | None = None,
         strategy_file: str | None = None,
@@ -101,7 +101,8 @@ class TradingLoop:
         self.strategy_file = strategy_file
         self.timeframe = timeframe
         self.horizon_bars = horizon_bars
-        self.kline_limit = kline_limit
+        # None → qualification last-window length, not the legacy 300-bar tail.
+        self.kline_limit = live_signal_eval_bars() if kline_limit is None else int(kline_limit)
         self.history: list[CycleResult] = []
         # open trade ids keyed by symbol, for close accounting
         self._open_ids: dict[str, int] = {}

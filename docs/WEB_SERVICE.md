@@ -18,7 +18,8 @@ forward. To restrict, pass `--host 127.0.0.1`.
 | Method | Route          | Description                                        |
 |--------|----------------|----------------------------------------------------|
 | GET    | `/`            | Dashboard HTML (equity vs baseline, trade log, calibration, learning) |
-| GET    | `/api/summary` | Equity, closed trades, win rate, total P&L, last update |
+| GET    | `/api/summary` | Equity, closed trades, win rate, total P&L, last update, `live_history` (5m bars and last bar time per symbol) |
+| GET    | `/api/status`  | Running-now vs in-progress. `running_now.live_history` is the same tape summary (no Binance fetch). `champions_per_cycle` is every active name; `evaluation_limit` is the 80-trade graduation bar. |
 | GET    | `/api/learning`| Per-condition learning state: trials, calibrated probability, level |
 | GET    | `/api/regime`  | Current crypto regime zone / score / allowed flag  |
 | GET    | `/api/discovery/summary` | Last-known unique-tested / in-flight (1 name / ~90s cycle slice if `DISCOVERY_ON_CYCLE=1`; otherwise Windows worker) / leftover-untested; farm Start/Stop status + heartbeat; rejected parked forever; empty eligible auto-refills `discovery_extended.json`; newest last_tested_at; stuck/stale copy. `?compact=1` keeps counts / farm / stuck and omits tested / queued / extended_names / in-flight name lists (Champions teaser and farm polls). |

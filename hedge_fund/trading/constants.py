@@ -68,6 +68,18 @@ def qual_keep_bars(n_windows: int | None = None, warmup_bars: int | None = None)
     w = QUAL_WARMUP_BARS if warmup_bars is None else warmup_bars
     return QUAL_WINDOW_BARS * int(n) + int(w)
 
+
+def live_signal_eval_bars() -> int:
+    """Trailing 5m bars the live cycle feeds indicators.
+
+    The last walk-forward window is exactly one scored ``QUAL_WINDOW_BARS``
+    span plus the ``QUAL_WARMUP_BARS`` prefix (EMA/HTF seeded at the start
+    of that slice). Latest-bar values match qualification only on that
+    same slice — not on a 300-bar tail, and not on a shorter lookback-only
+    tail (EMA is path-dependent from its seed).
+    """
+    return QUAL_WINDOW_BARS + QUAL_WARMUP_BARS
+
 # Discovery qualification (scripts/tournament_engine.py). Gates use OOS/test
 # only. Train PnL is logged, never scored, never an admit rule.
 MIN_BACKTEST_SHARPE = 0.30  # modest OOS floor; 0.10 was a participation trophy
@@ -77,6 +89,8 @@ MIN_BACKTEST_TRADES = 30  # OOS trades across all windows (not train+test)
 # diagnostic only (2026-09-12) — one empty/neg window does not veto.
 
 # Paper graduation: TRADE_EVALUATION_LIMIT closed paper trades, then vs B&H.
+# Not a cap on how many champions the live cycle evaluates. run_isolated
+# runs every active name each cycle; the pool can be larger than this.
 TRADE_EVALUATION_LIMIT = 80
 # No MAX_ACTIVE_CHAMPIONS. The 2026-09-01 20-slot arena starved prod's 31
 # grandfathered names (needed = 20 - 31 <= 0). Admission is OOS 5m / rm_v1
