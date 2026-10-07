@@ -52,7 +52,7 @@ Cluster manifests: `k8s/` (ArgoCD app in `k8s/argocd-app.yaml`).
 
 - HTTP routes: [docs/WEB_SERVICE.md](docs/WEB_SERVICE.md)
 - Living mint → farm → eval → prod map (Mermaid): [docs/WORKFLOW.md](docs/WORKFLOW.md)
-- Windows discovery farm: [docs/WINDOWS_DISCOVERY.md](docs/WINDOWS_DISCOVERY.md)
+- Windows / Linux discovery farm: [docs/WINDOWS_DISCOVERY.md](docs/WINDOWS_DISCOVERY.md). Workers claim leases from prod so concurrent hosts do not evaluate the same name.
 
 ## Layout
 

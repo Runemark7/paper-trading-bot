@@ -193,6 +193,7 @@ export default function DiscoveryBuckets() {
           {logRows != null ? ` · ${logRows} log rows` : ""}
         </Badge>
         <Badge tone="neutral">evals today {counts?.evals_today ?? "…"}</Badge>
+        <Badge tone="wait">leased {counts?.leased ?? data?.leases?.active ?? 0}</Badge>
         {(counts?.rejected_parked ?? counts?.tested_fail ?? 0) > 0 ? (
           <Badge tone="neg">parked forever {counts?.rejected_parked ?? counts?.tested_fail}</Badge>
         ) : null}
@@ -220,7 +221,13 @@ export default function DiscoveryBuckets() {
           <div className="space-y-2">
             <div className="flex flex-wrap items-center gap-2">
               <Badge tone={flight.stale || stuck ? "warn" : "wait"}>
-                {flight.stale || stuck ? "discovery stuck / cycle overdue" : "stamp: tournament"}
+                {flight.stale || stuck
+                  ? "discovery stuck / cycle overdue"
+                  : flight.source === "claim_queue"
+                    ? "leased"
+                    : flight.source === "windows_worker"
+                      ? "worker batch"
+                      : "stamp: tournament"}
               </Badge>
               <span className="text-xs text-white/50">
                 since {fmtWhen(flight.stamp_started_at ?? flight.started_at)} · liveness not verified

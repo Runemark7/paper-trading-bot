@@ -97,8 +97,26 @@ export default function FarmControl() {
         <Badge tone={farmTone(farm?.status)}>{farmStatusLabel(farm)}</Badge>
         <span className="text-xs text-white/50">
           last heartbeat {farm?.heartbeat_at ? fmtWhen(farm.heartbeat_at) : "never recorded"}
+          {(q.data?.leases?.active ?? 0) > 0 ? ` · ${q.data?.leases?.active} leased` : ""}
         </span>
       </div>
+      {(q.data?.workers ?? []).length > 0 ? (
+        <ul className="mb-3 space-y-1 text-xs text-white/60">
+          {(q.data?.workers ?? []).map((worker) => (
+            <li key={worker.worker_id}>
+              <span className="font-mono text-white/80">{worker.worker_id}</span>
+              {" · "}
+              {worker.status || "unknown"}
+              {" · "}
+              {worker.seen === false ? "not seen" : "seen"}{" "}
+              {worker.last_seen ? fmtWhen(worker.last_seen) : "never"}
+              {" · "}
+              {worker.lease_count} leased
+              {worker.in_flight?.length ? ` (${worker.in_flight.join(", ")})` : ""}
+            </li>
+          ))}
+        </ul>
+      ) : null}
 
       <p className="text-sm text-white/65 mb-3">
         Start / Stop is authenticated. Anyone who can open this site cannot pause
@@ -111,7 +129,7 @@ export default function FarmControl() {
 
       {unseen && (
         <div className="mb-3 rounded-md border border-amber-400/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
-          Worker not seen — Start will not relaunch a dead process. On jensa run{" "}
+          Worker not seen — Start will not relaunch a dead process. On each host run{" "}
           <code className="text-amber-50">python scripts/discovery_worker.py --workers 2</code>
           .
         </div>

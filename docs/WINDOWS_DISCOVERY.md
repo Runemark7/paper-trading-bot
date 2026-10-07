@@ -126,19 +126,58 @@ locally only.
 
 ## 3. How results reach prod
 
-No PVC copy and no `kubectl port-forward`.
+No PVC copy and no `kubectl port-forward`. Default is **claim mode**: prod
+leases names, so a Linux laptop and jensa can run at the same time without
+evaluating the same name. The worker does not need the recipe or a copy of
+the discovery log — only the URL, the token, and `crypto_history_5m.json`.
 
-1. Worker GETs `/api/discovery`, `/api/champions`, `/api/graduated`,
-   `/api/discovery/summary` so fail-once and the champion set match prod.
-2. Evaluates a small batch (default = `--workers`) against local
+1. Worker polls `GET /api/discovery/summary?compact=1` for the Start/Stop flag.
+2. `POST /api/discovery/claim` `{worker_id, n, parallel}` with
+   `X-Discovery-Token`. Prod returns up to `n` never-tested names that are
+   not already leased, and records a lease (`worker_id`, `claimed_at`,
+   `expires_at`). TTL is about 2× the batch (2 × `DISCOVERY_EVAL_TIMEOUT_SECONDS`
+   × waves). A dead worker's names return to the pool when the lease expires.
+   If nothing is eligible and unleased, prod refills `discovery_extended.json`
+   from the same recipe (`iter_recipe_names` / `next_refill_batch`, skip
+   tested + `near_duplicate_key`).
+3. Evaluates that batch (default size = `--workers`) against local
    `crypto_history_5m.json`.
-3. POSTs each finished evaluation to
+4. POSTs each finished evaluation to
    `https://trading.runevibe.se/api/discovery/ingest` with
-   `X-Discovery-Token`. Nginx already proxies `/api/`.
-4. Prod appends `discovery_log.json` and, if the name **qualified**, admits
-   it to `champions.json` the same way tournament does. Existing champions
-   are never removed. Same-token optional `force_admit` (e.g. `["dbl_bot_120"]`)
+   `X-Discovery-Token` and `heartbeat.worker_id`. Ingest clears that name's
+   lease. Nginx already proxies `/api/`.
+5. On SIGINT/exit or Stop, `POST /api/discovery/release` drops this worker's
+   leases. Prod appends `discovery_log.json` and, if the name **qualified**,
+   admits it to `champions.json` the same way tournament does. Existing
+   champions are never removed. Fail-once: a tested name is never leased
+   again. Same-token optional `force_admit` (e.g. `["dbl_bot_120"]`)
    seats an existing log row as a paper champion even when beat-B&H still fails.
+
+`worker_id` defaults to `hostname-pid`. Override with `--worker-id` or
+`DISCOVERY_WORKER_ID`.
+
+`--local-plan` is the old behavior (bootstrap prod state, local
+`select_cycle_batch` / refill). Do not run `--local-plan` (or an
+old-version worker that does not call `/api/discovery/claim`) next to a
+claim worker: it ignores leases and will evaluate the same names. Ingest
+still fail-once-skips the second write, but the CPU is wasted. Update both
+hosts, then start them. `--no-ingest` implies local planning.
+
+### Commands
+
+Linux (git checkout, venv, history already under `PAPER_STATE`). A `.env`
+in the working directory is loaded; do not commit it:
+
+```
+python scripts/discovery_worker.py --workers 2
+```
+
+Windows host `jensa` is not a git checkout. From the directory that contains
+`scripts\`, the venv, and the `.env` (same token and URL):
+
+```
+python scripts\discovery_worker.py --workers 2
+```
 
 Dashboard: [https://trading.runevibe.se](https://trading.runevibe.se) —
 Discovery buckets update from the ingested log. A quiet leftover drain

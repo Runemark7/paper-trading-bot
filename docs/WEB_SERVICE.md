@@ -23,8 +23,10 @@ forward. To restrict, pass `--host 127.0.0.1`.
 | GET    | `/api/regime`  | Current crypto regime zone / score / allowed flag  |
 | GET    | `/api/discovery/summary` | Last-known unique-tested / in-flight (1 name / ~90s cycle slice if `DISCOVERY_ON_CYCLE=1`; otherwise Windows worker) / leftover-untested; farm Start/Stop status + heartbeat; rejected parked forever; empty eligible auto-refills `discovery_extended.json`; newest last_tested_at; stuck/stale copy. `?compact=1` keeps counts / farm / stuck and omits tested / queued / extended_names / in-flight name lists (Champions teaser and farm polls). |
 | GET    | `/api/discovery` | Raw `discovery_log.json` (newest-first) |
-| POST   | `/api/discovery/ingest` | Windows worker: append evals + admit qualified names. Requires `PAPER_DISCOVERY_INGEST_TOKEN` (`X-Discovery-Token` or `Authorization: Bearer`). Fail-closed if unset. Fail-once. Does not cull champions. Optional `heartbeat` updates farm liveness. Optional `force_admit` list (same token) seats an existing `discovery_log` name as a paper champion even when stored aggregates still fail beat-B&H — does not re-run OOS gates. |
-| POST   | `/api/discovery/farm` | Start (`enabled=true`) / Stop (`enabled=false`) the Windows farm. **Authenticated** — same `PAPER_DISCOVERY_INGEST_TOKEN` as ingest (`Authorization: Bearer`, `X-Discovery-Token`, or `X-Paper-Discovery-Token`). No/wrong token → 401. Unset token → 503. Not an open toggle. Durable `state/discovery_farm.json` flag — does not kill the worker. |
+| POST   | `/api/discovery/ingest` | Worker: append evals + admit qualified names. Requires `PAPER_DISCOVERY_INGEST_TOKEN` (`X-Discovery-Token` or `Authorization: Bearer`). Fail-closed if unset. Fail-once. Does not cull champions. Optional `heartbeat` (include `worker_id`) updates farm liveness and the per-worker list. Ingest of a name clears its claim lease. Optional `force_admit` list (same token) seats an existing `discovery_log` name as a paper champion even when stored aggregates still fail beat-B&H — does not re-run OOS gates. |
+| POST   | `/api/discovery/claim` | `{worker_id, n, parallel?}`. Same token as ingest. Leases up to `n` never-tested, not-currently-leased names (`discovery_leases.json`). When that pool is empty, refills from `iter_recipe_names` / `next_refill_batch`. Farm Stop returns `names: []` and `paused: true` (does not revoke a batch already leased). |
+| POST   | `/api/discovery/release` | `{worker_id, names?, status?}`. Same token. Drops that worker's leases (clean shutdown / Stop). |
+| POST   | `/api/discovery/farm` | Start (`enabled=true`) / Stop (`enabled=false`) the discovery farm. **Authenticated** — same `PAPER_DISCOVERY_INGEST_TOKEN` as ingest (`Authorization: Bearer`, `X-Discovery-Token`, or `X-Paper-Discovery-Token`). No/wrong token → 401. Unset token → 503. Not an open toggle. Durable `state/discovery_farm.json` flag — does not kill the worker. |
 | POST   | `/api/champions/retain` | Body `{ "keep": ["name", ...] }`. Keep only those names in `champions.json`; drop the rest from the active pool. Same ingest token. Does not delete trade DBs. |
 | POST   | `/api/champions/cull_undated` | Keep only champions with a non-empty persisted `champion_since` (UI "before dating" / missing since). Same ingest token. Does not infer dates or delete trade DBs. |
 | GET    | `/api/trades`  | Recent closed trades                              |
@@ -42,14 +44,16 @@ cloudflared tunnel --url http://127.0.0.1:8787
 ```
 
 Everything except `POST /run`, `POST /api/discovery/ingest`,
+`POST /api/discovery/claim`, `POST /api/discovery/release`,
 `POST /api/discovery/farm`, `POST /api/champions/retain`, and
 `POST /api/champions/cull_undated` is read-only.
 `POST /run` is **not** proxied on the public host (`trading.runevibe.se`).
-`POST /api/discovery/ingest`, `POST /api/discovery/farm`, and the
+`POST /api/discovery/ingest`, `POST /api/discovery/claim`,
+`POST /api/discovery/release`, `POST /api/discovery/farm`, and the
 champion retain / cull_undated routes are proxied under `/api/` and
 require the paper-only shared secret. A visitor who can load
-`trading.runevibe.se` cannot pause the farm or rewrite the champion
-pool without that token.
+`trading.runevibe.se` cannot pause the farm, claim names, or rewrite the
+champion pool without that token.
 Ingest appends evaluations and may admit new champions; farm only flips
 the pause flag. Neither ingest nor farm culls existing champions.
 `retain` / `cull_undated` are the explicit paper-ops writes: they drop

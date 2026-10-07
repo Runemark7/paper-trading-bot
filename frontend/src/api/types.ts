@@ -163,10 +163,26 @@ export interface DiscoveryEvaluation {
   sma_stack_oos_pnl?: number | null;
 }
 
+export interface DiscoveryWorker {
+  worker_id: string;
+  last_seen?: string | null;
+  last_seen_age_seconds?: number | null;
+  status?: string | null;
+  seen?: boolean;
+  in_flight: string[];
+  lease_count: number;
+}
+
+export interface DiscoveryLeases {
+  active: number;
+  expired: number;
+}
+
 export interface DiscoveryInFlight {
   active: boolean;
   running: boolean;
   stale?: boolean;
+  source?: string | null;
   names: string[];
   current?: string | null;
   remaining?: string[];
@@ -192,6 +208,8 @@ export interface DiscoveryCounts {
   champions: number;
   graduated: number;
   in_flight: number;
+  leased?: number;
+  workers?: number;
   evals_today?: number;
 }
 
@@ -225,6 +243,9 @@ export interface DiscoverySummary {
   discovery_on_cycle?: boolean;
   discovery_farm?: "windows_worker" | "cycle_sidecar" | string;
   farm?: DiscoveryFarm;
+  /** Per-worker heartbeats and the names each one currently has leased. */
+  workers?: DiscoveryWorker[];
+  leases?: DiscoveryLeases;
   extended_names?: string[];
   in_flight: DiscoveryInFlight;
   queued: string[];

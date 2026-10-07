@@ -80,6 +80,11 @@ def load_farm() -> dict:
     return _read_farm_unlocked()
 
 
+def farm_enabled_unlocked() -> bool:
+    """Caller already holds ``paper_state_lock('discovery')``."""
+    return bool(_read_farm_unlocked().get("enabled", True))
+
+
 def set_farm_enabled(enabled: bool) -> dict:
     """UI Start/Stop. Does not kill the Windows process."""
     with paper_state_lock("discovery"):
@@ -130,12 +135,12 @@ def farm_status_block(
     if not seen:
         unseen = (
             "Worker not seen — Start will not relaunch the process. "
-            "On jensa run: python scripts/discovery_worker.py --workers 2"
+            "On each host run: python scripts/discovery_worker.py --workers 2"
         )
         if age is None:
             unseen = (
                 "Worker not seen — no heartbeat yet. Start will not relaunch "
-                "the process. On jensa run: python scripts/discovery_worker.py --workers 2"
+                "the process. On each host run: python scripts/discovery_worker.py --workers 2"
             )
         note = ("Paused. " + unseen) if not enabled else unseen
     elif not enabled:
