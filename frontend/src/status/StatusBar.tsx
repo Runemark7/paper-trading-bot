@@ -1,10 +1,15 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
+import { pollInterval, STATUS_POLL_MS } from "../api/poll";
 import { Badge } from "../components/ui";
 import { cadenceLabel, certaintyLabel, fmtWhen } from "./format";
 
 export default function StatusBar() {
-  const status = useQuery({ queryKey: ["status"], queryFn: api.status, refetchInterval: 15_000 });
+  const status = useQuery({
+    queryKey: ["status"],
+    queryFn: api.status,
+    refetchInterval: pollInterval(STATUS_POLL_MS),
+  });
   const health = useQuery({ queryKey: ["health"], queryFn: api.health, refetchInterval: 60_000 });
 
   if (status.isError) {

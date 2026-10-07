@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { fetchChampions, fetchGraduated, api } from "../api/client";
+import { pollInterval, STATUS_POLL_MS } from "../api/poll";
 import { DiscoveryTeaser } from "../status/DiscoveryBuckets";
 import {
   Badge,
@@ -54,7 +55,11 @@ export default function Champions() {
   const qChamps = useQuery({ queryKey: ["champions"], queryFn: fetchChampions, refetchInterval: 30_000 });
   const qLive = useQuery({ queryKey: ["live"], queryFn: api.live, refetchInterval: 30_000 });
   const qGrad = useQuery({ queryKey: ["graduated"], queryFn: fetchGraduated, refetchInterval: 30_000 });
-  const status = useQuery({ queryKey: ["status"], queryFn: api.status, refetchInterval: 15_000 });
+  const status = useQuery({
+    queryKey: ["status"],
+    queryFn: api.status,
+    refetchInterval: pollInterval(STATUS_POLL_MS),
+  });
 
   const [filters, setFilters] = useState<ChampionColumnFilters>(EMPTY_CHAMPION_FILTERS);
   const [sort, setSort] = useState<ChampionSort>(DEFAULT_CHAMPION_SORT);

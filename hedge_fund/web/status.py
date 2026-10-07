@@ -18,10 +18,15 @@ from hedge_fund.trading.constants import (
     TRADE_EVALUATION_LIMIT,
 )
 from hedge_fund.trading.heartbeat import HEARTBEAT_SECONDS
-from hedge_fund.trading.open_lots import open_lots_snapshot, paper_book_dbs
+from hedge_fund.trading.open_lots import (
+    account_name_from_db,
+    open_lot_count_from_saved,
+    paper_book_dbs,
+)
 from hedge_fund.trading.stamps import HEARTBEAT_STAMP, PIPELINE_STAMP, read_json_stamp
-from hedge_fund.trading.store import TradeStore
+from hedge_fund.trading.store import read_paper_account
 from hedge_fund.trading.universe import untested_candidates
+from hedge_fund.web.ttl_cache import READ_CACHE_TTL_SECONDS, TtlSingleFlight
 
 # Stamp "started" older than this with no finish is labeled stale, not running.
 STALE_PIPELINE_SECONDS = 2 * 3600
@@ -67,34 +72,33 @@ def _file_mtime_note(path: Path) -> dict:
     }
 
 
-def _last_cycle_at(dbs: list[str]) -> str | None:
-    """Last TradingLoop.run_cycle equity snapshot — not heartbeat saved_at."""
-    best = None
+def _book_scan(dbs: list[str]) -> dict:
+    """One read-only open per account: last equity ts, saved_at, open lots."""
+    best_cycle = None
+    best_saved = None
+    by_account: dict[str, int] = {}
     for db in dbs:
-        try:
-            st = TradeStore(db)
-            hist = st.equity_history()
-            if hist:
-                ts = hist[-1]["ts"]
-                if ts and (best is None or ts > best):
-                    best = ts
-        except Exception:
+        name = account_name_from_db(db)
+        rec = read_paper_account(db)
+        if rec is None:
+            by_account[name] = 0
             continue
-    return best
-
-
-def _account_saved_at(dbs: list[str]) -> str | None:
-    best = None
-    for db in dbs:
-        try:
-            st = TradeStore(db)
-            saved = st.load_account_state()
-            ts = (saved or {}).get("saved_at")
-            if ts and (best is None or ts > best):
-                best = ts
-        except Exception:
-            continue
-    return best
+        snap = rec["snapshot"]
+        if snap is not None:
+            ts = snap.get("ts")
+            if ts and (best_cycle is None or ts > best_cycle):
+                best_cycle = ts
+        saved = rec["saved"] or {}
+        saved_at = saved.get("saved_at")
+        if saved_at and (best_saved is None or saved_at > best_saved):
+            best_saved = saved_at
+        by_account[name] = open_lot_count_from_saved(saved)
+    return {
+        "last_cycle_at": best_cycle,
+        "account_saved_at": best_saved,
+        "by_account": by_account,
+        "open_lots": sum(by_account.values()),
+    }
 
 
 def _infer_next_cycle(last_iso: str | None, now: datetime) -> dict:
@@ -278,18 +282,30 @@ def _live_history(root: Path) -> dict:
         return {"paper_only": True, "error": str(exc), "symbols": {}}
 
 
+_STATUS_CACHE = TtlSingleFlight(READ_CACHE_TTL_SECONDS)
+
+
+def clear_status_cache() -> None:
+    _STATUS_CACHE.clear()
+
+
 def build_status() -> dict:
+    """Cached for ``READ_CACHE_TTL_SECONDS``. Concurrent callers share one build."""
+    return _STATUS_CACHE.get(str(state_root().resolve()), _build_status_uncached)
+
+
+def _build_status_uncached() -> dict:
     now = datetime.now(timezone.utc)
     root = state_root()
     dbs = paper_book_dbs()
-    lots = open_lots_snapshot()
+    book = _book_scan(dbs)
     pool = load_pool()
     champs = list(pool.get("champions") or [])
     names = [c.get("name") for c in champs if c.get("name")]
     fallback = os.environ.get("PAPER_STRATEGY", "sma_stack")
     active = names or [fallback]
     mode = "champion_accounts" if names else "sma_stack_fallback"
-    last_cycle = _last_cycle_at(dbs)
+    last_cycle = book["last_cycle_at"]
     pipeline = _pipeline_block(now)
     discovery = _discovery_block(root)
     graduation = _graduation_block()
@@ -325,13 +341,13 @@ def build_status() -> dict:
                 "bar_timeframe": QUAL_TIMEFRAME,
                 "window": "24/7",
                 "last_cycle_at": last_cycle,
-                "account_saved_at": _account_saved_at(dbs),
+                "account_saved_at": book["account_saved_at"],
                 "next": _infer_next_cycle(last_cycle, now),
             },
             "live_history": _live_history(root),
-            "positions_open": lots["open_lots"],
-            "open_lots": lots["open_lots"],
-            "open_lots_by_account": lots["by_account"],
+            "positions_open": book["open_lots"],
+            "open_lots": book["open_lots"],
+            "open_lots_by_account": book["by_account"],
             "open_lots_unit": "open_lots",
             "heartbeat": heartbeat,
             "regime": {

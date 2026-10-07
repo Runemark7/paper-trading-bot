@@ -61,8 +61,9 @@ def open_lots_by_account() -> dict[str, int]:
     for db in paper_book_dbs():
         name = account_name_from_db(db)
         try:
-            st = TradeStore(db)
-            out[name] = open_lot_count_from_saved(st.load_account_state())
+            with TradeStore.open_readonly(db) as st:
+                saved = st.load_account_state()
+            out[name] = open_lot_count_from_saved(saved)
         except Exception:
             out[name] = 0
     return out
