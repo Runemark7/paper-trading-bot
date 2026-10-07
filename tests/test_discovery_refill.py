@@ -72,6 +72,12 @@ from hedge_fund.trading.refill import (
     ISLAND2B_MOM,
     ISLAND2B_RSI,
     ISLAND2B_TF_PAIRS,
+    ISLAND2C_CONT_GAP,
+    ISLAND2C_CONT_PAID,
+    ISLAND2C_H1_SPINE,
+    ISLAND2C_MOM,
+    ISLAND2C_MOM_NEIGHBOR,
+    ISLAND2C_RSI,
     UNDRY_CONT_ATOMS,
     UNDRY_GAP_CONT,
     UNDRY_GAP_REGIME,
@@ -815,7 +821,7 @@ class RecipeBoundsTests(unittest.TestCase):
         self.assertIn("h4_ema_abv_15&mom_18b_gt8pc", names)
         self.assertEqual(
             names[0],
-            "h4_ema_abv_20&mom_18b_gt2pc&sma_abv_30&rsi_14_>50",
+            "h1_ema_abv_50&mom_18b_gt2pc&sma_abv_30&rsi_14_>45",
         )
         self.assertLess(
             names.index("h1_ema_abv_20&mom_18b_gt2pc&sma_abv_40"),
@@ -1116,17 +1122,18 @@ class RefillBatchTests(unittest.TestCase):
         self.assertEqual(len(added), DISCOVERY_REFILL_BATCH_SIZE)
         self.assertEqual(
             added[0],
-            "h4_ema_abv_20&mom_18b_gt2pc&sma_abv_30&rsi_14_>50",
+            "h1_ema_abv_50&mom_18b_gt2pc&sma_abv_30&rsi_14_>45",
         )
         hit = [
             n for n in added
             if n.count("&") == 3
-            and any(tok.startswith("h4_") for tok in n.split("&"))
+            and any(tok.startswith("h1_") for tok in n.split("&"))
             and "mom_18b_gt2pc" in n.split("&")
             and any(tok in ("sma_abv_30", "ema_abv_30") for tok in n.split("&"))
-            and "rsi_14_>50" in n.split("&")
+            and "rsi_14_>45" in n.split("&")
         ]
-        self.assertTrue(hit, msg=f"expected h4×mom×abv_30×rsi_>50 in {added}")
+        self.assertTrue(hit, msg=f"expected h1×mom×abv_30×rsi_>45 in {added}")
+        self.assertTrue(all(n.startswith("h1_") for n in added), added)
         self.assertFalse(any("mom_12b_" in n for n in added))
         for name in added:
             self.assertTrue(name_is_parseable(name), msg=name)
@@ -1524,7 +1531,9 @@ class RefillBatchTests(unittest.TestCase):
         }
         added = new_keys - prior_keys
         self.assertGreaterEqual(len(added), 500, msg=f"new distinct keys={len(added)}")
-        self.assertLessEqual(len(added), 2000, msg=f"new distinct keys={len(added)}")
+        # Cumulative post-#60 keys (fresh + undry + #2b + #2c ≈ 459).
+        # Not a cartesian. Recipe length stays <= 8000.
+        self.assertLessEqual(len(added), 2600, msg=f"new distinct keys={len(added)}")
         self.assertEqual(max(STRUCTURE_NS), 96)
         self.assertEqual(MIN_BACKTEST_TRADES, 30)
         self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
@@ -1574,7 +1583,7 @@ class RefillBatchTests(unittest.TestCase):
             self.assertFalse(name_has_mom_gt_and_dip(name), msg=name)
         self.assertEqual(
             added[0],
-            "h4_ema_abv_20&mom_18b_gt2pc&sma_abv_30&rsi_14_>50",
+            "h1_ema_abv_50&mom_18b_gt2pc&sma_abv_30&rsi_14_>45",
         )
         self.assertEqual(MIN_BACKTEST_TRADES, 30)
         self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
@@ -1625,11 +1634,16 @@ class RefillBatchTests(unittest.TestCase):
         self.assertEqual(QUAL_N_WINDOWS, 23)
 
     def test_next_refill_batch_fills_island_2b_against_drained_recipe(self):
-        """Farm-dry after #65: abv_40 / rsi_>60 taken. Island #2b must refill."""
+        """After #2c is taken, island #2b still refills ahead of the #65 prefix."""
         names = list(iter_recipe_names())
+        h4_lead = "h4_ema_abv_20&mom_18b_gt2pc&sma_abv_30&rsi_14_>50"
         old_first = "h1_ema_abv_20&mom_18b_gt2pc&sma_abv_40"
+        h4_at = names.index(h4_lead)
         cut = names.index(old_first)
-        prefix = names[:cut]
+        twoc = names[:h4_at]
+        prefix = names[h4_at:cut]
+        self.assertGreaterEqual(len(twoc), 200)
+        self.assertTrue(all(n.startswith("h1_") for n in twoc))
         self.assertGreaterEqual(len(prefix), 80)
         self.assertLessEqual(len(prefix), 400)
         prefix_keys = {near_duplicate_key(n) for n in prefix}
@@ -1662,7 +1676,7 @@ class RefillBatchTests(unittest.TestCase):
                 any(tok.startswith(("don_hi_", "don_lo_", "near_swing_", "dbl_bot_")) for tok in name.split("&")),
                 msg=name,
             )
-        taken = set(names[cut:]) | set(generate_universe())
+        taken = set(twoc) | set(names[cut:]) | set(generate_universe())
         i = 0
         while len(taken) < 9498:
             taken.add(f"parked_dummy_{i}")
@@ -1693,6 +1707,66 @@ class RefillBatchTests(unittest.TestCase):
         self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
         self.assertEqual(QUAL_N_WINDOWS, 23)
         self.assertEqual(len(ISLAND2B_TF_PAIRS), 9)
+
+    def test_next_refill_batch_fills_island_2c_ahead_of_burned_h4(self):
+        """#2c is a few hundred new h1 names. Burned h4×mom is not the lead."""
+        from hedge_fund.trading.constants import QUAL_WARMUP_BARS
+
+        names = list(iter_recipe_names())
+        lead = "h1_ema_abv_50&mom_18b_gt2pc&sma_abv_30&rsi_14_>45"
+        h4_lead = "h4_ema_abv_20&mom_18b_gt2pc&sma_abv_30&rsi_14_>50"
+        self.assertEqual(names[0], lead)
+        self.assertLess(names.index(lead), names.index(h4_lead))
+        prefix = names[: names.index(h4_lead)]
+        self.assertGreaterEqual(len(prefix), 300)
+        self.assertLessEqual(len(prefix), 800)
+        prefix_keys = {near_duplicate_key(n) for n in prefix}
+        rest_keys = {near_duplicate_key(n) for n in names[len(prefix):]}
+        self.assertEqual(len(prefix_keys), len(prefix))
+        self.assertTrue(prefix_keys.isdisjoint(rest_keys))
+        self.assertEqual(ISLAND2C_MOM, "mom_18b_gt2pc")
+        self.assertEqual(ISLAND2C_RSI, "rsi_14_>45")
+        self.assertNotIn("mom_12b_gt2pc", ISLAND2C_MOM_NEIGHBOR)
+        self.assertNotIn("h4_ema_abv_20", ISLAND2C_H1_SPINE)
+        self.assertTrue(all(n.startswith("h1_") for n in prefix))
+        self.assertEqual(prefix[0], lead)
+        self.assertIn("h1_ema_abv_50&mom_18b_gt2pc&sma_abv_35", prefix)
+        self.assertIn(
+            "h1_ema_abv_50&mom_18b_gt2pc&sma_abv_30&ema_abv_20&rsi_14_>50",
+            prefix,
+        )
+        self.assertLess(
+            prefix.index(lead),
+            prefix.index("h1_ema_abv_50&mom_18b_gt2pc&sma_abv_35"),
+        )
+        self.assertLess(
+            prefix.index("h1_ema_abv_50&mom_18b_gt2pc&sma_abv_35"),
+            prefix.index("h1_ema_abv_50&mom_18b_gt4pc&sma_abv_30"),
+        )
+        for name in prefix:
+            self.assertTrue(name_is_parseable(name), msg=name)
+            self.assertFalse(name_has_mom_gt_and_dip(name), msg=name)
+            self.assertNotIn("mom_12b_gt2pc", name.split("&"), msg=name)
+            self.assertFalse(any(tok.startswith("h4_") for tok in name.split("&")), msg=name)
+            self.assertNotIn("sma_abv_40", name.split("&"), msg=name)
+            self.assertNotIn("rsi_14_>60", name.split("&"), msg=name)
+            self.assertLessEqual(name.count("&") + 1, 7, msg=name)
+            self.assertFalse(structure_lookbacks(name), msg=name)
+        taken = set(names[len(prefix):]) | set(generate_universe())
+        added = next_refill_batch(taken_names=taken, n=20)
+        self.assertEqual(len(added), 20)
+        self.assertEqual(added[0], lead)
+        taken_keys = {near_duplicate_key(n) for n in taken}
+        for name in added:
+            self.assertNotIn(near_duplicate_key(name), taken_keys, msg=name)
+            self.assertTrue(name.startswith("h1_"), msg=name)
+            self.assertNotIn("h4_", name)
+        self.assertEqual(MIN_BACKTEST_TRADES, 30)
+        self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
+        self.assertEqual(QUAL_N_WINDOWS, 23)
+        self.assertEqual(QUAL_WARMUP_BARS, 4032)
+        self.assertEqual(ISLAND2C_CONT_PAID[0], "sma_abv_30")
+        self.assertEqual(ISLAND2C_CONT_GAP[0], "sma_abv_35")
 
     def test_max_names_one_refills_only_when_eligible_empty(self):
         self.assertEqual(DISCOVER_CYCLE_MAX_NAMES, 1)

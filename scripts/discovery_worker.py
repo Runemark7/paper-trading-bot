@@ -8,7 +8,8 @@ Leave this process running. Pause/resume from the Discovery page
 (``POST /api/discovery/farm``) — the loop polls prod and idles instead
 of exiting so Start works without relaunching on jensa.
 
-GPU is unused (no CUDA rewrite). Modest CPU parallelism (2–4) on an i5.
+GPU is unused (no CUDA rewrite). Default parallelism is 2 workers.
+``--workers`` is capped at ``os.cpu_count()`` (minimum 1), not a hard 4.
 
     python scripts/discovery_worker.py --workers 2
     python scripts/discovery_worker.py --once --workers 1 --no-ingest
@@ -502,6 +503,18 @@ def run_batch(
     }
 
 
+def clamp_workers(requested: int, *, cpu_count: int | None = None) -> int:
+    """Clamp worker processes to ``[1, os.cpu_count()]``.
+
+    The CLI default stays 2 (or ``DISCOVERY_WORKERS``). This only raises
+    the old hard ceiling of 4. ``cpu_count`` is a test hook; production
+    uses ``os.cpu_count()``.
+    """
+    cpus = os.cpu_count() if cpu_count is None else cpu_count
+    cap = max(1, int(cpus or 1))
+    return max(1, min(int(requested), cap))
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Windows discovery farm (paper only)")
     ap.add_argument("--workers", type=int, default=int(os.environ.get("DISCOVERY_WORKERS") or 2))
@@ -520,7 +533,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = ap.parse_args(argv)
 
-    workers = max(1, min(int(args.workers), 4))
+    workers = clamp_workers(args.workers)
     max_names = int(args.max_names) or workers
     token = None if args.no_ingest else ingest_token()
     ingest_url = None if args.no_ingest else args.ingest_url

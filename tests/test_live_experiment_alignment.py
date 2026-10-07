@@ -1625,7 +1625,7 @@ class ProtocolAmendmentTests(unittest.TestCase):
         names = list(iter_recipe_names())
         self.assertEqual(
             names[0],
-            "h4_ema_abv_20&mom_18b_gt2pc&sma_abv_30&rsi_14_>50",
+            "h1_ema_abv_50&mom_18b_gt2pc&sma_abv_30&rsi_14_>45",
         )
         self.assertNotIn("h1_ema_abv_20&mom_18b_gt2pc&dip_24b_lt5pc", names)
         self.assertNotIn("h1_ema_abv_24&mom_18b_gt2pc&dip_24b_lt6pc", names)
@@ -1649,7 +1649,7 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertEqual(len(added), DISCOVERY_REFILL_BATCH_SIZE)
         self.assertEqual(
             added[0],
-            "h4_ema_abv_20&mom_18b_gt2pc&sma_abv_30&rsi_14_>50",
+            "h1_ema_abv_50&mom_18b_gt2pc&sma_abv_30&rsi_14_>45",
         )
         self.assertNotEqual(
             near_duplicate_key("h1_ema_abv_40"),
@@ -1713,7 +1713,7 @@ class ProtocolAmendmentTests(unittest.TestCase):
         names = list(iter_recipe_names())
         self.assertEqual(
             names[0],
-            "h4_ema_abv_20&mom_18b_gt2pc&sma_abv_30&rsi_14_>50",
+            "h1_ema_abv_50&mom_18b_gt2pc&sma_abv_30&rsi_14_>45",
         )
         four = "h1_ema_abv_20&mom_18b_gt2pc&sma_abv_50&rsi_14_>50"
         seven = (
@@ -1804,7 +1804,7 @@ class ProtocolAmendmentTests(unittest.TestCase):
         names = list(iter_recipe_names())
         self.assertEqual(
             names[0],
-            "h4_ema_abv_20&mom_18b_gt2pc&sma_abv_30&rsi_14_>50",
+            "h1_ema_abv_50&mom_18b_gt2pc&sma_abv_30&rsi_14_>45",
         )
         self.assertIn("h1_ema_abv_20&mom_18b_gt2pc&sma_abv_30", names)
         self.assertIn("h1_ema_abv_20&mom_18b_gt2pc&rsi_14_>55", names)
@@ -1841,7 +1841,7 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertEqual(len(added), DISCOVERY_REFILL_BATCH_SIZE)
         self.assertEqual(
             added[0],
-            "h4_ema_abv_20&mom_18b_gt2pc&sma_abv_30&rsi_14_>50",
+            "h1_ema_abv_50&mom_18b_gt2pc&sma_abv_30&rsi_14_>45",
         )
         self.assertIn(combo, names)
         self.assertNotEqual(
@@ -1994,7 +1994,7 @@ class ProtocolAmendmentTests(unittest.TestCase):
         names = list(iter_recipe_names())
         self.assertEqual(
             names[0],
-            "h4_ema_abv_20&mom_18b_gt2pc&sma_abv_30&rsi_14_>50",
+            "h1_ema_abv_50&mom_18b_gt2pc&sma_abv_30&rsi_14_>45",
         )
         self.assertIn("h1_ema_abv_20&mom_18b_gt2pc&rsi_14_>60", names)
         self.assertIn("h1_ema_abv_60&mom_18b_gt2pc&sma_abv_50", names)
@@ -2102,7 +2102,8 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertEqual(ISLAND2B_H4_CORE[0], "h4_ema_abv_20")
         names = list(iter_recipe_names())
         first = "h4_ema_abv_20&mom_18b_gt2pc&sma_abv_30&rsi_14_>50"
-        self.assertEqual(names[0], first)
+        self.assertTrue(names[0].startswith("h1_"))
+        self.assertLess(names.index(names[0]), names.index(first))
         self.assertLess(
             names.index(first),
             names.index("h1_ema_abv_20&mom_18b_gt2pc&sma_abv_40"),
@@ -2124,7 +2125,8 @@ class ProtocolAmendmentTests(unittest.TestCase):
             n=DISCOVERY_REFILL_BATCH_SIZE,
         )
         self.assertEqual(len(added), DISCOVERY_REFILL_BATCH_SIZE)
-        self.assertEqual(added[0], first)
+        self.assertTrue(added[0].startswith("h1_"))
+        self.assertNotIn(first, added)
         self.assertFalse(any(name_has_mom_gt_and_dip(n) for n in added))
         self.assertFalse(any("sma_abv_40" in n.split("&") or "rsi_14_>60" in n.split("&") for n in added))
 
@@ -2148,6 +2150,99 @@ class ProtocolAmendmentTests(unittest.TestCase):
         runbook = (REPO / "docs" / "WINDOWS_DISCOVERY.md").read_text()
         self.assertIn("island densify #2b", runbook.lower())
         self.assertIn("sma_abv_30", runbook)
+
+    def test_amendment_2026_10_07_island_2c_mint(self):
+        from hedge_fund.trading.constants import (
+            DISCOVERY_REFILL_BATCH_SIZE,
+            MIN_BACKTEST_SHARPE,
+            MIN_BACKTEST_TRADES,
+            QUAL_N_WINDOWS,
+            QUAL_TIMEFRAME,
+            QUAL_WARMUP_BARS,
+            RISK_POLICY,
+        )
+        from hedge_fund.signals.dynamic import parse_strategy
+        from hedge_fund.trading.discovery_guard import structure_lookbacks
+        from hedge_fund.trading.refill import (
+            ISLAND2C_CONT_GAP,
+            ISLAND2C_H1_SPINE,
+            ISLAND2C_MOM,
+            ISLAND2C_MOM_NEIGHBOR,
+            ISLAND2C_RSI,
+            iter_recipe_names,
+            name_has_mom_gt_and_dip,
+            name_is_parseable,
+            next_refill_batch,
+        )
+        from hedge_fund.trading.universe import generate_universe, near_duplicate_key
+
+        self.assertEqual(QUAL_TIMEFRAME, "5m")
+        self.assertEqual(RISK_POLICY, "rm_v1")
+        self.assertEqual(MIN_BACKTEST_TRADES, 30)
+        self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
+        self.assertEqual(QUAL_N_WINDOWS, 23)
+        self.assertEqual(QUAL_WARMUP_BARS, 4032)
+        self.assertEqual(DISCOVERY_REFILL_BATCH_SIZE, 16)
+        self.assertEqual(ISLAND2C_MOM, "mom_18b_gt2pc")
+        self.assertEqual(ISLAND2C_RSI, "rsi_14_>45")
+        self.assertNotIn("mom_12b_gt2pc", ISLAND2C_MOM_NEIGHBOR)
+        self.assertTrue(all(a.startswith("h1_") for a in ISLAND2C_H1_SPINE))
+        self.assertEqual(ISLAND2C_CONT_GAP[0], "sma_abv_35")
+        names = list(iter_recipe_names())
+        lead = "h1_ema_abv_50&mom_18b_gt2pc&sma_abv_30&rsi_14_>45"
+        h4_lead = "h4_ema_abv_20&mom_18b_gt2pc&sma_abv_30&rsi_14_>50"
+        self.assertEqual(names[0], lead)
+        self.assertLess(names.index(lead), names.index(h4_lead))
+        prefix = names[: names.index(h4_lead)]
+        self.assertGreaterEqual(len(prefix), 300)
+        self.assertTrue(all(n.startswith("h1_") for n in prefix))
+        self.assertFalse(any(name_has_mom_gt_and_dip(n) for n in names))
+        self.assertLessEqual(len(names), 8000)
+        for name in prefix:
+            self.assertTrue(name_is_parseable(name), msg=name)
+            self.assertFalse(structure_lookbacks(name), msg=name)
+            for _atom, n in structure_lookbacks(name):
+                self.assertLessEqual(n, 96, msg=name)
+        self.assertNotEqual(
+            near_duplicate_key("rsi_14_>45"),
+            near_duplicate_key("rsi_14_>50"),
+        )
+        self.assertNotEqual(
+            near_duplicate_key("sma_abv_35"),
+            near_duplicate_key("sma_abv_30"),
+        )
+        self.assertNotEqual(
+            near_duplicate_key("sma_abv_35"),
+            near_duplicate_key("sma_abv_40"),
+        )
+        parse_strategy(lead)
+        added = next_refill_batch(
+            taken_names=set(generate_universe()),
+            n=DISCOVERY_REFILL_BATCH_SIZE,
+        )
+        self.assertEqual(added[0], lead)
+        self.assertTrue(all(n.startswith("h1_") for n in added))
+        self.assertNotIn(h4_lead, added)
+
+        text = (REPO / "PROTOCOL.md").read_text()
+        self.assertIn("Amendment 2026-10-07 — undry admit-island densify #2c", text)
+        self.assertIn("ISLAND2C_H1_SPINE", text)
+        self.assertIn("rsi_14_>45", text)
+        self.assertIn("sma_abv_35", text)
+        self.assertIn("OOS **thresholds** are unchanged", text)
+        self.assertIn("h4×mom", text)
+        self.assertIn("No named candlesticks", text)
+        self.assertIn("STRUCTURE_NS", text)
+        workflow = (REPO / "docs" / "WORKFLOW.md").read_text()
+        self.assertIn("island densify #2c", workflow.lower())
+        self.assertIn("rsi_14_>45", workflow)
+        self.assertIn("mom-before-dip", workflow)
+        readme = (REPO / "README.md").read_text()
+        self.assertIn("admit-island densify #2c", readme)
+        self.assertIn("rsi_14_>45", readme)
+        runbook = (REPO / "docs" / "WINDOWS_DISCOVERY.md").read_text()
+        self.assertIn("island densify #2c", runbook.lower())
+        self.assertIn("rsi_14_>45", runbook)
 
 
 class IsolatedRunnerTests(unittest.TestCase):

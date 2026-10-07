@@ -74,7 +74,7 @@ PROTOCOL.md            honesty contract
 ## Amendment log
 
 <details>
-<summary>Chronological protocol amendments (2026-08-30 → 2026-10-02)</summary>
+<summary>Chronological protocol amendments (2026-08-30 → 2026-10-07)</summary>
 
 | Date | Summary |
 |------|---------|
@@ -90,6 +90,7 @@ PROTOCOL.md            honesty contract
 | 2026-09-13 | Refill mint adds 1% grind bases at unused lookbacks and expands short-MA 3-atoms onto every WIDE mom/dip × `don_hi` / `near_swing_hi` (still mint-only; OOS gates unchanged). Later: causal HTF buyer-regime atoms (`h4_ema_abv_24`, `h4_sma_abv_50`, `h1_ema_abv_24`) AND onto existing 5m DIP/MOM/WIDE/GRIND bases in the refill recipe. Mint/parser only; OOS thresholds and `QUAL_N_WINDOWS` unchanged. Later: HTF densify (`h1_ema_abv_{15,20,30}`, `h4_ema_abv_{12,48}`, `h4_sma_abv_24`) plus `MOM_FILTERS_HTF_DENSE` (`mom_18b_gt4pc` / `mom_18b_gt6pc` / `mom_12b_gt6pc`); recipe is mom-before-dip so HTF×mom mints ahead of HTF×dip. OOS gates unchanged. Token-gated `POST /api/champions/retain` and `POST /api/champions/cull_undated` drop undated names from the active pool only (no trade-DB delete; OOS thresholds unchanged). Later: Windows-farm walk-forward evals cache ATR / SMA / EMA / HTF series across names on the same slices (not `fast_quant`; OOS gates and window lengths unchanged). Later: the Windows worker fail-parks structure lookbacks above 96 (`lookback_too_expensive`) before walk-forward, with a 600s `eval_timeout` backstop — ops/throughput, not a gate softening. Mint no longer emits structure lookbacks above 96. |
 | 2026-09-14 | Refill mint densifies the admit island: winner 3-atoms, 4–7 atom role-bucket stacks, then `sma_abv_30` / `ema_abv_30` and `rsi_14_>55`, and never ANDs `mom_*_gt*` with `dip_*`. Later undry leads with `sma_abv_40` / `ema_abv_40` and `rsi_14_>60`. Each window is prefixed with `QUAL_WARMUP_BARS` = 4032 (14d of 5m). No named candlesticks. OOS gates unchanged. |
 | 2026-10-02 | Undry admit-island densify #2b. Recipe emits h4 twins of `h1_* & mom_18b_gt2pc & sma_abv_30 / ema_abv_30 & rsi_14_>50` first, led by `h4_ema_abv_20&mom_18b_gt2pc&sma_abv_30&rsi_14_>50` (about 160 never-tested names: sparse h4×mom×`sma_abv_30`, dual h1+h4 5–7 atom stacks). #65 `sma_abv_40` / `rsi_14_>60` stays drained, not the lead. No mom∧dip. OOS gates unchanged. |
+| 2026-10-07 | Undry admit-island densify #2c. Recipe emits h1 stacks on `mom_18b_gt2pc` first, led by `h1_ema_abv_50&mom_18b_gt2pc&sma_abv_30&rsi_14_>45` (459 never-tested names: `rsi_14_>45`, gap MAs `sma_abv_35` / 25 / 15 / 60, 5-atom extensions, modest mom neighbors). Island densify #2b h4×mom stays in the stream but is deprioritized after a measured FAIL. `--workers` caps at `os.cpu_count()` (default still 2). No mom∧dip. OOS gates unchanged. |
 
 </details>
 
