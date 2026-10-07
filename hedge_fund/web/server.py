@@ -11,6 +11,8 @@ A small, dependency-free HTTP server (stdlib only) that exposes:
   GET /api/discovery/summary -> tested / in-flight / leftover-untested; farm Start/Stop status
                                 (?compact=1 omits those lists; counts/farm/stuck stay)
   POST /api/discovery/ingest -> Windows worker: append evals + admit / force_admit (shared secret)
+  POST /api/discovery/claim -> lease never-tested names (same ingest token)
+  POST /api/discovery/release -> drop this worker's leases (same ingest token)
   POST /api/discovery/farm -> Start/Stop Windows farm (same ingest token)
   POST /api/champions/retain -> keep-list filter of champions.json (same ingest token)
   POST /api/champions/cull_undated -> drop missing champion_since (same ingest token)
@@ -19,8 +21,8 @@ A small, dependency-free HTTP server (stdlib only) that exposes:
 
 Purpose: a durable little service you can port-forward to and open the
 dashboard (and its data) from any device. Everything is read-only except
-POST /run, the token-gated discovery ingest / farm Start/Stop routes, and
-the token-gated champion retain / cull_undated routes.
+POST /run, the token-gated discovery ingest / claim / release / farm
+Start/Stop routes, and the token-gated champion retain / cull_undated routes.
 
 Run:
     .venv/bin/python -m hedge_fund.web.server [--port 8787] [--host 0.0.0.0]
@@ -454,6 +456,48 @@ class Handler(BaseHTTPRequestHandler):
                 from hedge_fund.trading.ingest import ingest_discovery_payload
 
                 self._send_json(ingest_discovery_payload(payload))
+            except ValueError as exc:
+                self._send_json({"ok": False, "error": str(exc), "paper_only": True}, 400)
+            except Exception as exc:
+                self._send_json({"ok": False, "error": str(exc), "paper_only": True}, 500)
+        elif route == "/api/discovery/claim":
+            ok, err, code = self._discovery_ingest_authorized()
+            if not ok:
+                self._send_json({"ok": False, "error": err, "paper_only": True}, code)
+                return
+            payload, err = self._read_json_body()
+            if err:
+                self._send_json({"ok": False, "error": err, "paper_only": True}, 400)
+                return
+            try:
+                from hedge_fund.trading.leases import claim_discovery_batch
+
+                self._send_json(claim_discovery_batch(
+                    payload.get("worker_id"),
+                    payload.get("n"),
+                    parallel=payload.get("parallel") if "parallel" in payload else None,
+                ))
+            except ValueError as exc:
+                self._send_json({"ok": False, "error": str(exc), "paper_only": True}, 400)
+            except Exception as exc:
+                self._send_json({"ok": False, "error": str(exc), "paper_only": True}, 500)
+        elif route == "/api/discovery/release":
+            ok, err, code = self._discovery_ingest_authorized()
+            if not ok:
+                self._send_json({"ok": False, "error": err, "paper_only": True}, code)
+                return
+            payload, err = self._read_json_body()
+            if err:
+                self._send_json({"ok": False, "error": err, "paper_only": True}, 400)
+                return
+            try:
+                from hedge_fund.trading.leases import release_discovery_leases
+
+                self._send_json(release_discovery_leases(
+                    payload.get("worker_id"),
+                    payload.get("names") if "names" in payload else None,
+                    status=payload.get("status"),
+                ))
             except ValueError as exc:
                 self._send_json({"ok": False, "error": str(exc), "paper_only": True}, 400)
             except Exception as exc:

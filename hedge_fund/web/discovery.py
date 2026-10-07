@@ -2,8 +2,10 @@
 
 Never claims a sidecar process is alive. in_flight names come from
 ``discovery_in_flight.json`` when the tournament stamp is started (including
-stale). Otherwise the UI shows idle + newest eval — or stuck/overdue copy
-when the stamp is stale or evaluations have gone quiet with leftover work.
+stale), and from active claim leases (``discovery_leases.json``) so several
+stateless workers show up together. Otherwise the UI shows idle + newest
+eval — or stuck/overdue copy when the stamp is stale or evaluations have
+gone quiet with leftover work.
 
 ``lists=False`` / ``?compact=1`` keeps counts, farm, and stuck copy but omits
 tested / queued / extended_names / in-flight name lists so UI polls (Champions
@@ -29,6 +31,7 @@ from hedge_fund.trading.discovery import (
 )
 from hedge_fund.trading.discovery_mode import discovery_on_cycle
 from hedge_fund.trading.farm import farm_status_block
+from hedge_fund.trading.leases import lease_snapshot
 from hedge_fund.trading.refill import load_extended_names
 from hedge_fund.trading.universe import generate_universe, untested_candidates
 from hedge_fund.web.status import _iso, _pipeline_block
@@ -130,6 +133,8 @@ def build_discovery_summary(*, lists: bool = True) -> dict:
         stuck_reason = None
 
     raw_flight = read_in_flight()
+    snap = lease_snapshot(now)
+    lease_names = list(snap["active_names"])
     worker_flight = bool(
         raw_flight and raw_flight.get("source") == "windows_worker"
     )
@@ -166,12 +171,38 @@ def build_discovery_summary(*, lists: bool = True) -> dict:
         batch_size = None
         flight_started = pipeline.get("started_at")
 
+    if lease_names:
+        for name in lease_names:
+            if name not in flight_names:
+                flight_names.append(name)
+        show_flight = True
+        if flight is None:
+            flight = {
+                "source": "claim_queue",
+                "started_at": snap.get("oldest_claimed_at"),
+            }
+        if not flight_started:
+            flight_started = snap.get("oldest_claimed_at") or (flight or {}).get("started_at")
+        if batch_size is None:
+            batch_size = len(flight_names)
+        if not remaining:
+            remaining = list(lease_names)
+
     if show_flight and flight_names:
         inflight_set = set(flight_names)
         queued = [n for n in queued if n not in inflight_set]
 
+    lease_only = bool(lease_names) and not tournament_now and not (stamp_stale and tournament_stamp)
+    n_lease_workers = sum(1 for row in snap["workers"] if row.get("lease_count"))
     if stuck and stuck_reason:
         flight_note = stuck_reason
+    elif lease_only:
+        hosts = n_lease_workers or 1
+        flight_note = (
+            f"{len(lease_names)} names leased to {hosts} discovery worker"
+            f"{'s' if hosts != 1 else ''}. "
+            "Process liveness is not verified."
+        )
     elif tournament_now and flight_names:
         cur = f" current {current}." if current else ""
         flight_note = (
@@ -201,7 +232,7 @@ def build_discovery_summary(*, lists: bool = True) -> dict:
         flight_note = "idle — no sweep recorded yet"
 
     farm = farm_status_block(
-        in_flight_active=bool(worker_flight and flight_names),
+        in_flight_active=bool((worker_flight and flight_names) or lease_names),
         now=now,
     )
 
@@ -225,12 +256,22 @@ def build_discovery_summary(*, lists: bool = True) -> dict:
         "discovery_on_cycle": on_cycle,
         "discovery_farm": "cycle_sidecar" if on_cycle else "windows_worker",
         "farm": farm,
+        "workers": snap["workers"],
+        "leases": {
+            "active": len(lease_names),
+            "expired": snap["expired"],
+        },
         "extended_names": ship_extended,
         "in_flight": {
-            "active": bool(tournament_now or (stamp_stale and tournament_stamp) or worker_flight),
+            "active": bool(
+                tournament_now or (stamp_stale and tournament_stamp) or worker_flight or lease_names
+            ),
             "running": False,
             "stale": bool(stamp_stale and tournament_stamp),
-            "source": (flight or {}).get("source") if flight else None,
+            "source": (
+                "claim_queue" if lease_only
+                else (flight or {}).get("source") if flight else None
+            ),
             "names": ship_names,
             "current": current,
             "remaining": ship_remaining,
@@ -257,6 +298,8 @@ def build_discovery_summary(*, lists: bool = True) -> dict:
             "champions": len(champs),
             "graduated": len(grads),
             "in_flight": len(flight_names) if show_flight else 0,
+            "leased": len(lease_names),
+            "workers": len(snap["workers"]),
             "evals_today": evals_today,
         },
         "last_tested_at": last_tested_at,
@@ -265,7 +308,8 @@ def build_discovery_summary(*, lists: bool = True) -> dict:
         "note": (
             "Last-known buckets from discovery_log.json, champions.json, "
             "graduated.json, and (when the tournament stamp is started) "
-            "discovery_in_flight.json. counts.tested is unique strategy names "
+            "discovery_in_flight.json. Active claim leases are discovery_leases.json. "
+            "counts.tested is unique strategy names "
             "(latest eval per name), not the number of log rows. "
             "Already tested · rejected is parked forever — not a cooldown "
             "retest queue. Empty eligible auto-refills discovery_extended.json "

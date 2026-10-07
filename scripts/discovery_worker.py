@@ -1,24 +1,34 @@
-"""Windows discovery farm — same OOS gates as tournament, not on the k8s cycle.
+"""Stateless discovery farm — same OOS gates as tournament, not on the k8s cycle.
 
-Evaluates never-tested names (fail-once, auto-refill, rm_v1, 5m windows)
-against local ``crypto_history_5m.json`` and POSTs results to prod
+Default (claim mode): prod leases never-tested names
+(``POST /api/discovery/claim``). This process only needs the prod URL,
+the ingest token, and local ``crypto_history_5m.json``. It does not plan
+from a bootstrapped copy of the log, so several hosts can run at once
+without evaluating the same name. ``--local-plan`` keeps the old local
+cursor / refill path.
+
+Evaluates leased names (fail-once, rm_v1, 5m windows) and POSTs results to
 ``/api/discovery/ingest``. Cluster ``live_cycle`` stays live-only.
 
 Leave this process running. Pause/resume from the Discovery page
 (``POST /api/discovery/farm``) — the loop polls prod and idles instead
-of exiting so Start works without relaunching on jensa.
+of exiting so Start works without relaunching.
 
 GPU is unused (no CUDA rewrite). Default parallelism is 2 workers.
 ``--workers`` is capped at ``os.cpu_count()`` (minimum 1), not a hard 4.
 
     python scripts/discovery_worker.py --workers 2
+    python scripts\\discovery_worker.py --workers 2
     python scripts/discovery_worker.py --once --workers 1 --no-ingest
+    python scripts/discovery_worker.py --local-plan --workers 2
 
-Env:
-  PAPER_STATE                        local state dir (history + bootstrap cache)
+Env (a ``.env`` file in the working directory is loaded if present; values
+already set in the environment win; the token is never printed):
+  PAPER_STATE                        local state dir (history file)
   PAPER_DISCOVERY_INGEST_URL         default https://trading.runevibe.se/api/discovery/ingest
   PAPER_DISCOVERY_INGEST_TOKEN       shared secret (required unless --no-ingest)
-  PAPER_DISCOVERY_BASE_URL           prod origin for bootstrap GETs
+  PAPER_DISCOVERY_BASE_URL           prod origin (claim / summary / bootstrap)
+  DISCOVERY_WORKER_ID                default hostname-pid
   DISCOVERY_WORKERS                  default 2
   DISCOVERY_STRUCTURE_LOOKBACK_MAX   default 96; 0 disables. Farm ops, not an OOS gate.
   DISCOVERY_EVAL_TIMEOUT_SECONDS     default 600; 0 disables. Coarse per-name backstop.
@@ -29,6 +39,8 @@ import argparse
 import json
 import multiprocessing
 import os
+import signal
+import socket
 import sys
 import time
 from pathlib import Path
@@ -282,6 +294,118 @@ def pause_sleep_seconds(raw: int) -> int:
     return max(PAUSE_SLEEP_MIN, min(int(raw), PAUSE_SLEEP_MAX))
 
 
+def default_worker_id() -> str:
+    """Hostname plus pid so two processes on one machine do not share a lease."""
+    host = socket.gethostname().split(".")[0].strip() or "worker"
+    safe = "".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in host).strip("-") or "worker"
+    return f"{safe[:48]}-{os.getpid()}"
+
+
+def _load_local_env() -> None:
+    """Fill unset env vars from a local ``.env``. Never logs values."""
+    candidates = [Path.cwd() / ".env", ROOT / ".env"]
+    seen: set[str] = set()
+    for path in candidates:
+        try:
+            key = str(path.resolve())
+        except OSError:
+            key = str(path)
+        if key in seen or not path.is_file():
+            seen.add(key)
+            continue
+        seen.add(key)
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        for raw in text.splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            env_key, val = line.split("=", 1)
+            env_key = env_key.strip()
+            if not env_key or env_key in os.environ:
+                continue
+            val = val.strip()
+            if len(val) >= 2 and val[0] == val[-1] and val[0] in {'"', "'"}:
+                val = val[1:-1]
+            os.environ[env_key] = val
+
+
+def _claim_remote(base_url: str, token: str, worker_id: str, n: int, parallel: int) -> dict:
+    return _http_json(
+        f"{base_url.rstrip('/')}/api/discovery/claim",
+        token=token,
+        data={"worker_id": worker_id, "n": int(n), "parallel": int(parallel)},
+        timeout=120,
+    )
+
+
+def _release_remote(
+    base_url: str,
+    token: str,
+    worker_id: str,
+    *,
+    names: list[str] | None = None,
+    status: str = "idle",
+) -> dict:
+    payload: dict = {"worker_id": worker_id, "status": status}
+    if names is not None:
+        payload["names"] = list(names)
+    return _http_json(
+        f"{base_url.rstrip('/')}/api/discovery/release",
+        token=token,
+        data=payload,
+        timeout=60,
+    )
+
+
+def _release_remote_safe(
+    base_url: str | None,
+    token: str | None,
+    worker_id: str | None,
+    *,
+    names: list[str] | None = None,
+    status: str = "idle",
+) -> None:
+    if not (base_url and token and worker_id):
+        return
+    try:
+        _release_remote(base_url, token, worker_id, names=names, status=status)
+    except Exception as exc:
+        print(f"discovery_worker: release failed: {exc}", flush=True)
+
+
+_PARENT_PID = os.getpid()
+
+
+def _install_exit_signals() -> dict:
+    """SIGINT/SIGTERM become KeyboardInterrupt in the parent only."""
+
+    def handler(signum, frame):
+        if os.getpid() != _PARENT_PID:
+            raise KeyboardInterrupt
+        raise KeyboardInterrupt
+
+    prev: dict = {}
+    for sig in (signal.SIGINT, getattr(signal, "SIGTERM", None)):
+        if sig is None:
+            continue
+        try:
+            prev[sig] = signal.signal(sig, handler)
+        except (ValueError, OSError):
+            pass
+    return prev
+
+
+def _restore_exit_signals(prev: dict) -> None:
+    for sig, old in prev.items():
+        try:
+            signal.signal(sig, old)
+        except (ValueError, OSError):
+            pass
+
+
 def consider_pause(
     enabled: bool,
     *,
@@ -290,18 +414,34 @@ def consider_pause(
     token: str | None,
     pause_sleep: int,
     sleeper=time.sleep,
+    claim_mode: bool = False,
+    worker_id: str | None = None,
+    base_url: str | None = None,
 ) -> str:
     """Idle when the farm flag is off. Does not exit the worker process.
 
     Returns ``run``, ``pause``, or ``exit`` (``--once`` while paused).
+    Claim mode releases this worker's leases and does not clear the shared
+    in-flight file (another host may still hold names).
     """
     if enabled:
         return "run"
     print("discovery_worker: farm paused — idling (near-zero CPU)", flush=True)
     clear_in_flight()
-    if ingest_url and token:
+    if claim_mode:
+        _release_remote_safe(base_url, token, worker_id, status="paused")
+    elif ingest_url and token:
         try:
-            _post_ingest(ingest_url, token, [], [], None, clear=True, heartbeat="paused")
+            _post_ingest(
+                ingest_url,
+                token,
+                [],
+                [],
+                None,
+                clear=True,
+                heartbeat="paused",
+                worker_id=worker_id,
+            )
         except Exception as exc:
             print(f"discovery_worker: pause ingest failed: {exc}", flush=True)
     if once:
@@ -319,6 +459,7 @@ def _post_ingest(
     *,
     clear: bool = False,
     heartbeat: str | None = None,
+    worker_id: str | None = None,
 ) -> dict:
     payload = {
         "evaluations": evaluations,
@@ -326,8 +467,13 @@ def _post_ingest(
         "source": "windows_worker",
         "paper_only": True,
     }
+    if worker_id:
+        payload["worker_id"] = worker_id
     if heartbeat:
-        payload["heartbeat"] = {"status": heartbeat, "source": "windows_worker"}
+        hb = {"status": heartbeat, "source": "windows_worker"}
+        if worker_id:
+            hb["worker_id"] = worker_id
+        payload["heartbeat"] = hb
     if clear:
         payload["clear_in_flight"] = True
     elif flight:
@@ -342,6 +488,9 @@ def run_batch(
     ingest_url: str | None,
     token: str | None,
     n_windows: int = QUAL_N_WINDOWS,
+    names: list[str] | None = None,
+    claim_mode: bool = False,
+    worker_id: str | None = None,
 ) -> dict:
     data = _load_qual_history(keep_bars=qual_keep_bars(n_windows=n_windows))
     if not data:
@@ -354,31 +503,54 @@ def run_batch(
     if len(slices) != n_windows:
         raise SystemExit("history too short for qualification windows")
 
-    planned, rotated, added = _plan_batch(max_names)
+    if names is not None:
+        planned, rotated, added = list(names), list(names), []
+    else:
+        planned, rotated, added = _plan_batch(max_names)
     if added:
         print(f"discovery_worker: refilled {len(added)} names", flush=True)
-    if not planned:
-        print("discovery_worker: no never-tested names (recipe dry or all parked)", flush=True)
-        if ingest_url and token:
-            _post_ingest(ingest_url, token, [], added, None, clear=True, heartbeat="idle")
-        clear_in_flight()
-        return {"evaluated": 0, "qualified": 0, "planned": [], "refilled": added}
 
-    bh, sma = _benchmark_oos(slices)
-    write_in_flight(
-        planned,
-        current=None,
-        remaining=planned,
-        completed=[],
-        batch_size=len(planned),
-        source="windows_worker",
-    )
-    if ingest_url and token:
+    def _ingest(evals, extended, flight, *, clear=False, heartbeat=None):
+        if not (ingest_url and token):
+            return
+        if claim_mode:
+            flight = None
+            clear = False
         _post_ingest(
             ingest_url,
             token,
+            evals,
+            extended,
+            flight,
+            clear=clear,
+            heartbeat=heartbeat,
+            worker_id=worker_id,
+        )
+
+    if not planned:
+        print("discovery_worker: no never-tested names (recipe dry or all parked)", flush=True)
+        try:
+            _ingest([], [] if claim_mode else added, None, clear=True, heartbeat="idle")
+        except Exception as exc:
+            print(f"discovery_worker: idle ingest failed: {exc}", flush=True)
+        if not claim_mode:
+            clear_in_flight()
+        return {"evaluated": 0, "qualified": 0, "planned": [], "refilled": added}
+
+    bh, sma = _benchmark_oos(slices)
+    if not claim_mode:
+        write_in_flight(
+            planned,
+            current=None,
+            remaining=planned,
+            completed=[],
+            batch_size=len(planned),
+            source="windows_worker",
+        )
+    try:
+        _ingest(
             [],
-            added,
+            [] if claim_mode else added,
             {
                 "names": planned,
                 "remaining": planned,
@@ -388,9 +560,12 @@ def run_batch(
             },
             heartbeat="running",
         )
+    except Exception as exc:
+        print(f"discovery_worker: batch-start ingest failed: {exc}", flush=True)
 
     records: list[dict] = []
     completed: list[str] = []
+    acked: list[str] = []
     lookback_cap = structure_lookback_max()
     timeout_s = eval_timeout_seconds()
 
@@ -412,28 +587,27 @@ def run_batch(
                     f"sharpe={record.get('sharpe')} trades={record.get('trades')}",
                     flush=True,
                 )
-            if ingest_url and token:
-                _post_ingest(
-                    ingest_url,
-                    token,
-                    [record],
-                    [],
-                    {
-                        "names": remaining,
-                        "remaining": remaining,
-                        "completed": completed,
-                        "batch_size": len(planned),
-                    },
-                    heartbeat="running",
-                )
-        write_in_flight(
-            remaining,
-            current=None,
-            remaining=remaining,
-            completed=completed,
-            batch_size=len(planned),
-            source="windows_worker",
-        )
+            _ingest(
+                [record],
+                [],
+                {
+                    "names": remaining,
+                    "remaining": remaining,
+                    "completed": completed,
+                    "batch_size": len(planned),
+                },
+                heartbeat="running",
+            )
+            acked.append(name)
+        if not claim_mode:
+            write_in_flight(
+                remaining,
+                current=None,
+                remaining=remaining,
+                completed=completed,
+                batch_size=len(planned),
+                source="windows_worker",
+            )
 
     cheap: list[str] = []
     for name in planned:
@@ -479,19 +653,40 @@ def run_batch(
                 except Exception:
                     pass
     finally:
-        done = set(completed)
-        next_name = None
-        for n in rotated:
-            if n not in done:
-                next_name = n
-                break
-        save_cursor(next_name, last_evaluated=completed, last_count=len(completed), last_refill=added)
-        clear_in_flight()
-        if ingest_url and token:
-            try:
-                _post_ingest(ingest_url, token, [], [], None, clear=True, heartbeat="idle")
-            except Exception as exc:
-                print(f"discovery_worker: clear in_flight ingest failed: {exc}", flush=True)
+        if claim_mode:
+            pending = [n for n in planned if n not in acked]
+            clear_in_flight()
+            if pending:
+                _release_remote_safe(
+                    _base_url(ingest_url or "", None) if ingest_url else None,
+                    token,
+                    worker_id,
+                    names=pending,
+                    status="idle",
+                )
+        else:
+            done = set(completed)
+            next_name = None
+            for n in rotated:
+                if n not in done:
+                    next_name = n
+                    break
+            save_cursor(next_name, last_evaluated=completed, last_count=len(completed), last_refill=added)
+            clear_in_flight()
+            if ingest_url and token:
+                try:
+                    _post_ingest(
+                        ingest_url,
+                        token,
+                        [],
+                        [],
+                        None,
+                        clear=True,
+                        heartbeat="idle",
+                        worker_id=worker_id,
+                    )
+                except Exception as exc:
+                    print(f"discovery_worker: clear in_flight ingest failed: {exc}", flush=True)
 
     qualified = [r for r in records if r.get("qualified")]
     return {
@@ -516,12 +711,23 @@ def clamp_workers(requested: int, *, cpu_count: int | None = None) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description="Windows discovery farm (paper only)")
+    _load_local_env()
+    ap = argparse.ArgumentParser(description="Discovery farm (paper only, claim queue by default)")
     ap.add_argument("--workers", type=int, default=int(os.environ.get("DISCOVERY_WORKERS") or 2))
     ap.add_argument("--max-names", type=int, default=0, help="Names per batch (default = workers)")
     ap.add_argument("--once", action="store_true", help="One batch then exit")
     ap.add_argument("--no-ingest", action="store_true", help="Local eval only; do not POST prod")
-    ap.add_argument("--no-bootstrap", action="store_true", help="Skip pulling prod log/pool")
+    ap.add_argument("--no-bootstrap", action="store_true", help="Skip pulling prod log/pool (--local-plan)")
+    ap.add_argument(
+        "--local-plan",
+        action="store_true",
+        help="Plan batches locally (old cursor/refill) instead of POST /api/discovery/claim",
+    )
+    ap.add_argument(
+        "--worker-id",
+        default=os.environ.get("DISCOVERY_WORKER_ID") or "",
+        help="Lease owner (default hostname-pid)",
+    )
     ap.add_argument("--ingest-url", default=os.environ.get("PAPER_DISCOVERY_INGEST_URL") or DEFAULT_INGEST_URL)
     ap.add_argument("--base-url", default=os.environ.get("PAPER_DISCOVERY_BASE_URL") or "")
     ap.add_argument("--idle-sleep", type=int, default=60)
@@ -535,6 +741,8 @@ def main(argv: list[str] | None = None) -> int:
 
     workers = clamp_workers(args.workers)
     max_names = int(args.max_names) or workers
+    local_plan = bool(args.local_plan or args.no_ingest)
+    worker_id = (args.worker_id or "").strip() or default_worker_id()
     token = None if args.no_ingest else ingest_token()
     ingest_url = None if args.no_ingest else args.ingest_url
     if not args.no_ingest and not token:
@@ -549,13 +757,48 @@ def main(argv: list[str] | None = None) -> int:
     base = _base_url(args.ingest_url, args.base_url or None)
     print(
         f"discovery_worker: PAPER_STATE={state_root()} workers={workers} "
-        f"max_names={max_names} ingest={'off' if args.no_ingest else ingest_url} "
+        f"max_names={max_names} mode={'local-plan' if local_plan else 'claim'} "
+        f"worker_id={worker_id} ingest={'off' if args.no_ingest else ingest_url} "
         f"lookback_max={structure_lookback_max()} "
         f"eval_timeout_s={eval_timeout_seconds()}",
         flush=True,
     )
 
+    prev_signals = _install_exit_signals() if not local_plan else {}
     farm_enabled = True
+    try:
+        return _run_loop(
+            args,
+            workers=workers,
+            max_names=max_names,
+            local_plan=local_plan,
+            worker_id=worker_id,
+            token=token,
+            ingest_url=ingest_url,
+            base=base,
+            farm_enabled=farm_enabled,
+        )
+    except KeyboardInterrupt:
+        print("discovery_worker: stopped", flush=True)
+        return 0
+    finally:
+        if not local_plan:
+            _release_remote_safe(base, token, worker_id, status="idle")
+        _restore_exit_signals(prev_signals)
+
+
+def _run_loop(
+    args,
+    *,
+    workers: int,
+    max_names: int,
+    local_plan: bool,
+    worker_id: str,
+    token: str | None,
+    ingest_url: str | None,
+    base: str,
+    farm_enabled: bool,
+) -> int:
     while True:
         if not args.no_ingest:
             farm_enabled = poll_farm_enabled(base, farm_enabled)
@@ -565,36 +808,107 @@ def main(argv: list[str] | None = None) -> int:
                 ingest_url=ingest_url,
                 token=token,
                 pause_sleep=args.pause_sleep,
+                claim_mode=not local_plan,
+                worker_id=worker_id,
+                base_url=base,
             )
             if decision == "exit":
                 return 0
             if decision == "pause":
                 continue
-        if not args.no_bootstrap and not args.no_ingest:
+        if local_plan:
+            if not args.no_bootstrap and not args.no_ingest:
+                try:
+                    info = bootstrap_from_prod(base)
+                    print(f"discovery_worker: bootstrapped prod {info}", flush=True)
+                except Exception as exc:
+                    print(f"discovery_worker: bootstrap failed: {exc}", flush=True)
+                    if args.once:
+                        return 1
+                    time.sleep(max(5, args.idle_sleep))
+                    continue
             try:
-                info = bootstrap_from_prod(base)
-                print(f"discovery_worker: bootstrapped prod {info}", flush=True)
+                result = run_batch(
+                    workers=workers,
+                    max_names=max_names,
+                    ingest_url=ingest_url,
+                    token=token,
+                    claim_mode=False,
+                    worker_id=worker_id,
+                )
+            except SystemExit:
+                raise
             except Exception as exc:
-                print(f"discovery_worker: bootstrap failed: {exc}", flush=True)
+                print(f"discovery_worker: batch failed: {exc}", flush=True)
                 if args.once:
                     return 1
                 time.sleep(max(5, args.idle_sleep))
                 continue
-        try:
-            result = run_batch(
-                workers=workers,
-                max_names=max_names,
-                ingest_url=ingest_url,
-                token=token,
-            )
-        except SystemExit:
-            raise
-        except Exception as exc:
-            print(f"discovery_worker: batch failed: {exc}", flush=True)
-            if args.once:
-                return 1
-            time.sleep(max(5, args.idle_sleep))
-            continue
+        else:
+            try:
+                claimed = _claim_remote(base, token or "", worker_id, max_names, workers)
+            except Exception as exc:
+                print(f"discovery_worker: claim failed: {exc}", flush=True)
+                if args.once:
+                    return 1
+                time.sleep(max(5, args.idle_sleep))
+                continue
+            if claimed.get("paused"):
+                decision = consider_pause(
+                    False,
+                    once=args.once,
+                    ingest_url=ingest_url,
+                    token=token,
+                    pause_sleep=args.pause_sleep,
+                    claim_mode=True,
+                    worker_id=worker_id,
+                    base_url=base,
+                )
+                if decision == "exit":
+                    return 0
+                continue
+            names = [n for n in (claimed.get("names") or []) if isinstance(n, str)]
+            refilled = claimed.get("refilled") or []
+            if refilled:
+                print(f"discovery_worker: prod refilled {len(refilled)} names", flush=True)
+            if not names:
+                print("discovery_worker: claim returned no names", flush=True)
+                try:
+                    if ingest_url and token:
+                        _post_ingest(
+                            ingest_url,
+                            token,
+                            [],
+                            [],
+                            None,
+                            heartbeat="idle",
+                            worker_id=worker_id,
+                        )
+                except Exception as exc:
+                    print(f"discovery_worker: idle heartbeat failed: {exc}", flush=True)
+                if args.once:
+                    return 0
+                time.sleep(max(5, args.idle_sleep))
+                continue
+            try:
+                result = run_batch(
+                    workers=workers,
+                    max_names=max_names,
+                    ingest_url=ingest_url,
+                    token=token,
+                    names=names,
+                    claim_mode=True,
+                    worker_id=worker_id,
+                )
+            except SystemExit:
+                raise
+            except Exception as exc:
+                print(f"discovery_worker: batch failed: {exc}", flush=True)
+                _release_remote_safe(base, token, worker_id, names=names, status="idle")
+                if args.once:
+                    return 1
+                time.sleep(max(5, args.idle_sleep))
+                continue
         print(f"discovery_worker: batch {result}", flush=True)
         if args.once:
             return 0

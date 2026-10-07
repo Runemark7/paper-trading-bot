@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -29,6 +30,21 @@ except ImportError:  # Windows native python — Docker worker is Linux
     fcntl = None  # type: ignore[misc, assignment]
 
 SQLITE_BUSY_TIMEOUT_MS = 30_000
+
+# paper_state_lock is not re-entrant. A second acquire on the same thread
+# deadlocks (this lock, then flock on a new fd waiting for the first fd).
+_THREAD_LOCKS: dict[str, threading.Lock] = {}
+_THREAD_LOCKS_GUARD = threading.Lock()
+
+
+def _thread_lock_for(lock_path: Path) -> threading.Lock:
+    key = str(lock_path)
+    with _THREAD_LOCKS_GUARD:
+        lock = _THREAD_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _THREAD_LOCKS[key] = lock
+        return lock
 
 
 def _now() -> str:
@@ -49,16 +65,24 @@ def connect_sqlite(path: str | Path) -> sqlite3.Connection:
 
 @contextmanager
 def _exclusive_file_lock(lock_path: Path):
-    """fcntl flock on Linux; open-only fallback on Windows (single-process)."""
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(lock_path, "a") as fh:
-        if fcntl is not None:
-            fcntl.flock(fh, fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
+    """Serialize writers across threads in this process and processes on this host.
+
+    flock is per open-file-description (distinct opens block each other, including
+    threads). The threading.Lock is the in-process belt: the web container is a
+    ThreadingHTTPServer, and heartbeat / cycle are separate processes on the same
+    RWO volume. Windows without fcntl is single-process only.
+    """
+    thread_lock = _thread_lock_for(lock_path)
+    with thread_lock:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(lock_path, "a") as fh:
             if fcntl is not None:
-                fcntl.flock(fh, fcntl.LOCK_UN)
+                fcntl.flock(fh, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                if fcntl is not None:
+                    fcntl.flock(fh, fcntl.LOCK_UN)
 
 
 @contextmanager

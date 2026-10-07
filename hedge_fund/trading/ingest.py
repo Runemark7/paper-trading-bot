@@ -24,6 +24,7 @@ from hedge_fund.trading.discovery import (
     write_in_flight,
 )
 from hedge_fund.trading.farm import apply_heartbeat_unlocked
+from hedge_fund.trading.leases import clear_leases_unlocked, touch_worker_unlocked
 from hedge_fund.trading.qualify import requalify_parked_log
 from hedge_fund.trading.refill import append_extended_batch, load_extended_names
 from hedge_fund.trading.store import paper_state_lock
@@ -217,12 +218,30 @@ def ingest_discovery_payload(payload: dict) -> dict:
                 append_extended_batch(names)
                 added_extended = [n for n in names if n not in before]
 
+        clear_names = list(ingested)
+        for row in skipped:
+            reason = row.get("reason")
+            if reason in {"already_tested", "already_pooled_or_graduated"} and row.get("strategy"):
+                clear_names.append(row["strategy"])
+        if clear_names:
+            clear_leases_unlocked(clear_names)
+
         hb = payload.get("heartbeat")
+        status = None
+        worker_id = None
         if isinstance(hb, dict):
             status = hb.get("status")
-            apply_heartbeat_unlocked(str(status) if status else None)
+            raw_id = hb.get("worker_id")
+            if isinstance(raw_id, str):
+                worker_id = raw_id
         elif hb:
-            apply_heartbeat_unlocked(str(hb))
+            status = str(hb)
+        if not worker_id and isinstance(payload.get("worker_id"), str):
+            worker_id = payload.get("worker_id")
+        if isinstance(hb, dict) or hb or worker_id:
+            apply_heartbeat_unlocked(str(status) if status else None)
+        if worker_id:
+            touch_worker_unlocked(worker_id, str(status) if status else None)
 
         flight = payload.get("in_flight")
         if payload.get("clear_in_flight"):

@@ -762,9 +762,11 @@ class WorkerPauseTests(unittest.TestCase):
                 with patch.object(discovery_worker, "poll_farm_enabled", return_value=False):
                     with patch.object(discovery_worker, "run_batch") as batch:
                         with patch.object(discovery_worker, "_post_ingest", return_value={}):
-                            rc = discovery_worker.main(["--once", "--workers", "1"])
+                            with patch.object(discovery_worker, "_release_remote", return_value={}) as rel:
+                                rc = discovery_worker.main(["--once", "--workers", "1", "--worker-id", "unit-host"])
         self.assertEqual(rc, 0)
         batch.assert_not_called()
+        rel.assert_called()
 
 
 if __name__ == "__main__":

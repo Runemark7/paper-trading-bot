@@ -1118,6 +1118,26 @@ Then island #2b (h4×mom) stays in the stream, **deprioritized** because #66 mea
 
 - 2026-10-02 "undry admit-island densify #2b" insofar as `_regime_ands` emitted h4×mom first. That family stays in the stream after #2c. OOS **thresholds**, `QUAL_N_WINDOWS`, `QUAL_WARMUP_BARS`, `STRUCTURE_NS` ≤96, the mom∧dip guard, and fail-once are not superseded.
 
+### Amendment 2026-10-07 — discovery claim/lease queue
+
+This amendment does not rewrite original §§ 1–8 or prior amendments. Qual/live remain 5m, risk policy remains `rm_v1`. OOS **thresholds** are unchanged: `MIN_BACKTEST_TRADES` = 30, `MIN_BACKTEST_SHARPE` = 0.30, must beat buy-and-hold, must beat `sma_stack`, all-windows non-negative is diagnostic only, fail-once never-retest stays. `QUAL_N_WINDOWS` = 23, `QUAL_WARMUP_BARS` = 4032 stay. **Still paper.** Do not cull existing champions. Do not retest parked fails. Do not mint structure `N>96`. Do not clear `discovery_log`. Do not add mom∧dip. The recipe (`iter_recipe_names` / `next_refill_batch`, skip-tested + `near_duplicate_key`) is unchanged.
+
+**Why.** Two stateless workers (Linux laptop and Windows `jensa`) each planned a batch from a bootstrapped copy of prod state, so they evaluated the same names.
+
+**What was added.** Prod is the source of truth. Same `PAPER_DISCOVERY_INGEST_TOKEN` (`X-Discovery-Token`, `X-Paper-Discovery-Token`, or `Authorization: Bearer`). No/wrong token → 401. Unset → 503.
+
+- `POST /api/discovery/claim` `{worker_id, n, parallel?}` leases up to `n` never-tested names that are not currently leased (`discovery_leases.json`: `worker_id`, `claimed_at`, `expires_at`). TTL is about 2× batch time (`2 × DISCOVERY_EVAL_TIMEOUT_SECONDS × ceil(n / parallel)`). Expired leases return to the pool.
+- When nothing is eligible and unleased, prod refills one `DISCOVERY_REFILL_BATCH_SIZE` handful from the same recipe and then leases from that.
+- `POST /api/discovery/release` drops that worker's leases (clean shutdown / Stop).
+- Ingest of a result for a name clears its lease. A name already in `discovery_log.json` is never leased again.
+- `GET /api/discovery/summary` adds `workers` (per-worker `last_seen` and leased names) and `leases` / `counts.leased`. Existing `farm`, `in_flight`, and `counts` stay.
+
+Claims are one read-modify-write under `paper_state_lock` (in-process lock + `fcntl.flock`). The backend Deployment is `replicas: 1` on a ReadWriteOnce PVC (web threads plus heartbeat and cycle). Workers default to claim mode (`worker_id` = hostname-pid). `--local-plan` keeps the old local cursor. Start/Stop still only flips `discovery_farm.json`; Stop does not revoke a batch already running.
+
+**Superseded on this date** (prior text kept above for history):
+
+- Same-date island #2c text insofar as it said the cluster does not refill and an Argo rollout is not required for the recipe to feed the farm. Claim mode refills on prod, so the backend image must roll before claim workers start. The recipe stream, OOS **thresholds**, `QUAL_N_WINDOWS`, `QUAL_WARMUP_BARS`, `STRUCTURE_NS` ≤96, the mom∧dip guard, and fail-once are not superseded.
+
 
 
 
