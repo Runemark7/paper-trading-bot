@@ -211,6 +211,15 @@ export interface DiscoveryCounts {
   leased?: number;
   workers?: number;
   evals_today?: number;
+  /** Uncapped tested-name index. The display log stays capped. */
+  tested_index?: number;
+}
+
+export interface DiscoveryRefill {
+  source: "recipe" | "densify" | string;
+  eligible: number;
+  generated_last: number;
+  exhausted: boolean;
 }
 
 export type DiscoveryFarmStatus = "running" | "paused" | "worker_idle" | "worker_unseen" | string;
@@ -251,6 +260,8 @@ export interface DiscoverySummary {
   queued: string[];
   untested: string[];
   counts: DiscoveryCounts;
+  /** Last claim refill. ``eligible`` matches ``counts.eligible``. */
+  refill?: DiscoveryRefill;
   last_tested_at: string | null;
   last_strategy: string | null;
   last_eval_age_seconds?: number | null;

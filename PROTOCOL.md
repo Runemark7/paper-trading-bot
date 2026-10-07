@@ -123,6 +123,7 @@ over a meaningful sample, AND calibration is demonstrated independently of P&L.
 | 2026-10-02 | Refill mint un-dries again around the paying admit island. h4 twins of `h1_* & mom_18b_gt2pc & *_abv_30 & rsi_14_>50` (core `h4_{ema,sma}_abv_{20,24,30}`, then neighbors), sparse h4×mom×`sma_abv_30`/`ema_abv_30`, and under-emitted 5–7 atom stacks (dual h1+h4, both mild MAs) emit **first**. #65 `sma_abv_40` / `rsi_14_>60` stays in the stream but is no longer the lead (+0 admits). No mom∧dip. No structure `N>96`. Fail-once stays. Static list unchanged. Paper only; OOS gates unchanged. |
 | 2026-10-07 | Refill mint un-dries with admit-island densify #2c. h1 × `mom_18b_gt2pc` × `rsi_14_>45` / gap MAs (`sma_abv_35` and neighbors) / 5-atom extensions emit **first** (459 new names). Island #2b h4×mom stays but is deprioritized after a measured FAIL. `--workers` caps at `os.cpu_count()` (default 2). No mom∧dip. No structure `N>96`. Fail-once stays. Paper only; OOS gates unchanged. |
 | 2026-10-07 | Live paper cycle no longer fetches 300×5m bars. BTC/USDT and ETH/USDT 5m history persists on the state PVC (`live_tape/*.npy`), bootstrapped from `crypto_history_5m.json` if present or a chunked public backfill up to `qual_keep_bars()` (same span qualification keeps). Each cycle appends only new bars. Signals use the last walk-forward window (`QUAL_WINDOW_BARS + QUAL_WARMUP_BARS`) so the latest bar matches qualification. Every active champion is evaluated each cycle. `TRADE_EVALUATION_LIMIT` stays 80 closed paper trades before graduation — it is not a champion cap. OOS gates unchanged. Paper only. No cull. |
+| 2026-10-07 | Same-date later: claim queue must not run dry. Fail-once / refill skip reads an uncapped `discovery_tested.json` (name + qualified flag) so trimming the 10000-row display log cannot re-queue a tested name. When the recipe yields fewer names than the claim needs, prod densifies around qualified passes (one axis or one extra atom, ≤7). Low watermark is 2× active lease capacity. Summary `refill` reports source, eligible, generated_last, exhausted. No mom∧dip. No structure `N>96`. Skip h4×mom and other 0% families (≥30 tested). OOS gates unchanged. Paper only. |
 
 ### Amendment 2026-08-30 — what actually runs
 
@@ -1138,6 +1139,26 @@ Claims are one read-modify-write under `paper_state_lock` (in-process lock + `fc
 **Superseded on this date** (prior text kept above for history):
 
 - Same-date island #2c text insofar as it said the cluster does not refill and an Argo rollout is not required for the recipe to feed the farm. Claim mode refills on prod, so the backend image must roll before claim workers start. The recipe stream, OOS **thresholds**, `QUAL_N_WINDOWS`, `QUAL_WARMUP_BARS`, `STRUCTURE_NS` ≤96, the mom∧dip guard, and fail-once are not superseded.
+
+### Amendment 2026-10-07 — tested-name index and densify so the claim queue does not run dry
+
+This amendment does not rewrite original §§ 1–8 or prior amendments. Qual/live remain 5m, risk policy remains `rm_v1`. OOS **thresholds** are unchanged: `MIN_BACKTEST_TRADES` = 30, `MIN_BACKTEST_SHARPE` = 0.30, must beat buy-and-hold, must beat `sma_stack`, all-windows non-negative is diagnostic only, fail-once never-retest stays. `QUAL_N_WINDOWS` = 23, `QUAL_WARMUP_BARS` = 4032, `DISCOVERY_LOG_CAP` = 10000 stay. **Still paper.** Do not cull existing champions. Do not retest parked fails. Do not mint structure `N>96`. Do not clear `discovery_log`. Do not add mom∧dip. Do not change the live trading path.
+
+**Why.** Prod `GET /api/discovery/summary?compact=1` showed `tested` = `log_rows` = `unique_tested` = 10000 with `eligible` = 11 and `leased` = 10. Skip/dedupe (`tested_discovery_names`, `failed_discovery_names`, `prioritize_leftovers`, claim's blocked set) read `discovery_log.json`. `append_discovery_evaluations` keeps only the newest `DISCOVERY_LOG_CAP` rows, so the next append drops the oldest name and that name becomes eligible again. Separately, `POST /api/discovery/claim` refilled only when the unleased pool was empty, and only from `iter_recipe_names`. That stream is finite; with eligible = 11 it was about to hand workers an empty batch.
+
+**What was added.**
+
+- `discovery_tested.json` in the paper-state dir (under `paper_state_lock`): uncapped map of strategy name → qualified flag. It is the source of truth for skip/dedupe. Append and requalify/force-admit update it. The first read migrates rows still in the display log. Names already trimmed before this file existed cannot be recovered. The display log stays capped at 10000. Summary `counts.tested_index` is the durable count; `counts.tested` / `log_rows` stay the display log.
+- Claim refill (`_claimable_names`) tops up when unleased names cannot cover `n`, or when never-tested work (including active leases) is below `2 × max(active leases, n)`. Existing claimable names are leased first. New names are appended to `discovery_extended.json` in handfuls of at least `DISCOVERY_REFILL_BATCH_SIZE`.
+- When `next_refill_batch` yields fewer than requested, `hedge_fund.trading.densify` continues. Seeds are qualified names. Order is deterministic: h1×mom×(MA|RSI) seeds first, then nearest one-axis step (HTF period, mom lookback, mom %, MA period, RSI threshold), then one extra parser-allowed atom, up to 7 atoms. The iterator is ranked and stops after `n` accepts.
+- Still refused: parser-illegal atoms, `mom_*` AND `dip_*`, structure lookback N>96, `near_duplicate_key` collisions, already-tested names, the h4×mom family, and any family/spine with ≥30 tests and zero passes (counted from the tested index).
+- `GET /api/discovery/summary` adds `refill: {source: recipe|densify, eligible, generated_last, exhausted}`. `refill.eligible` matches `counts.eligible`. A warning is logged when recipe and densify both produce nothing.
+
+**What did not change.** Sharpe 0.30, 30 OOS trades, beat B&H, beat `sma_stack`, 5m, `rm_v1`, fail-once, `QUAL_N_WINDOWS` = 23, `QUAL_WARMUP_BARS` = 4032. Claim/lease TTL, release, ingest clearing a lease, and the single-replica flock stay as in the claim/lease amendment. Live `run_isolated` is untouched.
+
+**Superseded on this date** (prior text kept above for history):
+
+- Same-date claim/lease text insofar as it said prod refills only when nothing is eligible, only from the recipe, and that a name is skipped because it is in `discovery_log.json`. The display log is no longer the skip set. OOS **thresholds**, `QUAL_N_WINDOWS`, `QUAL_WARMUP_BARS`, `STRUCTURE_NS` ≤96, the mom∧dip guard, and fail-once are not superseded.
 
 
 

@@ -175,8 +175,11 @@ class LeaseQueueTests(unittest.TestCase):
                         now=t0 + timedelta(days=30),
                     )
                     self.assertNotIn(name, later["names"])
-                    self.assertEqual(len(later["names"]), 1)
-                    self.assertNotEqual(later["names"][0], name)
+                    self.assertEqual(len(later["names"]), 2)
+                    self.assertIn(
+                        universe[1] if name == universe[0] else universe[0],
+                        later["names"],
+                    )
 
     def test_refill_on_empty_skips_tested_and_near_dups(self):
         from hedge_fund.trading.leases import claim_discovery_batch
@@ -223,7 +226,9 @@ class LeaseQueueTests(unittest.TestCase):
                     return_value=universe,
                 ):
                     body = claim_discovery_batch("linux-1", 2, parallel=2)
-                    self.assertEqual(body["names"], [universe[1]])
+                    self.assertEqual(body["names"][0], universe[1])
+                    self.assertNotIn(universe[0], body["names"])
+                    self.assertEqual(len(body["names"]), 2)
                     self.assertFalse(body["paused"])
                     set_farm_enabled(False)
                     paused = claim_discovery_batch("jensa-2", 2, parallel=2)
