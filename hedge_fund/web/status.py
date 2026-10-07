@@ -26,7 +26,7 @@ from hedge_fund.trading.open_lots import (
 from hedge_fund.trading.stamps import HEARTBEAT_STAMP, PIPELINE_STAMP, read_json_stamp
 from hedge_fund.trading.store import read_paper_account
 from hedge_fund.trading.universe import untested_candidates
-from hedge_fund.web.ttl_cache import READ_CACHE_TTL_SECONDS, TtlSingleFlight
+from hedge_fund.web.ttl_cache import StaleCache
 
 # Stamp "started" older than this with no finish is labeled stale, not running.
 STALE_PIPELINE_SECONDS = 2 * 3600
@@ -282,16 +282,25 @@ def _live_history(root: Path) -> dict:
         return {"paper_only": True, "error": str(exc), "symbols": {}}
 
 
-_STATUS_CACHE = TtlSingleFlight(READ_CACHE_TTL_SECONDS)
+_STATUS_CACHE = StaleCache()
 
 
 def clear_status_cache() -> None:
     _STATUS_CACHE.clear()
 
 
+def _status_cache_key() -> str:
+    return str(state_root().resolve())
+
+
 def build_status() -> dict:
-    """Cached for ``READ_CACHE_TTL_SECONDS``. Concurrent callers share one build."""
-    return _STATUS_CACHE.get(str(state_root().resolve()), _build_status_uncached)
+    """Last built snapshot for this PAPER_STATE. Does not wait on a rebuild."""
+    return _STATUS_CACHE.get(_status_cache_key(), _build_status_uncached)
+
+
+def refresh_status() -> None:
+    """Background rebuild. A failure keeps the payload ``build_status`` is serving."""
+    _STATUS_CACHE.refresh(_status_cache_key(), _build_status_uncached)
 
 
 def _build_status_uncached() -> dict:

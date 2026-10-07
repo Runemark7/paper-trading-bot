@@ -5,7 +5,8 @@ A small, dependency-free HTTP server (stdlib only) that exposes:
   GET /                 -> dashboard HTML (state/report.html)
   GET /api/summary      -> JSON: equity, closed trades, win rate, P&L, Brier,
                            live_history (5m bars + last bar time per symbol).
-                           Cached sqlite snapshot; does not fetch the exchange.
+                           Last sqlite snapshot, refreshed in the background.
+                           Does not fetch the exchange or block on a rebuild.
   GET /api/learning     -> JSON: per-condition learning state (skills acquired)
   GET /api/regime       -> JSON: current regime zone/score
   GET /api/trades       -> JSON: recent closed trades
@@ -40,6 +41,7 @@ import subprocess
 import sys
 import threading
 import time
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -50,7 +52,7 @@ from hedge_fund.trading.discovery_mode import ingest_token, tokens_match
 from hedge_fund.trading.open_lots import open_lots_snapshot, paper_book_dbs
 from hedge_fund.trading.store import TradeStore, read_paper_account
 from hedge_fund.web.live import live_preview
-from hedge_fund.web.ttl_cache import READ_CACHE_TTL_SECONDS, TtlSingleFlight
+from hedge_fund.web.ttl_cache import READ_REBUILD_SECONDS, StaleCache
 
 _INGEST_MAX_BYTES = 1_000_000
 
@@ -91,16 +93,25 @@ def store_dbs() -> list[str]:
     return paper_book_dbs() or [str(_trades_db())]
 
 
-_SUMMARY_CACHE = TtlSingleFlight(READ_CACHE_TTL_SECONDS)
+_SUMMARY_CACHE = StaleCache()
 
 
 def clear_summary_cache() -> None:
     _SUMMARY_CACHE.clear()
 
 
+def _summary_cache_key() -> str:
+    return str(_state_dir().resolve())
+
+
 def build_summary() -> dict:
-    """Cached sqlite snapshot. Does not fetch prices or rebuild report.html."""
-    return _SUMMARY_CACHE.get(str(_state_dir().resolve()), _build_summary_uncached)
+    """Last sqlite snapshot for this PAPER_STATE. Does not wait on a rebuild."""
+    return _SUMMARY_CACHE.get(_summary_cache_key(), _build_summary_uncached)
+
+
+def refresh_summary() -> None:
+    """Background rebuild. A failure keeps the payload ``build_summary`` is serving."""
+    _SUMMARY_CACHE.refresh(_summary_cache_key(), _build_summary_uncached)
 
 
 def _build_summary_uncached() -> dict:
@@ -139,6 +150,8 @@ def _build_summary_uncached() -> dict:
         "source": "per-strategy paper accounts" if per_strategy_dbs() else "legacy trades.sqlite",
         "account_count": len(dbs),
         "live_history": history,
+        # Build time of this payload. Stays put when a later rebuild is skipped or fails.
+        "as_of": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
 
 
@@ -244,6 +257,35 @@ _LIVE_LOCK = threading.Lock()
 _REPORT_REFRESH_INTERVAL_SECONDS = 60.0
 _report_refresh_once = threading.Lock()
 _report_refresh_started = False
+
+
+_read_refresh_once = threading.Lock()
+_read_refresh_started = False
+
+
+def start_read_refresh(interval: float = READ_REBUILD_SECONDS) -> None:
+    """Rebuild /api/status and /api/summary off the request path."""
+    global _read_refresh_started
+    with _read_refresh_once:
+        if _read_refresh_started:
+            return
+        _read_refresh_started = True
+
+    def _loop() -> None:
+        while True:
+            try:
+                from hedge_fund.web.status import refresh_status
+
+                refresh_status()
+            except Exception as exc:
+                print(f"[status] rebuild failed: {exc}", file=sys.stderr, flush=True)
+            try:
+                refresh_summary()
+            except Exception as exc:
+                print(f"[summary] rebuild failed: {exc}", file=sys.stderr, flush=True)
+            time.sleep(interval)
+
+    threading.Thread(target=_loop, name="status-summary-refresh", daemon=True).start()
 
 
 def start_report_refresh(interval: float = _REPORT_REFRESH_INTERVAL_SECONDS) -> None:
@@ -616,6 +658,7 @@ def main():
     ap.add_argument("--host", default="0.0.0.0")
     args = ap.parse_args()
 
+    start_read_refresh()
     start_report_refresh()
     httpd = ThreadingHTTPServer((args.host, args.port), Handler)
     print(f"paperbot dashboard service on http://{args.host}:{args.port}")
