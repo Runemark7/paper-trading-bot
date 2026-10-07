@@ -23,6 +23,7 @@ from hedge_fund.risk.managed import RiskManager
 from hedge_fund.trading.loop import TradingLoop
 from hedge_fund.trading.store import TradeStore
 from hedge_fund.trading.champions import load_pool
+from hedge_fund.trading.live_tape import refresh_cycle_market
 
 SYMBOLS = ["BTC/USDT", "ETH/USDT"]
 START_CASH = 10_000.0
@@ -82,10 +83,13 @@ def main() -> None:
     # falling back to PAPER_STRATEGY (sma_stack) otherwise.
     active = resolve_champion() or LIVE_STRATEGY
     print(f"[active strategy: {active}]")
-    loop = TradingLoop(data, broker, risk, calib, store=store, regime=regime,
+    market = refresh_cycle_market(data, state_dir=state)
+    loop = TradingLoop(market, broker, risk, calib, store=store, regime=regime,
                        strategy=active)
 
     for i in range(args.cycles):
+        if i:
+            loop.data = refresh_cycle_market(data, state_dir=state)
         results = loop.run_cycle(SYMBOLS)
         for r in results:
             print(f"[{i}] {r.symbol} {r.action:9s} cond={r.condition} "

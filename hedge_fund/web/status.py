@@ -268,6 +268,16 @@ def _graduation_block() -> dict:
     }
 
 
+def _live_history(root: Path) -> dict:
+    """Bars and last bar time per symbol. Read-only; does not fetch Binance."""
+    try:
+        from hedge_fund.trading.live_tape import live_history_health
+
+        return live_history_health(root)
+    except Exception as exc:  # noqa: BLE001 — status must still render
+        return {"paper_only": True, "error": str(exc), "symbols": {}}
+
+
 def build_status() -> dict:
     now = datetime.now(timezone.utc)
     root = state_root()
@@ -318,6 +328,7 @@ def build_status() -> dict:
                 "account_saved_at": _account_saved_at(dbs),
                 "next": _infer_next_cycle(last_cycle, now),
             },
+            "live_history": _live_history(root),
             "positions_open": lots["open_lots"],
             "open_lots": lots["open_lots"],
             "open_lots_by_account": lots["by_account"],
@@ -344,12 +355,16 @@ def build_status() -> dict:
                 "stamp_says_this_phase": stamp_in_progress and stamp_phase == "tournament",
                 "active_count": len(champs),
                 "evaluation_limit": TRADE_EVALUATION_LIMIT,
+                "champions_per_cycle": len(active),
                 "synced_until": pool.get("synced_until") or None,
                 "file": _file_mtime_note(root / "champions.json"),
                 "note": (
                     "Active names are on the paper book (see Running now). "
-                    "There is no live-slot cap. Qualification/replenish is "
-                    "last-known from champions.json and discovery_log.json."
+                    "There is no live-slot cap and no per-cycle champion cap. "
+                    "evaluation_limit is closed paper trades before graduation, "
+                    "not how many champions run_isolated evaluates. "
+                    "Qualification/replenish is last-known from champions.json "
+                    "and discovery_log.json."
                 ),
             },
             "replenish": {

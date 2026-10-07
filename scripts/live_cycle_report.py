@@ -3,6 +3,7 @@ import json, sqlite3, sys
 from hedge_fund.paths import state_root
 from hedge_fund.data.binance import CcxtSource
 from hedge_fund.trading.constants import QUAL_TIMEFRAME
+from hedge_fund.trading.live_tape import load_cycle_klines
 from hedge_fund.signals.momentum import compute_signal
 
 TF = QUAL_TIMEFRAME
@@ -22,13 +23,16 @@ for s in SYMBOLS:
         px[s] = None
 print("PRICES", json.dumps(px))
 
-# --- signals ---
-klines = {}
+# --- signals (same persistent 5m tape as the live cycle) ---
+try:
+    klines = load_cycle_klines(source=data, refresh=True)
+except Exception as e:
+    print("TAPE", str(e))
+    klines = {s: None for s in SYMBOLS}
 for s in SYMBOLS:
-    try:
-        klines[s] = data.fetch_klines(s, TF, limit=300)
-    except Exception as e:
-        klines[s] = None
+    ks = klines.get(s)
+    last = ks[-1].datetime_iso if ks else None
+    print(f"TAPE {s} bars={0 if not ks else len(ks)} last={last}")
 
 for strat in STRATS:
     row = {}

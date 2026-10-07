@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -24,61 +25,36 @@ from hedge_fund.risk.managed import RiskManager
 from hedge_fund.trading.loop import TradingLoop
 from hedge_fund.trading.store import TradeStore
 from hedge_fund.trading.champions import load_pool
-from hedge_fund.trading.constants import QUAL_TIMEFRAME
+from hedge_fund.trading.constants import QUAL_SYMBOLS, live_signal_eval_bars
+from hedge_fund.trading.live_tape import CachedMarket, refresh_cycle_market
 
-SYMBOLS = ["BTC/USDT", "ETH/USDT"]
+SYMBOLS = list(QUAL_SYMBOLS)
 START_CASH = 10_000.0
 LIVE_STRATEGY = os.environ.get("PAPER_STRATEGY", "sma_stack")
 
 
-class _CachedMarket:
-    """Duck-typed CcxtSource over one pre-fetched snapshot.
-
-    Every champion account must run the same TradingLoop cycle on the same
-    bars/prices; caching avoids re-fetching Binance once per strategy.
-    """
-
-    def __init__(self, prices: dict, klines: dict) -> None:
-        self._prices = prices
-        self._klines = klines
-
-    def fetch_price(self, symbol: str) -> float:
-        px = self._prices.get(symbol)
-        if px is None:
-            raise RuntimeError(f"no cached price for {symbol}")
-        return px
-
-    def fetch_klines(self, symbol: str, timeframe: str = QUAL_TIMEFRAME, limit: int = 300,
-                     since: int | None = None):
-        bars = self._klines.get(symbol)
-        if not bars:
-            raise RuntimeError(f"no cached klines for {symbol}")
-        return bars[-limit:] if limit else bars
-
-
 def active_strategies() -> list[str]:
-    """Champion pool strategies to run isolated accounts for, else default."""
+    """Every champion in the pool, else the PAPER_STRATEGY fallback.
+
+    ``TRADE_EVALUATION_LIMIT`` is how many closed paper trades graduate an
+    account. It does not slice this list — a pool larger than that bar is
+    still evaluated in full each cycle.
+    """
     try:
         pool = load_pool()
         champs = pool.get("champions", [])
-        return [c["name"] for c in champs] if champs else [LIVE_STRATEGY]
+        names = [c["name"] for c in champs if isinstance(c, dict) and c.get("name")]
+        return names if names else [LIVE_STRATEGY]
     except Exception:
         return [LIVE_STRATEGY]
 
 
-def _fetch_snapshot(data: CcxtSource) -> _CachedMarket:
-    prices: dict = {}
-    klines: dict = {}
-    for sym in SYMBOLS:
-        try:
-            prices[sym] = data.fetch_price(sym)
-            klines[sym] = data.fetch_klines(sym, QUAL_TIMEFRAME, limit=300)
-        except Exception as e:
-            print(f"[data error for {sym}]: {e}")
-    return _CachedMarket(prices, klines)
+def _fetch_snapshot(data: CcxtSource, state: Path) -> CachedMarket:
+    """Persistent 5m tape (qual span) plus one price snapshot for every account."""
+    return refresh_cycle_market(data, state_dir=state)
 
 
-def _run_one_account(strat: str, state: Path, market: _CachedMarket, now: str) -> None:
+def _run_one_account(strat: str, state: Path, market: CachedMarket, now: str) -> None:
     slug = strat.replace("/", "_").replace(":", "_")
     db = state / f"trades_{slug}.sqlite"
     store = TradeStore(db)
@@ -94,6 +70,7 @@ def _run_one_account(strat: str, state: Path, market: _CachedMarket, now: str) -
     loop = TradingLoop(
         market, broker, risk, calib, store=store,
         strategy=strat, strategy_file=None, regime=None,
+        kline_limit=live_signal_eval_bars(),
     )
     loop.run_cycle(SYMBOLS)
     store.save_account_state({
@@ -117,9 +94,19 @@ def main() -> None:
 
     for _ in range(args.cycles):
         now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-        market = _fetch_snapshot(data)
+        t0 = time.perf_counter()
+        market = _fetch_snapshot(data, state)
+        fetch_s = time.perf_counter() - t0
+        t1 = time.perf_counter()
         for strat in strategies:
             _run_one_account(strat, state, market, now)
+        eval_s = time.perf_counter() - t1
+        print(
+            f"[isolated cycle evaluated {len(strategies)} champions "
+            f"fetch_s={fetch_s:.2f} eval_s={eval_s:.2f} "
+            f"total_s={fetch_s + eval_s:.2f}]",
+            flush=True,
+        )
 
 
 if __name__ == "__main__":

@@ -133,6 +133,8 @@ spec:
               cpu: 1000m
               memory: 1536Mi
           volumeMounts:
+            # Same PVC as sqlite. live_tape/*.npy is the BTC/ETH 5m history
+            # (qualification span). No extra volume.
             - name: state-storage
               mountPath: /app/state
 

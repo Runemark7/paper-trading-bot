@@ -196,6 +196,61 @@ def _call_klines(src, symbol: str, timeframe: str, limit: int, since: int | None
     return list(src.fetch_klines(symbol, timeframe=timeframe, limit=n, since=since))
 
 
+def _set_public_timeout(src) -> None:
+    """Apply FETCH_TIMEOUT on a real ccxt client. Ignore fakes."""
+    ex = getattr(src, "exchange", None)
+    if not isinstance(getattr(ex, "id", None), str):
+        return
+    try:
+        ex.timeout = int(FETCH_TIMEOUT * 1000)
+    except Exception:  # noqa: BLE001 — mock sources in tests
+        pass
+
+
+def fetch_chunk(
+    symbol: str,
+    *,
+    limit: int = CHUNK_SIZE,
+    since: int | None = None,
+    source=None,
+    blocking: bool = True,
+) -> list:
+    """One public 5m page, never larger than ``CHUNK_SIZE``.
+
+    ``source`` uses that client only (tests, or the cycle's CcxtSource).
+    Otherwise reuse the per-venue client and fall back binance → binanceus,
+    same lock and timeout as the chart. Does not apply the chart's 7-day cap;
+    callers that need a long tape page this themselves.
+    """
+    n = min(max(1, int(limit)), CHUNK_SIZE)
+    if source is not None:
+        _set_public_timeout(source)
+        return _call_klines(source, symbol, DEFAULT_TIMEFRAME, n, since)
+
+    last_exc: Exception | None = None
+    busy = False
+    for exchange_id in ("binance", "binanceus"):
+        try:
+            src = _public_source(exchange_id)
+            if not _acquire_venue(exchange_id, blocking=blocking):
+                busy = True
+                last_exc = TimeoutError(f"{exchange_id} venue busy")
+                continue
+            try:
+                return _call_klines(src, symbol, DEFAULT_TIMEFRAME, n, since)
+            finally:
+                _release_venue(exchange_id)
+        except Exception as exc:  # noqa: BLE001 — try the next public venue
+            last_exc = exc
+            continue
+    if busy and not blocking:
+        raise CandleFetchError(str(last_exc or "venue busy"), status=504) from last_exc
+    raise CandleFetchError(
+        str(last_exc or "no public klines"),
+        status=_status_for(last_exc),
+    ) from last_exc
+
+
 def _fetch_last_n(src, symbol: str, timeframe: str, n: int, *, deadline: float | None = None):
     """Newest ``n`` 5m bars, paged in CHUNK_SIZE pieces on this source only.
 

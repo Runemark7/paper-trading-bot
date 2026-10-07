@@ -84,11 +84,18 @@ def sma(closes: list[float], period: int, i: int | None = None) -> float:
     n = len(closes)
     key = _series_cache_key(closes, period)
     series = _sma_series_cache.get(key)
-    if series is None or len(series) != n:
-        if len(_sma_series_cache) >= _SMA_CACHE_MAX:
-            _sma_series_cache.clear()
-        series = _sma_series(closes, period)
-        _sma_series_cache[key] = series
+    if series is not None and len(series) == n:
+        return series[i]
+    # Live evaluates one bar (the last). That window equals
+    # ``_sma_series(...)[i]`` and does not need the O(n·period) series.
+    # Walk-forward asks for an earlier index first, which still builds
+    # and caches the full series for the rest of the pass.
+    if i == n - 1:
+        return sum(closes[i - period + 1 : i + 1]) / period
+    if len(_sma_series_cache) >= _SMA_CACHE_MAX:
+        _sma_series_cache.clear()
+    series = _sma_series(closes, period)
+    _sma_series_cache[key] = series
     return series[i]
 
 

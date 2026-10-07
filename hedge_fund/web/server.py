@@ -3,11 +3,13 @@
 A small, dependency-free HTTP server (stdlib only) that exposes:
 
   GET /                 -> dashboard HTML (state/report.html)
-  GET /api/summary      -> JSON: equity, closed trades, win rate, P&L, Brier
+  GET /api/summary      -> JSON: equity, closed trades, win rate, P&L, Brier,
+                           live_history (5m bars + last bar time per symbol)
   GET /api/learning     -> JSON: per-condition learning state (skills acquired)
   GET /api/regime       -> JSON: current regime zone/score
   GET /api/trades       -> JSON: recent closed trades
-  GET /api/status       -> running-now vs in-progress (last-known stamps)
+  GET /api/status       -> running-now vs in-progress (last-known stamps);
+                           running_now.live_history is the same tape summary
   GET /api/discovery/summary -> tested / in-flight / leftover-untested; farm Start/Stop status
                                 (?compact=1 omits those lists; counts/farm/stuck stay)
   POST /api/discovery/ingest -> Windows worker: append evals + admit / force_admit (shared secret)
@@ -106,6 +108,12 @@ def build_summary() -> dict:
                 total_pnl += stats["total_pnl"]
         except Exception:
             continue
+    try:
+        from hedge_fund.trading.live_tape import live_history_health
+
+        history = live_history_health(_state_dir())
+    except Exception as exc:  # noqa: BLE001
+        history = {"paper_only": True, "error": str(exc), "symbols": {}}
     return {
         "equity": last_equity,
         "closed_trades": total_closed,
@@ -114,6 +122,7 @@ def build_summary() -> dict:
         "updated": last_ts,
         "source": "per-strategy paper accounts" if per_strategy_dbs() else "legacy trades.sqlite",
         "account_count": len(dbs),
+        "live_history": history,
     }
 
 
