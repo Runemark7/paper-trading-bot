@@ -425,14 +425,76 @@ class TradeStore:
             return None
 
 
+# path -> (mtime/size token including WAL sidecars, plain snapshot dict)
+_ACCOUNT_READ_CACHE: dict[str, tuple[tuple, dict]] = {}
+_ACCOUNT_READ_LOCK = threading.Lock()
+
+
+def _file_token(path: Path) -> tuple[int, int] | None:
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    return (st.st_mtime_ns, st.st_size)
+
+
+def _db_cache_token(path: Path) -> tuple | None:
+    """Identity of a paper DB. WAL/SHM are included so a live writer invalidates."""
+    base = _file_token(path)
+    if base is None:
+        return None
+    return (
+        base,
+        _file_token(Path(str(path) + "-wal")),
+        _file_token(Path(str(path) + "-shm")),
+    )
+
+
+def clear_account_read_cache() -> None:
+    with _ACCOUNT_READ_LOCK:
+        _ACCOUNT_READ_CACHE.clear()
+
+
+def _share_account(rec: dict) -> dict:
+    """Copy the top-level fields. Callers only read the nested broker blob."""
+    stats = rec.get("stats")
+    snap = rec.get("snapshot")
+    return {
+        "stats": dict(stats) if stats is not None else None,
+        "snapshot": dict(snap) if snap is not None else None,
+        "saved": rec.get("saved"),
+    }
+
+
 def read_paper_account(path: str | Path) -> dict | None:
-    """Open ``path`` once, read-only.
+    """Open ``path`` once, read-only, unless mtime and size are unchanged.
 
     Returns last equity row, persisted account blob, and trade aggregates.
     ``None`` when the file cannot be opened. A missing table leaves that
     piece empty instead of opening the file again. Snapshot values are
     copied out before the connection closes.
     """
+    path = Path(path)
+    token = _db_cache_token(path)
+    if token is None:
+        return None
+    key = str(path)
+    with _ACCOUNT_READ_LOCK:
+        hit = _ACCOUNT_READ_CACHE.get(key)
+        if hit is not None and hit[0] == token:
+            return _share_account(hit[1])
+    rec = _read_paper_account_uncached(path)
+    if rec is None:
+        return None
+    # A read-only open can touch the WAL index. Remember the token after
+    # the open so the next unchanged stat is a hit.
+    token_after = _db_cache_token(path) or token
+    with _ACCOUNT_READ_LOCK:
+        _ACCOUNT_READ_CACHE[key] = (token_after, rec)
+    return _share_account(rec)
+
+
+def _read_paper_account_uncached(path: Path) -> dict | None:
     try:
         store = TradeStore.open_readonly(path)
     except Exception:

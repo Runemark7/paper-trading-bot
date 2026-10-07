@@ -157,6 +157,7 @@ SUMMARY_KEYS = frozenset({
     "updated",
     "source",
     "account_count",
+    "as_of",
     "live_history",
     "live_history.paper_only",
     "live_history.timeframe",
@@ -210,11 +211,13 @@ def _is_full_equity_scan(sql: str) -> bool:
 
 
 def _clear_caches() -> None:
+    from hedge_fund.trading.store import clear_account_read_cache
     from hedge_fund.web.server import clear_summary_cache
     from hedge_fund.web.status import clear_status_cache
 
     clear_status_cache()
     clear_summary_cache()
+    clear_account_read_cache()
 
 
 class ReadPathTests(unittest.TestCase):
@@ -558,7 +561,8 @@ class ManyAccountBenchmarkTests(unittest.TestCase):
         self.assertLess(status_s, 1.0, f"build_status took {status_s:.3f}s")
         self.assertLess(summary_s, 1.0, f"build_summary took {summary_s:.3f}s")
         self.assertLess(cached_s, 0.05, f"cached pair took {cached_s:.3f}s")
-        self.assertEqual(len(uris), n_accounts * 2)
+        # Status opens each DB once. Summary reuses the mtime cache.
+        self.assertEqual(len(uris), n_accounts)
         self.assertTrue(all("mode=ro" in uri and "immutable=1" not in uri for uri in uris))
         scans = [sql for sql in sqls if _is_full_equity_scan(sql)]
         self.assertEqual(scans, [])
@@ -580,6 +584,104 @@ class ManyAccountBenchmarkTests(unittest.TestCase):
         self.assertEqual(cached_summary["equity"], summary["equity"])
 
 
+class StaleWhileRevalidateTests(unittest.TestCase):
+    def setUp(self) -> None:
+        _clear_caches()
+
+    def test_request_stays_fast_while_rebuild_is_slow(self):
+        from hedge_fund.web.status import build_status, refresh_status
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.dict(os.environ, {"PAPER_STATE": tmp}):
+                _clear_caches()
+                original = build_status()
+                started = threading.Event()
+                release = threading.Event()
+
+                def slow():
+                    started.set()
+                    self.assertTrue(release.wait(5), "slow rebuild was not released")
+                    fresh = dict(original)
+                    fresh["as_of"] = "2099-01-01T00:00:00+00:00"
+                    return fresh
+
+                with patch("hedge_fund.web.status._build_status_uncached", side_effect=slow):
+                    worker = threading.Thread(target=refresh_status, daemon=True)
+                    worker.start()
+                    self.assertTrue(started.wait(2), "rebuild did not start")
+                    t0 = time.perf_counter()
+                    served = build_status()
+                    elapsed = time.perf_counter() - t0
+                    release.set()
+                    worker.join(timeout=3)
+                    after = build_status()
+        self.assertLess(elapsed, 0.2, f"request waited {elapsed:.3f}s on the rebuild")
+        self.assertEqual(served["as_of"], original["as_of"])
+        self.assertEqual(served["running_now"]["cycle"]["last_cycle_at"], original["running_now"]["cycle"]["last_cycle_at"])
+        self.assertIn("live_history", served["running_now"])
+        self.assertIn("champions_per_cycle", served["in_progress"]["tournament"])
+        self.assertEqual(after["as_of"], "2099-01-01T00:00:00+00:00")
+
+    def test_rebuild_error_keeps_previous_payload(self):
+        import io
+        from contextlib import redirect_stderr
+
+        from hedge_fund.web.status import build_status, refresh_status
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.dict(os.environ, {"PAPER_STATE": tmp}):
+                _clear_caches()
+                original = build_status()
+                buf = io.StringIO()
+                with patch(
+                    "hedge_fund.web.status._build_status_uncached",
+                    side_effect=RuntimeError("disk gone"),
+                ):
+                    with redirect_stderr(buf):
+                        refresh_status()
+                    served = build_status()
+        log = buf.getvalue()
+        self.assertIn("disk gone", log)
+        self.assertIn(original["as_of"], log)
+        self.assertIn("age=", log)
+        self.assertEqual(served["as_of"], original["as_of"])
+        self.assertEqual(served["paper_only"], True)
+        self.assertIn("running_now", served)
+        self.assertIn("in_progress", served)
+        self.assertIn("live_history", served["running_now"])
+
+    def test_unchanged_account_is_not_reopened(self):
+        from hedge_fund.trading.store import TradeStore, clear_account_read_cache, read_paper_account
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "trades_alpha.sqlite"
+            store = TradeStore(path)
+            store.snapshot_equity(4.0, None, "")
+            store.close()
+            clear_account_read_cache()
+            self.assertEqual(read_paper_account(path)["snapshot"]["equity"], 4.0)
+            real = sqlite3.connect
+            calls = []
+
+            def wrapped(database, *args, **kwargs):
+                calls.append(database)
+                return real(database, *args, **kwargs)
+
+            with patch("sqlite3.connect", wrapped):
+                again = read_paper_account(path)
+            self.assertEqual(calls, [])
+            self.assertEqual(again["snapshot"]["equity"], 4.0)
+            os.utime(path, None)
+            with patch("sqlite3.connect", wrapped):
+                store = TradeStore(path)
+                store.snapshot_equity(9.0, None, "")
+                store.close()
+                calls.clear()
+                updated = read_paper_account(path)
+            self.assertEqual(updated["snapshot"]["equity"], 9.0)
+            self.assertTrue(calls)
+
+
 class FrontendPollTests(unittest.TestCase):
     def test_status_poll_is_30s_and_skips_while_in_flight(self):
         bar = (REPO / "frontend" / "src" / "status" / "StatusBar.tsx").read_text()
@@ -593,6 +695,9 @@ class FrontendPollTests(unittest.TestCase):
         self.assertIn("STATUS_POLL_MS = 30_000", poll)
         self.assertIn('fetchStatus === "fetching"', poll)
         self.assertIn("pollInterval(30_000)", main)
+        server = (REPO / "hedge_fund" / "web" / "server.py").read_text()
+        self.assertIn("start_read_refresh()", server)
+        self.assertIn("READ_REBUILD_SECONDS = 10.0", (REPO / "hedge_fund" / "web" / "ttl_cache.py").read_text())
 
 
 if __name__ == "__main__":
