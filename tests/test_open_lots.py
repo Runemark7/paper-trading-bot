@@ -150,7 +150,9 @@ class OpenLotsHelperTests(unittest.TestCase):
         server_src = (REPO / "hedge_fund" / "web" / "server.py").read_text()
         champs_src = (REPO / "hedge_fund" / "trading" / "champions.py").read_text()
         self.assertIn("from hedge_fund.trading.open_lots import", status_src)
-        self.assertIn("open_lots_snapshot", status_src)
+        # One readonly open per account. Lot counts still come from the
+        # shared helper, not a second open_lots_snapshot() pass.
+        self.assertIn("open_lot_count_from_saved", status_src)
         self.assertIn("from hedge_fund.trading.open_lots import", server_src)
         self.assertIn("open_lots_snapshot", server_src)
         self.assertIn("pool_status(read_only=True)", server_src)

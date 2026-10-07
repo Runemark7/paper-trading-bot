@@ -23,6 +23,7 @@ import threading
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import quote
 
 try:
     import fcntl
@@ -61,6 +62,52 @@ def connect_sqlite(path: str | Path) -> sqlite3.Connection:
     conn.execute(f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_MS}")
     conn.execute("PRAGMA synchronous=NORMAL")
     return conn
+
+
+def _sqlite_file_uri(path: Path, query: str) -> str:
+    resolved = path.resolve().as_posix()
+    return f"file:{quote(resolved, safe='/')}?{query}"
+
+
+def _wal_sidecar_present(path: Path) -> bool:
+    return Path(str(path) + "-wal").exists() or Path(str(path) + "-shm").exists()
+
+
+def connect_sqlite_readonly(path: str | Path, *, immutable: bool = False) -> sqlite3.Connection:
+    """Open an existing DB for reads. Does not create the file or run schema.
+
+    ``mode=ro`` is the default: it can see a live WAL. ``immutable=1`` skips
+    locking and will not observe concurrent writes, so it is used only when
+    the caller asks for it and no WAL/SHM sidecar is present.
+    """
+    path = Path(path)
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    use_immutable = bool(immutable) and not _wal_sidecar_present(path)
+    query = "immutable=1" if use_immutable else "mode=ro"
+    try:
+        conn = sqlite3.connect(
+            _sqlite_file_uri(path, query),
+            uri=True,
+            timeout=SQLITE_BUSY_TIMEOUT_MS / 1000,
+        )
+    except sqlite3.OperationalError:
+        if not use_immutable:
+            raise
+        conn = sqlite3.connect(
+            _sqlite_file_uri(path, "mode=ro"),
+            uri=True,
+            timeout=SQLITE_BUSY_TIMEOUT_MS / 1000,
+        )
+    conn.row_factory = sqlite3.Row
+    conn.execute(f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_MS}")
+    conn.execute("PRAGMA query_only=ON")
+    return conn
+
+
+def ensure_equity_ts_index(conn: sqlite3.Connection) -> None:
+    """Idempotent index so ``ORDER BY ts DESC LIMIT 1`` is a single seek."""
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_eq_ts ON equity_snapshots(ts)")
 
 
 @contextmanager
@@ -129,11 +176,34 @@ def paper_state_lock(name: str = "discovery"):
 
 
 class TradeStore:
-    def __init__(self, path: str | Path) -> None:
+    def __init__(self, path: str | Path, *, readonly: bool = False, immutable: bool = False) -> None:
         self.path = Path(path)
+        self.readonly = readonly
+        if readonly:
+            # Skip schema. Writers already created tables and idx_eq_ts.
+            self.conn = connect_sqlite_readonly(self.path, immutable=immutable)
+            return
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.conn = connect_sqlite(self.path)
         self._init_schema()
+
+    @classmethod
+    def open_readonly(cls, path: str | Path, *, immutable: bool = False) -> TradeStore:
+        """Read path. ``immutable`` only when the file is checkpointed and idle."""
+        return cls(path, readonly=True, immutable=immutable)
+
+    def close(self) -> None:
+        conn = getattr(self, "conn", None)
+        if conn is not None:
+            conn.close()
+            self.conn = None
+
+    def __enter__(self) -> TradeStore:
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        self.close()
+        return False
 
     def _init_schema(self) -> None:
         c = self.conn.cursor()
@@ -185,6 +255,7 @@ class TradeStore:
             CREATE INDEX IF NOT EXISTS idx_eq_ts ON equity_snapshots(ts);
             """
         )
+        ensure_equity_ts_index(self.conn)
         self.conn.commit()
         # migration: add lot_id column if the table predates it
         cols = [r[1] for r in self.conn.execute("PRAGMA table_info(trades)").fetchall()]
@@ -290,6 +361,13 @@ class TradeStore:
             "SELECT * FROM equity_snapshots ORDER BY ts"
         ).fetchall()
 
+    def last_equity_snapshot(self) -> sqlite3.Row | None:
+        """Newest equity row. Does not load the growth curve."""
+        return self.conn.execute(
+            "SELECT ts, equity, baseline, note FROM equity_snapshots "
+            "ORDER BY ts DESC LIMIT 1"
+        ).fetchone()
+
     def open_trade_ids(self) -> list[dict]:
         return [
             dict(r)
@@ -345,3 +423,44 @@ class TradeStore:
             return json.loads(row[0])
         except (OSError, ValueError):
             return None
+
+
+def read_paper_account(path: str | Path) -> dict | None:
+    """Open ``path`` once, read-only.
+
+    Returns last equity row, persisted account blob, and trade aggregates.
+    ``None`` when the file cannot be opened. A missing table leaves that
+    piece empty instead of opening the file again. Snapshot values are
+    copied out before the connection closes.
+    """
+    try:
+        store = TradeStore.open_readonly(path)
+    except Exception:
+        return None
+    try:
+        try:
+            stats_row = store.stats()
+            stats = dict(stats_row) if stats_row is not None else None
+        except Exception:
+            stats = None
+        try:
+            snap = store.last_equity_snapshot()
+            snapshot = (
+                {
+                    "ts": snap["ts"],
+                    "equity": snap["equity"],
+                    "baseline": snap["baseline"],
+                    "note": snap["note"],
+                }
+                if snap is not None
+                else None
+            )
+        except Exception:
+            snapshot = None
+        try:
+            saved = store.load_account_state()
+        except Exception:
+            saved = None
+    finally:
+        store.close()
+    return {"stats": stats, "snapshot": snapshot, "saved": saved}

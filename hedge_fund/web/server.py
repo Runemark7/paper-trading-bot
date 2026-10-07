@@ -4,7 +4,8 @@ A small, dependency-free HTTP server (stdlib only) that exposes:
 
   GET /                 -> dashboard HTML (state/report.html)
   GET /api/summary      -> JSON: equity, closed trades, win rate, P&L, Brier,
-                           live_history (5m bars + last bar time per symbol)
+                           live_history (5m bars + last bar time per symbol).
+                           Cached sqlite snapshot; does not fetch the exchange.
   GET /api/learning     -> JSON: per-condition learning state (skills acquired)
   GET /api/regime       -> JSON: current regime zone/score
   GET /api/trades       -> JSON: recent closed trades
@@ -47,8 +48,9 @@ from hedge_fund.paths import state_root
 from hedge_fund.regime.gate import RegimeGate
 from hedge_fund.trading.discovery_mode import ingest_token, tokens_match
 from hedge_fund.trading.open_lots import open_lots_snapshot, paper_book_dbs
-from hedge_fund.trading.store import TradeStore
-from hedge_fund.web.live import live_preview, live_prices
+from hedge_fund.trading.store import TradeStore, read_paper_account
+from hedge_fund.web.live import live_preview
+from hedge_fund.web.ttl_cache import READ_CACHE_TTL_SECONDS, TtlSingleFlight
 
 _INGEST_MAX_BYTES = 1_000_000
 
@@ -89,7 +91,19 @@ def store_dbs() -> list[str]:
     return paper_book_dbs() or [str(_trades_db())]
 
 
+_SUMMARY_CACHE = TtlSingleFlight(READ_CACHE_TTL_SECONDS)
+
+
+def clear_summary_cache() -> None:
+    _SUMMARY_CACHE.clear()
+
+
 def build_summary() -> dict:
+    """Cached sqlite snapshot. Does not fetch prices or rebuild report.html."""
+    return _SUMMARY_CACHE.get(str(_state_dir().resolve()), _build_summary_uncached)
+
+
+def _build_summary_uncached() -> dict:
     dbs = store_dbs()
     total_closed = 0
     total_hits = 0
@@ -97,19 +111,19 @@ def build_summary() -> dict:
     last_equity = None
     last_ts = None
     for db in dbs:
-        try:
-            st = TradeStore(db)
-            stats = st.stats()
-            total_closed += stats["closed"] or 0
-            total_hits += stats["hits"] or 0
-            eh = st.equity_history()
-            if eh:
-                last_equity = (last_equity or 0.0) + eh[-1]["equity"]
-                last_ts = eh[-1]["ts"] or last_ts
-            if stats["total_pnl"]:
-                total_pnl += stats["total_pnl"]
-        except Exception:
+        rec = read_paper_account(db)
+        # stats() failing used to skip the account after a write-open.
+        if not rec or rec["stats"] is None:
             continue
+        stats = rec["stats"]
+        total_closed += stats["closed"] or 0
+        total_hits += stats["hits"] or 0
+        snap = rec["snapshot"]
+        if snap is not None:
+            last_equity = (last_equity or 0.0) + snap["equity"]
+            last_ts = snap["ts"] or last_ts
+        if stats["total_pnl"]:
+            total_pnl += stats["total_pnl"]
     try:
         from hedge_fund.trading.live_tape import live_history_health
 
@@ -227,12 +241,35 @@ def trigger_run() -> dict:
 _LIVE_LOCK = threading.Lock()
 
 
+_REPORT_REFRESH_INTERVAL_SECONDS = 60.0
+_report_refresh_once = threading.Lock()
+_report_refresh_started = False
+
+
+def start_report_refresh(interval: float = _REPORT_REFRESH_INTERVAL_SECONDS) -> None:
+    """Rebuild report.html on a daemon thread. Never call this from /api/summary."""
+    global _report_refresh_started
+    with _report_refresh_once:
+        if _report_refresh_started:
+            return
+        _report_refresh_started = True
+
+    def _loop() -> None:
+        while True:
+            time.sleep(interval)
+            live_report()
+
+    threading.Thread(target=_loop, name="report-refresh", daemon=True).start()
+
+
 def live_report(fresh_prices: bool = True) -> None:
     """Regenerate the dashboard HTML with live prices/P&L injected.
 
-    Called on each GET / so the dashboard reflects current market value,
-    not just the last cron snapshot. Position sizing/decisions are untouched —
-    this only re-prices the open positions live for display.
+    GET / still calls this so the legacy HTML page re-prices on view.
+    GET /api/summary must not: it serves the cached sqlite snapshot, and
+    ``start_report_refresh`` keeps report.html warm off the request path.
+    Position sizing/decisions are untouched — this only re-prices open
+    positions for display.
     """
     from hedge_fund.dashboard.report import generate_dashboard
 
@@ -278,7 +315,8 @@ class Handler(BaseHTTPRequestHandler):
             live_report()  # re-price open positions live before serving
             self._send_html(_dashboard_html())
         elif route == "/api/summary":
-            live_report()  # ensure fresh
+            # Sqlite snapshot only. Exchange reprice stays on GET / and the
+            # background report thread, under _LIVE_LOCK.
             self._send_json(build_summary())
         elif route == "/api/learning":
             self._send_json(build_learning())
@@ -578,6 +616,7 @@ def main():
     ap.add_argument("--host", default="0.0.0.0")
     args = ap.parse_args()
 
+    start_report_refresh()
     httpd = ThreadingHTTPServer((args.host, args.port), Handler)
     print(f"paperbot dashboard service on http://{args.host}:{args.port}")
     try:
