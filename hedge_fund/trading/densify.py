@@ -1,0 +1,410 @@
+"""Ordered densify iterator for when ``iter_recipe_names`` runs short.
+
+Seeds are qualified names in the tested-name index (the admit island).
+Each yielded name changes one axis of a seed (HTF period, momentum
+lookback, momentum percent, MA period, RSI threshold) or ANDs one extra
+parser-allowed atom, up to ``RECIPE_MAX_ATOMS``. Rank 0 is the nearest
+step; later ranks walk outward. A call takes the first ``n`` names that
+still pass the mint rules, so the stream is unbounded across calls and
+bounded per call.
+
+Rules (same as the recipe):
+- parser-allowed atoms only
+- no ``mom_*`` AND ``dip_*`` in one stack
+- no structure lookback N>96 on ``don_*`` / ``near_swing_*`` / ``dbl_bot_*``
+- skip ``near_duplicate_key`` collisions and already-tested names
+- skip the h4×mom family (measured all-fail) and any family/spine with
+  at least ``BURNED_MIN_TESTED`` evaluations and zero passes
+"""
+from __future__ import annotations
+
+import re
+from typing import Iterable, Iterator
+
+from hedge_fund.trading.discovery_guard import (
+    DEFAULT_STRUCTURE_LOOKBACK_MAX,
+    lookback_too_expensive_reason,
+)
+from hedge_fund.trading.refill import (
+    RECIPE_MAX_ATOMS,
+    _is_refillable_name,
+    name_has_mom_gt_and_dip,
+    name_is_parseable,
+)
+from hedge_fund.trading.universe import _canon_atom, _round_period, near_duplicate_key
+
+BURNED_MIN_TESTED = 30
+# Nearest-first steps. 64 ranks of period/lookback is far past the island;
+# each claim only consumes ``n`` accepted names.
+DENSIFY_MAX_RANK = 64
+
+_HTF_RE = re.compile(r"^(h[14])_(ema|sma)_abv_(\d+)$")
+_MOM_RE = re.compile(r"^mom_(\d+)b_gt(\d+)pc$")
+_DIP_RE = re.compile(r"^dip_(\d+)b_lt(\d+)pc$")
+_MA_RE = re.compile(r"^(sma_abv|ema_abv)_(\d+)$")
+_RSI_RE = re.compile(r"^rsi_(\d+)_>(\d+)(?:_<(\d+))?$")
+_STRUCT_RE = re.compile(
+    r"^(don_hi|don_lo|near_swing_hi|near_swing_lo|dbl_bot)_(\d+)$"
+)
+_STRUCT_PREFIXES = (
+    "don_hi_",
+    "don_lo_",
+    "near_swing_hi_",
+    "near_swing_lo_",
+    "dbl_bot_",
+)
+
+# Admitted-family atoms first (RSI / short MA / the paying mom), then
+# wider continuation, then cheap structure. Dip atoms are not in this
+# list: adding one to a mom seed is rejected, and dip seeds already
+# vary their own dip axis.
+EXTRA_ATOMS: tuple[str, ...] = (
+    "rsi_14_>45",
+    "rsi_14_>50",
+    "rsi_14_>55",
+    "rsi_14_>40",
+    "rsi_14_>60",
+    "rsi_7_>50",
+    "rsi_21_>50",
+    "sma_abv_20",
+    "sma_abv_30",
+    "sma_abv_50",
+    "ema_abv_20",
+    "ema_abv_30",
+    "ema_abv_50",
+    "sma_abv_15",
+    "ema_abv_15",
+    "sma_abv_25",
+    "ema_abv_25",
+    "sma_abv_35",
+    "ema_abv_35",
+    "sma_abv_40",
+    "ema_abv_40",
+    "sma_abv_60",
+    "ema_abv_60",
+    "sma_abv_70",
+    "ema_abv_70",
+    "sma_abv_100",
+    "ema_abv_100",
+    "sma_abv_200",
+    "mom_18b_gt2pc",
+    "mom_18b_gt4pc",
+    "mom_24b_gt2pc",
+    "mom_24b_gt4pc",
+    "mom_30b_gt2pc",
+    "mom_12b_gt2pc",
+    "mom_36b_gt2pc",
+    "mom_6b_gt2pc",
+    "mom_48b_gt2pc",
+    "mom_24b_gt6pc",
+    "mom_18b_gt6pc",
+    "near_swing_hi_12",
+    "near_swing_hi_24",
+    "near_swing_hi_48",
+    "don_hi_12",
+    "don_hi_24",
+    "don_hi_48",
+    "sma_stack_20_50_100",
+    "ema_stack_20_50_100",
+)
+
+
+def _canon_mom_lb(n: int) -> int:
+    return int(round(int(n) / 6.0) * 6) or 6
+
+
+def _canon_mom_thr(n: int) -> int:
+    return int(round(int(n) / 2.0) * 2) or 2
+
+
+def _canon_rsi_th(n: int) -> int:
+    return int(round(int(n) / 5.0) * 5)
+
+
+def _canon_struct(n: int) -> int:
+    return int(round(int(n) / 6.0) * 6) or 6
+
+
+def _neighbors(current: int, *, step: int, lo: int, hi: int, canon) -> list[int]:
+    """Canon values other than ``current``, nearest distance first."""
+    origin = canon(current)
+    seen = {origin}
+    found: list[int] = []
+    for k in range(1, 80):
+        for raw in (current - k * step, current + k * step):
+            if raw < lo or raw > hi:
+                continue
+            c = canon(raw)
+            if c < lo or c > hi or c in seen:
+                continue
+            seen.add(c)
+            found.append(c)
+    found.sort(key=lambda c: (abs(c - origin), c))
+    return found
+
+
+def _atoms(name: str) -> list[str]:
+    return [p.strip() for p in name.split("&") if p.strip()]
+
+
+def keys_for(name: str) -> tuple[str, ...]:
+    """Family, spine, and extra buckets used for the zero-pass burn rule.
+
+    Any stack that contains an h4 regime atom and a ``mom_*`` atom is
+    ``h4×mom``, including dual h1+h4 names.
+    """
+    atoms = _atoms(name)
+    has_mom = any(a.startswith("mom_") for a in atoms)
+    has_dip = any(a.startswith("dip_") for a in atoms)
+    has_h4 = any(a.startswith("h4_") for a in atoms)
+    has_h1 = any(a.startswith("h1_") for a in atoms)
+    entry = "mom" if has_mom else ("dip" if has_dip else "flat")
+    struct = next((a for a in atoms if a.startswith(_STRUCT_PREFIXES)), None)
+    if has_h4 and has_mom:
+        family = "h4×mom"
+    elif has_h1 and has_mom:
+        family = "h1×mom"
+    elif has_h4:
+        family = f"h4×{entry}"
+    elif has_h1:
+        family = f"h1×{entry}"
+    elif struct and has_mom:
+        family = "struct×mom"
+    elif struct and has_dip:
+        family = "struct×dip"
+    elif has_mom:
+        family = "mom"
+    elif has_dip:
+        family = "dip"
+    else:
+        family = "other"
+    if has_h4 and has_mom:
+        h4 = next(a for a in atoms if a.startswith("h4_"))
+        spine = f"{_canon_atom(h4)}×mom"
+    elif has_h1:
+        h1 = next(a for a in atoms if a.startswith("h1_"))
+        spine = f"{_canon_atom(h1)}×{entry}"
+    elif has_h4:
+        h4 = next(a for a in atoms if a.startswith("h4_"))
+        spine = f"{_canon_atom(h4)}×{entry}"
+    elif struct:
+        tag = struct.rsplit("_", 1)[0]
+        spine = f"{tag}×{entry}"
+    else:
+        spine = f"plain×{entry}"
+    keys = [family, spine]
+    if struct and has_mom:
+        keys.append("struct×mom")
+    elif struct and has_dip:
+        keys.append("struct×dip")
+    # Preserve order, drop duplicates (family may already be struct×mom).
+    out: list[str] = []
+    for key in keys:
+        if key not in out:
+            out.append(key)
+    return tuple(out)
+
+
+def burned_keys(index: dict[str, bool]) -> set[str]:
+    """``h4×mom`` always, plus any key with >=30 tests and zero passes."""
+    tested: dict[str, int] = {}
+    passed: dict[str, int] = {}
+    for name, qual in index.items():
+        if not isinstance(name, str) or not name:
+            continue
+        for key in keys_for(name):
+            tested[key] = tested.get(key, 0) + 1
+            if qual:
+                passed[key] = passed.get(key, 0) + 1
+    burned = {"h4×mom"}
+    for key, n in tested.items():
+        if n >= BURNED_MIN_TESTED and passed.get(key, 0) == 0:
+            burned.add(key)
+    return burned
+
+
+def _seed_sort_key(name: str) -> tuple:
+    atoms = _atoms(name)
+    has_h1 = any(a.startswith("h1_") for a in atoms)
+    has_h4 = any(a.startswith("h4_") for a in atoms)
+    has_mom = any(a.startswith("mom_") for a in atoms)
+    has_ma = any(a.startswith(("sma_abv_", "ema_abv_")) for a in atoms)
+    has_rsi = any(a.startswith("rsi_") for a in atoms)
+    if has_h1 and has_mom and (has_ma or has_rsi):
+        bucket = 0
+    elif has_h1 and has_mom:
+        bucket = 1
+    elif has_h1:
+        bucket = 2
+    elif has_mom and not has_h4:
+        bucket = 3
+    else:
+        bucket = 4
+    return (bucket, name)
+
+
+def _atom_replacements(atom: str, rank: int) -> list[str]:
+    """One-axis neighbors at ``rank`` (possibly several sub-axes)."""
+    m = _HTF_RE.match(atom)
+    if m:
+        neigh = _neighbors(int(m.group(3)), step=5, lo=5, hi=400, canon=_round_period)
+        if rank < len(neigh):
+            return [f"{m.group(1)}_{m.group(2)}_abv_{neigh[rank]}"]
+        return []
+    m = _MOM_RE.match(atom)
+    if m:
+        lb = int(m.group(1))
+        thr = int(m.group(2))
+        out: list[str] = []
+        lbs = _neighbors(lb, step=6, lo=6, hi=360, canon=_canon_mom_lb)
+        ths = _neighbors(thr, step=2, lo=2, hi=40, canon=_canon_mom_thr)
+        if rank < len(lbs):
+            out.append(f"mom_{lbs[rank]}b_gt{thr}pc")
+        if rank < len(ths):
+            out.append(f"mom_{lb}b_gt{ths[rank]}pc")
+        return out
+    m = _DIP_RE.match(atom)
+    if m:
+        lb = int(m.group(1))
+        thr = int(m.group(2))
+        out = []
+        lbs = _neighbors(lb, step=6, lo=6, hi=360, canon=_canon_mom_lb)
+        ths = _neighbors(thr, step=2, lo=2, hi=40, canon=_canon_mom_thr)
+        if rank < len(lbs):
+            out.append(f"dip_{lbs[rank]}b_lt{thr}pc")
+        if rank < len(ths):
+            out.append(f"dip_{lb}b_lt{ths[rank]}pc")
+        return out
+    m = _MA_RE.match(atom)
+    if m:
+        neigh = _neighbors(int(m.group(2)), step=5, lo=5, hi=400, canon=_round_period)
+        if rank < len(neigh):
+            return [f"{m.group(1)}_{neigh[rank]}"]
+        return []
+    m = _RSI_RE.match(atom)
+    if m:
+        period = int(m.group(1))
+        th = int(m.group(2))
+        upper = f"_<{m.group(3)}" if m.group(3) else ""
+        out = []
+        periods = _neighbors(period, step=5, lo=5, hi=50, canon=_round_period)
+        ths = _neighbors(th, step=5, lo=5, hi=90, canon=_canon_rsi_th)
+        if rank < len(periods):
+            out.append(f"rsi_{periods[rank]}_>{th}{upper}")
+        if rank < len(ths):
+            out.append(f"rsi_{period}_>{ths[rank]}{upper}")
+        return out
+    m = _STRUCT_RE.match(atom)
+    if m:
+        cap = DEFAULT_STRUCTURE_LOOKBACK_MAX
+        neigh = _neighbors(int(m.group(2)), step=6, lo=6, hi=cap, canon=_canon_struct)
+        if rank < len(neigh):
+            return [f"{m.group(1)}_{neigh[rank]}"]
+        return []
+    return []
+
+
+def _one_axis_names(seed: str, rank: int) -> list[str]:
+    atoms = _atoms(seed)
+    out: list[str] = []
+    for i, atom in enumerate(atoms):
+        for repl in _atom_replacements(atom, rank):
+            nxt = list(atoms)
+            nxt[i] = repl
+            out.append("&".join(nxt))
+    return out
+
+
+def _extra_name(seed: str, rank: int) -> str | None:
+    atoms = _atoms(seed)
+    if len(atoms) >= RECIPE_MAX_ATOMS or rank >= len(EXTRA_ATOMS):
+        return None
+    extra = EXTRA_ATOMS[rank]
+    have = {_canon_atom(a) for a in atoms}
+    if _canon_atom(extra) in have or extra in atoms:
+        return None
+    return "&".join(atoms + [extra])
+
+
+def iter_densify_names(passes: Iterable[str], burned: set[str]) -> Iterator[str]:
+    """Deterministic stream. Same seeds and burn set → same order."""
+    seeds: list[str] = []
+    for name in passes:
+        if not isinstance(name, str) or not name:
+            continue
+        if name_has_mom_gt_and_dip(name) or not name_is_parseable(name):
+            continue
+        if any(key in burned for key in keys_for(name)):
+            continue
+        seeds.append(name)
+    seeds.sort(key=_seed_sort_key)
+    limit = max(DENSIFY_MAX_RANK, len(EXTRA_ATOMS))
+    for rank in range(limit):
+        for seed in seeds:
+            yield from _one_axis_names(seed, rank)
+            extra = _extra_name(seed, rank)
+            if extra:
+                yield extra
+
+
+def candidate_allowed(
+    name: str,
+    *,
+    taken: set[str],
+    taken_keys: set[str],
+    burned: set[str],
+) -> bool:
+    """Mint rules for one generated name."""
+    if not name or not name_is_parseable(name):
+        return False
+    if name_has_mom_gt_and_dip(name):
+        return False
+    if name in taken or near_duplicate_key(name) in taken_keys:
+        return False
+    # Generator hard-cap. Env can only make this stricter.
+    if lookback_too_expensive_reason(name, cap=DEFAULT_STRUCTURE_LOOKBACK_MAX):
+        return False
+    if lookback_too_expensive_reason(name):
+        return False
+    keys = keys_for(name)
+    # h4×mom is a measured all-fail family, including before 30 samples.
+    if "h4×mom" in keys or any(key in burned for key in keys):
+        return False
+    if not _is_refillable_name(name):
+        return False
+    return True
+
+
+def next_densify_batch(
+    *,
+    taken_names: Iterable[str],
+    n: int,
+    index: dict[str, bool] | None = None,
+) -> tuple[list[str], bool]:
+    """First ``n`` densify names not in ``taken_names``.
+
+    Returns ``(names, exhausted)``. ``exhausted`` is true when the
+    iterator ended before ``n`` accepts (including when there are no
+    qualified seeds).
+    """
+    want = max(0, int(n))
+    if want == 0:
+        return [], False
+    if index is None:
+        from hedge_fund.trading.tested_index import ensure_tested_index
+
+        index = ensure_tested_index()
+    burned = burned_keys(index)
+    passes = [name for name, qual in index.items() if qual]
+    taken = {name for name in taken_names if name}
+    taken_keys = {near_duplicate_key(name) for name in taken}
+    out: list[str] = []
+    for cand in iter_densify_names(passes, burned):
+        if not candidate_allowed(cand, taken=taken, taken_keys=taken_keys, burned=burned):
+            continue
+        out.append(cand)
+        taken.add(cand)
+        taken_keys.add(near_duplicate_key(cand))
+        if len(out) >= want:
+            return out, False
+    return out, True

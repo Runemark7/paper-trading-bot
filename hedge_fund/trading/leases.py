@@ -19,12 +19,16 @@ pool size; waves = ceil(n / parallel). TTL = 2 × timeout × waves, and never
 shorter than 2 × the per-name backstop. Timeout 0 (disabled) still uses the
 600s default so a lease cannot live forever.
 
-OOS gates are not involved here. Fail-once: a name already in
-``discovery_log.json`` is never leased again.
+OOS gates are not involved here. Fail-once: a name in the durable
+tested-name index (not the capped display log) is never leased again.
+When the recipe cannot fill a claim, densify mints around qualified
+passes. If eligible work drops below twice the active lease capacity,
+claim tops the queue up before handing names out.
 """
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from datetime import datetime, timedelta, timezone
@@ -49,23 +53,80 @@ from hedge_fund.trading.farm import (
     apply_heartbeat_unlocked,
     farm_enabled_unlocked,
 )
+from hedge_fund.trading.densify import next_densify_batch
 from hedge_fund.trading.refill import (
     append_extended_batch,
     discovery_universe,
     next_refill_batch,
 )
 from hedge_fund.trading.store import paper_state_lock
+from hedge_fund.trading.tested_index import ensure_tested_index
 from hedge_fund.trading.universe import untested_candidates
 
+logger = logging.getLogger(__name__)
+
 DISCOVERY_LEASES = "discovery_leases.json"
+DISCOVERY_REFILL_STATUS = "discovery_refill.json"
 MAX_CLAIM = 64
 LEASE_TTL_FACTOR = 2
+# Top up when never-tested work (including names already leased) falls
+# below this multiple of active lease capacity.
+LEASE_WATERMARK_FACTOR = 2
 WORKER_RETENTION = timedelta(days=7)
 _WORKER_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 
 
 def leases_path() -> Path:
     return state_root() / DISCOVERY_LEASES
+
+
+def refill_status_path() -> Path:
+    return state_root() / DISCOVERY_REFILL_STATUS
+
+
+def load_refill_status() -> dict[str, Any]:
+    """Last claim refill. Missing file → recipe, nothing generated, not exhausted."""
+    default = {"source": "recipe", "generated_last": 0, "exhausted": False}
+    path = refill_status_path()
+    if not path.exists():
+        return dict(default)
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return dict(default)
+    if not isinstance(data, dict):
+        return dict(default)
+    source = data.get("source")
+    if source not in ("recipe", "densify"):
+        source = "recipe"
+    try:
+        generated = int(data.get("generated_last") or 0)
+    except (TypeError, ValueError):
+        generated = 0
+    return {
+        "source": source,
+        "generated_last": generated,
+        "exhausted": bool(data.get("exhausted")),
+    }
+
+
+def save_refill_status(status: dict) -> None:
+    """Caller holds ``paper_state_lock('discovery')``."""
+    path = refill_status_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    source = status.get("source")
+    if source not in ("recipe", "densify"):
+        source = "recipe"
+    payload = {
+        "source": source,
+        "generated_last": int(status.get("generated_last") or 0),
+        "exhausted": bool(status.get("exhausted")),
+        "paper_only": True,
+        "updated_at": _iso(datetime.now(timezone.utc)),
+    }
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(payload, indent=2))
+    os.replace(tmp, path)
 
 
 def _iso(now: datetime) -> str:
@@ -210,8 +271,43 @@ def _prune_workers(state: dict, now: datetime) -> None:
             del workers[wid]
 
 
-def _claimable_names(state: dict, n: int) -> tuple[list[str], list[str]]:
-    """Never-tested, not-leased names. Refill from the recipe only when that pool is empty."""
+def _mint_unlocked(taken: set[str], n: int) -> tuple[list[str], dict]:
+    """Recipe first. Densify only the shortfall. Logs if nothing can be minted."""
+    want = max(0, int(n))
+    recipe = next_refill_batch(taken_names=taken, n=want) if want else []
+    names = list(recipe)
+    exhausted = False
+    source = "recipe"
+    if len(names) < want:
+        more, ran_out = next_densify_batch(
+            taken_names=set(taken) | set(names),
+            n=want - len(names),
+        )
+        names.extend(more)
+        source = "densify"
+        exhausted = bool(ran_out) and len(names) < want
+        if exhausted:
+            logger.warning(
+                "discovery refill exhausted: wanted %s names, recipe produced %s, densify produced %s",
+                want,
+                len(recipe),
+                len(more),
+            )
+    return names, {
+        "source": source,
+        "generated_last": len(names),
+        "exhausted": exhausted,
+    }
+
+
+def _claimable_names(state: dict, n: int) -> tuple[list[str], list[str], dict]:
+    """Never-tested, not-leased names.
+
+    Refill when that pool cannot cover ``n`` or when never-tested work
+    (including active leases) is below ``2 ×`` lease capacity. The recipe
+    fills first; densify covers a shortfall. Existing claimable names stay
+    in front of anything just minted.
+    """
     log = load_discovery_log()
     blocked = _blocked_names(log)
     active = set(state["leases"])
@@ -219,17 +315,25 @@ def _claimable_names(state: dict, n: int) -> tuple[list[str], list[str]]:
     leftovers = untested_candidates(blocked, universe)
     eligible = prioritize_leftovers(leftovers, log)
     claimable = [name for name in eligible if name not in active]
+    pool = len(claimable) + len(active)
+    capacity = max(len(active), int(n), 1)
+    watermark = LEASE_WATERMARK_FACTOR * capacity
     refilled: list[str] = []
-    if claimable or n <= 0:
-        return claimable, refilled
-    taken = set(universe) | blocked | active
-    added = next_refill_batch(taken_names=taken, n=DISCOVERY_REFILL_BATCH_SIZE)
-    if not added:
-        return [], []
-    append_extended_batch(added)
-    refilled = list(added)
-    claimable = [name for name in added if name not in active and name not in blocked]
-    return claimable, refilled
+    meta = load_refill_status()
+    need_fill = int(n) > 0 and (len(claimable) < int(n) or pool < watermark)
+    if need_fill:
+        target = max(int(n), watermark, len(claimable) + DISCOVERY_REFILL_BATCH_SIZE)
+        want = max(0, target - len(claimable))
+        taken = set(universe) | blocked | active | set(claimable)
+        added, meta = _mint_unlocked(taken, want)
+        if added:
+            append_extended_batch(added)
+            refilled = list(added)
+            claimable.extend(
+                name for name in added if name not in active and name not in blocked
+            )
+        save_refill_status(meta)
+    return claimable, refilled, meta
 
 
 def _claim_unlocked(
@@ -240,6 +344,7 @@ def _claim_unlocked(
     now: datetime,
 ) -> dict:
     now = now.astimezone(timezone.utc)
+    ensure_tested_index()
     state = load_lease_state()
     log = load_discovery_log()
     tested = tested_discovery_names(log)
@@ -250,6 +355,7 @@ def _claim_unlocked(
         _prune_workers(state, now)
         save_lease_state(state)
         apply_heartbeat_unlocked("paused")
+        paused_refill = load_refill_status()
         return {
             "ok": True,
             "paper_only": True,
@@ -258,11 +364,12 @@ def _claim_unlocked(
             "n": n,
             "paused": True,
             "refilled": [],
+            "refill": paused_refill,
             "ttl_seconds": ttl,
             "expires_at": None,
             "claimed_at": _iso(now),
         }
-    claimable, refilled = _claimable_names(state, n)
+    claimable, refilled, refill_meta = _claimable_names(state, n)
     expires = now + timedelta(seconds=ttl)
     chosen = claimable[:n]
     for name in chosen:
@@ -284,6 +391,7 @@ def _claim_unlocked(
         "n": n,
         "paused": False,
         "refilled": refilled,
+        "refill": refill_meta,
         "ttl_seconds": ttl,
         "expires_at": _iso(expires) if chosen else None,
         "claimed_at": _iso(now),

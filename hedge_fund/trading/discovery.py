@@ -2,7 +2,10 @@
 
 Last-known files, not a job runner. Tournament appends one evaluation to
 ``discovery_log.json`` as soon as that name finishes (newest-first, capped).
-A non-qualified eval parks that name forever — no cooldown retest.
+Skip / fail-once does **not** read that cap: each append also records the
+name in ``discovery_tested.json`` (uncapped, qualified flag) before old
+display rows are trimmed. A non-qualified eval parks that name forever —
+no cooldown retest.
 ``discovery_in_flight.json`` lists this cycle's budget names and shrinks as
 they complete. ``discovery_cursor.json`` remembers where the leftover drain
 left off so the next live_cycle continues fairly.
@@ -17,6 +20,13 @@ from hedge_fund.paths import state_root
 from hedge_fund.trading.constants import (
     DISCOVER_CYCLE_MAX_NAMES,
     DISCOVERY_LOG_CAP,
+)
+from hedge_fund.trading.store import paper_state_lock
+from hedge_fund.trading.tested_index import (
+    flags_for_skip,
+    load_tested_index,
+    merge_tested_rows,
+    save_tested_index,
 )
 
 DISCOVERY_LOG = "discovery_log.json"
@@ -116,16 +126,24 @@ def evals_on_utc_date(log: list[dict], day: datetime | None = None) -> int:
 
 
 def append_discovery_evaluations(eval_records: list[dict], *, cap: int = DISCOVERY_LOG_CAP) -> list[dict]:
-    """Prepend records (newest-first) and cap. Writes immediately."""
+    """Prepend records (newest-first) and cap the display log.
+
+    The tested-name index is updated from the pre-trim list, so a name
+    that falls off the display cap stays skipped.
+    """
     if not eval_records:
         return load_discovery_log()
-    path = discovery_log_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    log = load_discovery_log()
-    log = list(eval_records) + log
-    log = log[:cap]
-    path.write_text(json.dumps(log, separators=(",", ":")))
-    return log
+    with paper_state_lock("discovery"):
+        path = discovery_log_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        log = load_discovery_log()
+        log = list(eval_records) + log
+        index = load_tested_index()
+        if merge_tested_rows(index, log):
+            save_tested_index(index)
+        log = log[:cap]
+        path.write_text(json.dumps(log, separators=(",", ":")))
+        return log
 
 
 def append_discovery_evaluation(record: dict, *, cap: int = DISCOVERY_LOG_CAP) -> list[dict]:
@@ -134,10 +152,18 @@ def append_discovery_evaluation(record: dict, *, cap: int = DISCOVERY_LOG_CAP) -
 
 
 def save_discovery_log(log: list[dict]) -> None:
-    """Rewrite discovery_log.json in place (requalify / force-admit flips)."""
-    path = discovery_log_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(log, separators=(",", ":")))
+    """Rewrite discovery_log.json in place (requalify / force-admit flips).
+
+    Qualified flags in the tested-name index follow the saved rows. Names
+    that are only in the index (trimmed off the display log) stay.
+    """
+    with paper_state_lock("discovery"):
+        path = discovery_log_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(log, separators=(",", ":")))
+        index = load_tested_index()
+        if merge_tested_rows(index, log):
+            save_tested_index(index)
 
 
 def write_in_flight(
@@ -223,15 +249,18 @@ def save_cursor(next_name: str | None, **extra) -> Path:
 
 
 def failed_discovery_names(log: list[dict] | None = None) -> set[str]:
-    """Names with any non-qualified discovery evaluation.
+    """Names with a non-qualified evaluation.
 
     Fail once: these names are permanently ineligible for another
-    evaluate_windows / discovery run. Existing discovery_log fails count.
+    evaluate_windows / discovery run. The durable tested-name index is
+    the source of truth, not the capped display log. Any non-qualified
+    row still in ``log`` counts too (a later pass does not erase the
+    earlier fail for this set). Skip itself uses the tested-name union.
     """
-    if log is None:
-        log = load_discovery_log()
-    failed: set[str] = set()
-    for row in log:
+    flags = flags_for_skip(log)
+    failed = {name for name, qual in flags.items() if not qual}
+    rows = log if log is not None else load_discovery_log()
+    for row in rows:
         if not isinstance(row, dict):
             continue
         name = row.get("strategy")
@@ -241,17 +270,12 @@ def failed_discovery_names(log: list[dict] | None = None) -> set[str]:
 
 
 def tested_discovery_names(log: list[dict] | None = None) -> set[str]:
-    """Strategy names that already appear in discovery_log (any outcome)."""
-    if log is None:
-        log = load_discovery_log()
-    names: set[str] = set()
-    for row in log:
-        if not isinstance(row, dict):
-            continue
-        name = row.get("strategy")
-        if name:
-            names.add(name)
-    return names
+    """Strategy names already evaluated (any outcome).
+
+    Uncapped tested-name index, union any names in ``log``. Trimming
+    ``discovery_log.json`` does not make a name eligible again.
+    """
+    return set(flags_for_skip(log))
 
 
 def prioritize_leftovers(
@@ -263,8 +287,8 @@ def prioritize_leftovers(
 ) -> list[str]:
     """Never-tested leftovers only (stable leftover order).
 
-    A name with any non-qualified discovery_log row is parked forever.
-    Already-tested names are not re-queued. ``cooldown_seconds`` is ignored:
+    A name in the tested-name index (or still in the display log) is parked
+    forever. Already-tested names are not re-queued. ``cooldown_seconds`` is ignored:
     fails are not re-eligible after a timer. ``now`` is unused (call-site
     compat). This is not a random sample.
     """

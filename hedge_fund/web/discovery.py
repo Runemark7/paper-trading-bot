@@ -31,8 +31,9 @@ from hedge_fund.trading.discovery import (
 )
 from hedge_fund.trading.discovery_mode import discovery_on_cycle
 from hedge_fund.trading.farm import farm_status_block
-from hedge_fund.trading.leases import lease_snapshot
+from hedge_fund.trading.leases import lease_snapshot, load_refill_status
 from hedge_fund.trading.refill import load_extended_names
+from hedge_fund.trading.tested_index import ensure_tested_index, load_tested_index
 from hedge_fund.trading.universe import generate_universe, untested_candidates
 from hedge_fund.web.status import _iso, _pipeline_block
 
@@ -69,6 +70,7 @@ def _sort_tested_newest_first(rows: list[dict]) -> list[dict]:
 
 def build_discovery_summary(*, lists: bool = True) -> dict:
     now = datetime.now(timezone.utc)
+    ensure_tested_index()
     pipeline = _pipeline_block(now)
     stamp_in_progress = bool(pipeline.get("stamp_says_in_progress"))
     stamp_stale = bool(pipeline.get("stale"))
@@ -97,6 +99,8 @@ def build_discovery_summary(*, lists: bool = True) -> dict:
     queued = [n for n in leftovers if n not in tested_names and n not in failed_names]
     rejected_parked = [n for n in leftovers if n in failed_names]
     eligible = prioritize_leftovers(leftovers, log, now=now)
+    tested_index = load_tested_index()
+    refill_state = load_refill_status()
 
     newest = newest_eval(log) or (newest_eval(tested) if tested else None)
     last_tested_at = newest.get("tested_at") if newest else None
@@ -295,12 +299,19 @@ def build_discovery_summary(*, lists: bool = True) -> dict:
             "rejected_parked": len(rejected_parked),
             "eligible": len(eligible),
             "extended": len(extended),
+            "tested_index": len(tested_index),
             "champions": len(champs),
             "graduated": len(grads),
             "in_flight": len(flight_names) if show_flight else 0,
             "leased": len(lease_names),
             "workers": len(snap["workers"]),
             "evals_today": evals_today,
+        },
+        "refill": {
+            "source": refill_state["source"],
+            "eligible": len(eligible),
+            "generated_last": refill_state["generated_last"],
+            "exhausted": refill_state["exhausted"],
         },
         "last_tested_at": last_tested_at,
         "last_strategy": last_strategy,
@@ -312,8 +323,11 @@ def build_discovery_summary(*, lists: bool = True) -> dict:
             "counts.tested is unique strategy names "
             "(latest eval per name), not the number of log rows. "
             "Already tested · rejected is parked forever — not a cooldown "
-            "retest queue. Empty eligible auto-refills discovery_extended.json "
-            "from a bounded structure-AND recipe (no human PR per batch). "
+            "retest queue. Skip/dedupe reads discovery_tested.json (uncapped); "
+            "discovery_log.json stays a capped display. "
+            "Claim refills discovery_extended.json from the structure-AND recipe "
+            "and, when that runs short, densifies around qualified passes. "
+            "refill.eligible matches counts.eligible. "
             "A stamp is not process liveness. "
             + (
                 "Walk-forwards run on the Windows discovery worker "

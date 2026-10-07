@@ -92,13 +92,40 @@ def sqlite_write_lock(db_path: Path):
         yield
 
 
+# Same-thread depth so claim → ingest → index writes can nest. The
+# underlying threading.Lock is not re-entrant; a second acquire on this
+# thread would deadlock before flock. Other threads still block.
+_PAPER_LOCK_DEPTH = threading.local()
+
+
 @contextmanager
 def paper_state_lock(name: str = "discovery"):
-    """Serialize JSON writers on the paper-state dir (ingest vs collect)."""
+    """Serialize JSON writers on the paper-state dir (ingest vs collect).
+
+    Re-entrant on the thread that already holds this name. Cross-thread
+    and cross-process exclusion is unchanged.
+    """
     from hedge_fund.paths import state_root
 
-    with _exclusive_file_lock(state_root() / f".{name}.lock"):
-        yield
+    lock_path = state_root() / f".{name}.lock"
+    key = str(lock_path)
+    depths = getattr(_PAPER_LOCK_DEPTH, "depths", None)
+    if depths is None:
+        depths = {}
+        _PAPER_LOCK_DEPTH.depths = depths
+    if depths.get(key, 0) > 0:
+        depths[key] += 1
+        try:
+            yield
+        finally:
+            depths[key] -= 1
+        return
+    with _exclusive_file_lock(lock_path):
+        depths[key] = 1
+        try:
+            yield
+        finally:
+            depths[key] = 0
 
 
 class TradeStore:

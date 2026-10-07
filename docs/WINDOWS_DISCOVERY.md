@@ -137,9 +137,13 @@ the discovery log — only the URL, the token, and `crypto_history_5m.json`.
    not already leased, and records a lease (`worker_id`, `claimed_at`,
    `expires_at`). TTL is about 2× the batch (2 × `DISCOVERY_EVAL_TIMEOUT_SECONDS`
    × waves). A dead worker's names return to the pool when the lease expires.
-   If nothing is eligible and unleased, prod refills `discovery_extended.json`
-   from the same recipe (`iter_recipe_names` / `next_refill_batch`, skip
-   tested + `near_duplicate_key`).
+   If the unleased pool cannot cover `n`, or never-tested work is below
+   twice the active lease capacity, prod refills `discovery_extended.json`.
+   The recipe runs first (`iter_recipe_names` / `next_refill_batch`). When
+   it yields fewer names than requested, prod densifies around qualified
+   passes (one axis, or one extra parser-allowed atom, up to 7). Skip uses
+   `discovery_tested.json`, not the capped display log, plus
+   `near_duplicate_key`.
 3. Evaluates that batch (default size = `--workers`) against local
    `crypto_history_5m.json`.
 4. POSTs each finished evaluation to
@@ -237,7 +241,7 @@ the farm stays idle until Start.
 ## 5. What this worker must not do
 
 - No real-money broker.
-- No retest of a name that already has a discovery_log row (fail-once).
+- No retest of a name in the tested-name index (fail-once). The display log is capped; trimming it does not make a name eligible again.
 - No WaveTrend clones, MFI, named candlesticks, or chart-pattern zoo.
   Auto-refill already walks the expanded Donchian / swing / near-level
   recipe (lookbacks through 96, leftover TREND / ema_stack ANDs, wider
