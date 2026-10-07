@@ -653,6 +653,23 @@ class FarmHttpTests(unittest.TestCase):
 
 
 class WorkerPauseTests(unittest.TestCase):
+    def test_clamp_workers_uses_cpu_count_not_hard_4(self):
+        from scripts.discovery_worker import clamp_workers
+
+        self.assertEqual(clamp_workers(2, cpu_count=8), 2)
+        self.assertEqual(clamp_workers(1, cpu_count=8), 1)
+        self.assertEqual(clamp_workers(0, cpu_count=8), 1)
+        self.assertEqual(clamp_workers(-3, cpu_count=8), 1)
+        self.assertEqual(clamp_workers(100, cpu_count=8), 8)
+        self.assertEqual(clamp_workers(4, cpu_count=2), 2)
+        self.assertEqual(clamp_workers(4, cpu_count=0), 1)
+        self.assertGreaterEqual(clamp_workers(10_000), 1)
+        src = (Path(__file__).resolve().parents[1] / "scripts" / "discovery_worker.py").read_text()
+        self.assertIn("def clamp_workers", src)
+        self.assertIn('os.environ.get("DISCOVERY_WORKERS") or 2', src)
+        self.assertNotIn("min(int(args.workers), 4)", src)
+        self.assertIn("workers = clamp_workers(args.workers)", src)
+
     def test_farm_enabled_from_summary_and_poll_keeps_last_known(self):
         from hedge_fund.trading.farm import farm_enabled_from_summary
         from scripts.discovery_worker import poll_farm_enabled

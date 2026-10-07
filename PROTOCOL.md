@@ -121,6 +121,7 @@ over a meaningful sample, AND calibration is demonstrated independently of P&L.
 | 2026-09-14 | Same-date later: refill mint never ANDs a momentum-up atom (`mom_*_gt*`) with a dip atom (`dip_*`) in the same `&` stack. Those names print trades=0 over the full ~5.7y tape (`mom_18b_gt2pc&dip_24b_lt5pc` ~7–19 bars; + HTF + ema_abv → 0 OOS entries). RSI / continuation siblings stay. HTF×dip without mom_gt stays. Central guard in `iter_recipe_names` / `next_refill_batch`. Already-queued mom∧dip extended names may still drain once (fail-once). `STRUCTURE_NS` still ≤96. Sync `refill.py` to jensa after merge (out of band). Paper only; OOS gates unchanged. |
 | 2026-09-14 | Same-date later: refill mint un-dries from the admit island. Unused continuation `sma_abv_40` / `ema_abv_40` (distinct from 20/30/50), `rsi_14_>60`, intermediate mom (`MOM_FILTERS_HTF_INTERMEDIATE`, not short-12), `h1_sma_abv_70`, gap-fill `sma_abv_50` / `ema_abv_20` on paid-off `h1_*_abv_50/60` spines, and DEEP 4–5 stacks on those spines emit **first**. Farm was eligible=0 / in_flight=0 after ~8726 unique. Fail-once stays. `STRUCTURE_NS` still ≤96. No named candlesticks. Static list unchanged. Paper only; OOS gates unchanged. |
 | 2026-10-02 | Refill mint un-dries again around the paying admit island. h4 twins of `h1_* & mom_18b_gt2pc & *_abv_30 & rsi_14_>50` (core `h4_{ema,sma}_abv_{20,24,30}`, then neighbors), sparse h4×mom×`sma_abv_30`/`ema_abv_30`, and under-emitted 5–7 atom stacks (dual h1+h4, both mild MAs) emit **first**. #65 `sma_abv_40` / `rsi_14_>60` stays in the stream but is no longer the lead (+0 admits). No mom∧dip. No structure `N>96`. Fail-once stays. Static list unchanged. Paper only; OOS gates unchanged. |
+| 2026-10-07 | Refill mint un-dries with admit-island densify #2c. h1 × `mom_18b_gt2pc` × `rsi_14_>45` / gap MAs (`sma_abv_35` and neighbors) / 5-atom extensions emit **first** (459 new names). Island #2b h4×mom stays but is deprioritized after a measured FAIL. `--workers` caps at `os.cpu_count()` (default 2). No mom∧dip. No structure `N>96`. Fail-once stays. Paper only; OOS gates unchanged. |
 
 ### Amendment 2026-08-30 — what actually runs
 
@@ -468,7 +469,7 @@ This amendment does not rewrite original §§ 1–8 or prior amendments. Qual/li
 
 **Cluster `live_cycle`.** Tournament / `discover_and_qualify` is **off by default**. Set `DISCOVERY_ON_CYCLE=0` or `PAPER_DISCOVERY_MODE=off` (unset also means off). The sidecar still runs `run_isolated` → `collect_live_results` → report on every 300s tick. Heartbeat and the web/API stay. Re-enable in-cycle discovery only with `DISCOVERY_ON_CYCLE=1` / `PAPER_DISCOVERY_MODE=on` (dev / emergency). The 1 name / ~90s slice remains the rule **if** someone turns tournament back on inside `live_cycle`. It is not the Windows farm budget.
 
-**Windows discovery worker.** Alexander's home PC (`jensa`, i5-6600K / 16GB / GTX 1070) is the discovery farm. GPU is unused (no CUDA rewrite). `scripts/discovery_worker.py` (Docker Compose preferred; `python scripts/discovery_worker.py --workers N` also works) uses a **local** `PAPER_STATE` with `crypto_history_5m.json` (fetch via `scripts/fetch_history.py`). Same fail-once / auto-refill / OOS gates / `rm_v1` / 5m windows as `scripts/tournament_engine.py`. Modest parallelism: 2–4 CPU workers.
+**Windows discovery worker.** Alexander's home PC (`jensa`, i5-6600K / 16GB / GTX 1070) is the discovery farm. GPU is unused (no CUDA rewrite). `scripts/discovery_worker.py` (Docker Compose preferred; `python scripts/discovery_worker.py --workers N` also works) uses a **local** `PAPER_STATE` with `crypto_history_5m.json` (fetch via `scripts/fetch_history.py`). Same fail-once / auto-refill / OOS gates / `rm_v1` / 5m windows as `scripts/tournament_engine.py`. Default 2 CPU workers. `--workers` caps at `os.cpu_count()` (minimum 1), not a hard 4.
 
 **Results land on prod.** The worker POSTs evaluations (and qualified admits) to `https://trading.runevibe.se/api/discovery/ingest`. Nginx already proxies `/api/`. The route is protected by `PAPER_DISCOVERY_INGEST_TOKEN` (shared secret from env / k8s secret `paper-discovery-ingest`). Fail-closed: missing token → ingest disabled (503). Fail-once on the server: an already-logged name is skipped. Qualified names are admitted the same way as `replenish_and_evaluate`. Existing champions are never removed. Do not require a long-lived kubectl tunnel.
 
@@ -1085,6 +1086,37 @@ Then the drained #65 prefix (`sma_abv_40` / `ema_abv_40`, `rsi_14_>60`, intermed
 **Superseded on this date** (prior text kept above for history):
 
 - 2026-09-14 "un-dry mint: admit-island densify" insofar as `_regime_ands` emitted `sma_abv_40` / `rsi_14_>60` first. That family stays in the stream. `#64` mom∧dip guard, HTF×mom×continuation / RSI, HTF×dip without mom, fail-once, farm ingest, cycle budget, OOS **thresholds**, `QUAL_N_WINDOWS`, `STRUCTURE_NS` ≤96, the shipped v1 HTF parser, and the static 40–120 compiled-list band are not superseded.
+
+### Amendment 2026-10-07 — undry admit-island densify #2c
+
+This amendment does not rewrite original §§ 1–8 or prior amendments. Qual/live remain 5m, risk policy remains `rm_v1`. OOS **thresholds** are unchanged: `MIN_BACKTEST_TRADES` = 30, `MIN_BACKTEST_SHARPE` = 0.30, must beat buy-and-hold, must beat `sma_stack`, all-windows non-negative is diagnostic only, fail-once never-retest stays. `QUAL_N_WINDOWS` = 23, `QUAL_WARMUP_BARS` = 4032, `QUAL_WINDOW_DAYS` = 90, `QUAL_WINDOW_BARS` = 25920, `QUAL_COVERAGE_DAYS` = 2070, `QUAL_STRIDE` = 1, `DISCOVERY_LOG_CAP` = 10000, `DISCOVERY_REFILL_BATCH_SIZE` = 16 stay. Discovery walk-forwards stay on the farm host (`scripts/discovery_worker.py` → `/api/discovery/ingest`); cluster `live_cycle` keeps discovery off (`DISCOVERY_ON_CYCLE=0`). **Still paper.** `GRADUATED_PAPER` meaning is unchanged. Do not cull existing champions. Do not retest parked fails. Do not mint structure `N>96`. Do not clear `discovery_log`. Do not Stop/Start the farm from this PR.
+
+**Why.** Prod 2026-10-07 ~19:05 UTC: universe ~9551, tested ~9542, tested_pass = 112, eligible ~4. Island #2b (h4 twins of `h1_* & mom_18b_gt2pc & *_abv_30 & rsi_14_>50`) is measured FAIL: the day's h4×mom evals all printed negative Sharpe (about −0.56 to −1.04) while buy-and-hold was up. Natural admits are almost all h1. Newest passes cluster on `h1_{ema,sma}_abv_{20,24,30,50,60} & mom_18b_gt2pc & {ema,sma}_abv_{20,30,50} [& rsi_14_>50|55]`. Dominant mom atom: `mom_18b_gt2pc` (110/111 h1). Bottleneck is still mint/search quality under the frozen gate.
+
+**What was added** (`hedge_fund.trading.refill.iter_recipe_names` / `_regime_island_2c`). Parser / `_ALLOWED_ATOM_RES` already accept the tokens. No new atom type. No new HTF period (`15/18/36/40/48/72` are already minted or collapse under `near_duplicate_key`: 18→20, 48→50, 72→70). `rsi_14_>52` and `rsi_14_>58` are not minted (canon 50 and 60; `rsi_14_>60` already drained with +0 admits). `vol_lowsm_*` parses but is outside `_ALLOWED_ATOM_RES`. `STRUCTURE_NS` stays `{6…96}`. `RECIPE_MAX_ATOMS` stays 7. Central `name_has_mom_gt_and_dip` guard stays. Names whose `near_duplicate_key` folds onto island #2b or the already-emitted recipe are not minted.
+
+Island #2c emits **first** (459 distinct never-tested names after those skips, not a cartesian). Highest-EV families first, h1 only:
+
+- `ISLAND2C_H1_SPINE` (admit frequency: `h1_ema_abv_50` / `h1_ema_abv_30` / `h1_sma_abv_{30,24}` / `h1_ema_abv_{24,20}` / `h1_sma_abv_{50,60}` / `h1_ema_abv_60`) × `ISLAND2C_MOM` (`mom_18b_gt2pc`) × `ISLAND2C_CONT_PAID` (`sma_abv_30` then `ema_abv_30`, then 20, then 50) × `ISLAND2C_RSI` (`rsi_14_>45`). Lead name: `h1_ema_abv_50&mom_18b_gt2pc&sma_abv_30&rsi_14_>45`. Then the same spine × mom × `rsi_14_>45` with no continuation.
+- Gap MAs `ISLAND2C_CONT_GAP` (`sma_abv_35` / `ema_abv_35`, then 25, 15, 60). 35→35 sits between paying 30 and failed 40. 3-atom first, then the same MA with paying `rsi_14_>50`.
+- Sparse 5-atom extensions of the newest 4-atom (`…&sma_abv_30&rsi_14_>50` and the `ema_abv_30` twin) plus one paying MA (`ema_abv_20` / `sma_abv_20` / `ema_abv_50` / `sma_abv_50`). Not the same-period twin — that shape is island #2b.
+- Modest mom neighbors `ISLAND2C_MOM_NEIGHBOR` (`mom_18b_gt4pc`, `mom_24b_gt4pc`, `mom_18b_gt6pc`, `mom_30b_gt6pc`, `mom_24b_gt8pc`) on `*_abv_30` only, 3-atom then × `rsi_14_>50`. Not `mom_12b_*`.
+
+Then island #2b (h4×mom) stays in the stream, **deprioritized** because #66 measured FAIL. Then the drained #65 prefix and older families. No mom∧dip. No `don_hi` / `near_swing_*` / `dbl_bot`. No `*_abv_40` / `rsi_14_>60` as the lead.
+
+**Workers.** `scripts/discovery_worker.py` `--workers` clamps to `os.cpu_count()` (minimum 1). The default stays 2 / `DISCOVERY_WORKERS`. Existing `--workers 2` behavior is unchanged. This is farm ops, not an OOS gate.
+
+**Skipped.** Exact names and `near_duplicate_key` collisions against champions, graduated, the static universe, already-emitted extended names, and any `discovery_log.json` row (pass or fail). No HTF×mom×expensive structure. No short-12 mom as the lead. No H&S / flags / triangles / engulfing / hammer / doji / morning_star / evening_star / candlestick encyclopedia / chart_patterns zoo; no Market Cipher scrape; no new `wt_*` WaveTrend spam; no MFI; no `dbl_top` longs; no `daily()`/`h1()`/`m5()` wrappers.
+
+**Topology.** Still mint → farm → gate. [docs/WORKFLOW.md](docs/WORKFLOW.md) §3 records island densify #2c **first**. Prod `DISCOVERY_ON_CYCLE=0`, so the cluster does not auto-refill `discovery_extended.json` from this recipe. The farm host imports `refill.py` locally after git pull. An Argo/k8s rollout is not required for the recipe to feed the farm.
+
+**What did not change.** Sharpe 0.30, 30 OOS trades, beat B&H, beat `sma_stack`, 5m, `rm_v1`, all-windows diagnostic only, fail-once, `QUAL_N_WINDOWS` = 23, `QUAL_WARMUP_BARS` = 4032. `STRUCTURE_NS` cap at 96. Live risk unchanged.
+
+**How to evaluate after merge.** Natural `tested_pass` / unique tested, plus the fail-reason mix (beat-B&H, Sharpe, trades, beat `sma_stack`). Do not change gate constants to move those numbers. Pull `hedge_fund/trading/refill.py` and `scripts/discovery_worker.py` on the farm host after merge (out of band for the PR).
+
+**Superseded on this date** (prior text kept above for history):
+
+- 2026-10-02 "undry admit-island densify #2b" insofar as `_regime_ands` emitted h4×mom first. That family stays in the stream after #2c. OOS **thresholds**, `QUAL_N_WINDOWS`, `QUAL_WARMUP_BARS`, `STRUCTURE_NS` ≤96, the mom∧dip guard, and fail-once are not superseded.
 
 
 
