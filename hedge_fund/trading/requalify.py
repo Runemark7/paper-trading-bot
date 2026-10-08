@@ -7,7 +7,8 @@ result is written only to ``discovery_requalify.json``. It never touches
 reads ``GET /api/discovery/requalify`` and decides.
 
 Flow: a batch is enqueued (token-gated ``POST /api/discovery/requalify``,
-or once automatically for ``REQUALIFY_AUTO_BATCH`` when the server starts). ``POST /api/discovery/claim`` hands queued requalify names out
+or once automatically for each id in ``STARTUP_BATCHES`` when the server
+starts). ``POST /api/discovery/claim`` hands queued requalify names out
 before never-tested names. The worker evaluates them like any claimed name
 with the unchanged OOS gate and posts the row to ingest. Ingest routes a
 leased requalify name here instead of skipping it as already tested.
@@ -26,12 +27,18 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from hedge_fund.paths import state_root
-from hedge_fund.trading.constants import QUAL_N_WINDOWS
+from hedge_fund.trading.constants import GATE_RULES, QUAL_N_WINDOWS
 from hedge_fund.trading.store import paper_state_lock
 
 DISCOVERY_REQUALIFY = "discovery_requalify.json"
 # One automatic batch per id. Bump to re-run everything once after a deploy.
 REQUALIFY_AUTO_BATCH = "gate23-20261008"
+# Alexander, 2026-10-08 16:32 (fix #1): re-check the 442 B&H-only
+# near-misses plus the 51 local rules-v2 passes once under rules v2 on
+# prod's shared tape. Names are bundled next to this module. Re-check only.
+RULES_V2_BATCH = "rules-v2-nearmiss-20261008"
+RULES_V2_NAMES_FILE = Path(__file__).with_name("requalify_rules_v2_names.json")
+RULES_V2_ROLE = "rules_v2_candidate"
 MAX_ATTEMPTS = 3
 MAX_BATCH_NAMES = 2000
 _BATCH_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
@@ -150,18 +157,25 @@ def _enqueue_unlocked(state: dict, batch_id: str, names: Iterable[str], now: dat
         prev = state["names"].get(name)
         if isinstance(prev, dict) and prev.get("batch_id") == batch_id:
             continue
-        state["names"][name] = {
+        meta = {
             "batch_id": batch_id,
             "status": "queued",
             "queued_at": _iso(now),
             "attempts": 0,
         }
+        if isinstance(prev, dict) and prev.get("status") == "done":
+            # Keep the other batch's finished verdict for the record.
+            meta["previous"] = {
+                k: prev.get(k) for k in ("batch_id", "result", "recorded_at") if k in prev
+            }
+        state["names"][name] = meta
         queued.append(name)
     state["batches"].append({
         "batch_id": batch_id,
         "created_at": _iso(now),
         "size": len(queued),
         "gate_n_windows": QUAL_N_WINDOWS,
+        "gate_rules": GATE_RULES,
     })
     return {"batch_id": batch_id, "queued": len(queued), "names": queued}
 
@@ -202,21 +216,58 @@ def ensure_auto_batch_unlocked(now: datetime) -> bool:
     return True
 
 
-def start_requalify_autoseed() -> None:
-    """Server startup: seed ``REQUALIFY_AUTO_BATCH`` once on a daemon thread.
+def rules_v2_batch_names() -> list[str]:
+    """Bundled names for ``RULES_V2_BATCH`` (passes first, then near-misses)."""
+    data = json.loads(RULES_V2_NAMES_FILE.read_text())
+    out: list[str] = []
+    for name in data.get("names") or []:
+        if isinstance(name, str) and name.strip() and name.strip() not in out:
+            out.append(name.strip())
+    return out[:MAX_BATCH_NAMES]
 
-    No token needed; the batch id makes it idempotent across restarts.
+
+def ensure_rules_v2_batch_unlocked(now: datetime) -> bool:
+    """Seed ``RULES_V2_BATCH`` once. Caller holds the discovery lock."""
+    state = load_requalify_state()
+    if RULES_V2_BATCH in state["seeded"]:
+        return False
+    _enqueue_unlocked(state, RULES_V2_BATCH, rules_v2_batch_names(), now)
+    state["seeded"].append(RULES_V2_BATCH)
+    save_requalify_state(state)
+    return True
+
+
+# Startup one-shots, in order. Each records its id in ``seeded`` and never
+# runs again. None of them admits, retires or touches fail-once.
+STARTUP_BATCHES = (
+    (REQUALIFY_AUTO_BATCH, ensure_auto_batch_unlocked),
+    (RULES_V2_BATCH, ensure_rules_v2_batch_unlocked),
+)
+
+
+def run_requalify_startup_batches(now: datetime | None = None) -> list[str]:
+    """Seed every startup batch not yet seeded. Returns the ids seeded now."""
+    clock = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    seeded: list[str] = []
+    with paper_state_lock("discovery"):
+        for batch_id, ensure in STARTUP_BATCHES:
+            if ensure(clock):
+                seeded.append(batch_id)
+    return seeded
+
+
+def start_requalify_autoseed() -> None:
+    """Server startup: seed ``STARTUP_BATCHES`` once on a daemon thread.
+
+    No token needed; the ``seeded`` marker makes it idempotent across restarts.
     """
     import logging
     import threading
 
     def run() -> None:
         try:
-            with paper_state_lock("discovery"):
-                if ensure_auto_batch_unlocked(datetime.now(timezone.utc)):
-                    logging.getLogger(__name__).info(
-                        "requalify: seeded batch %s", REQUALIFY_AUTO_BATCH
-                    )
+            for batch_id in run_requalify_startup_batches():
+                logging.getLogger(__name__).info("requalify: seeded batch %s", batch_id)
         except Exception:
             logging.getLogger(__name__).exception("requalify autoseed failed")
 
@@ -349,6 +400,7 @@ def requalify_payload(batch_id: str | None = None) -> dict[str, Any]:
                 "champion" if name in champs
                 else "graduated" if name in grads
                 else "retired" if name in retired
+                else RULES_V2_ROLE if meta.get("batch_id") == RULES_V2_BATCH
                 else "tested_pass"
             ),
         }
@@ -362,6 +414,8 @@ def requalify_payload(batch_id: str | None = None) -> dict[str, Any]:
         "paper_only": True,
         "gate_n_windows": QUAL_N_WINDOWS,
         "auto_batch": REQUALIFY_AUTO_BATCH,
+        "startup_batches": [batch_id for batch_id, _ in STARTUP_BATCHES],
+        "gate_rules": GATE_RULES,
         "batches": state["batches"],
         "counts": counts,
         "total": len(rows),
