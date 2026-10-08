@@ -17,7 +17,9 @@ A small, dependency-free HTTP server (stdlib only) that exposes:
                                 Pass/fail/unique counts are the discovery_results.ix header.
   GET /api/discovery/results -> paged full records (?offset=&limit=&status=pass|fail);
                                 seeks one page, does not load the results log.
-  GET /api/discovery/lift -> top and bottom atoms by OOS Sharpe lift (read-only)
+  GET /api/discovery/lift -> top and bottom atoms by net OOS P&L minus buy-and-hold (cached)
+  GET /api/discovery/history -> canonical 5m tape hash + data_end (ingest token)
+  GET /api/discovery/history/tape -> that tape as a compressed npz (ingest token)
   POST /api/discovery/ingest -> Windows worker: append evals + admit / force_admit (shared secret)
   POST /api/discovery/claim -> lease never-tested names (same ingest token)
   POST /api/discovery/release -> drop this worker's leases (same ingest token)
@@ -353,6 +355,13 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_bytes(self, body: bytes, content_type: str, code: int = 200):
+        self.send_response(code)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def _send_html(self, path, code=200):
         try:
             data = Path(path).read_bytes()
@@ -501,6 +510,29 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(lift_payload_for_request())
             except Exception as exc:
                 self._send_json({"error": str(exc)}, 500)
+        elif route == "/api/discovery/history":
+            ok, err, code = self._discovery_ingest_authorized()
+            if not ok:
+                self._send_json({"ok": False, "error": err, "paper_only": True}, code)
+                return
+            try:
+                from hedge_fund.trading.price_history import manifest_for
+
+                self._send_json(manifest_for(_state_dir()))
+            except Exception as exc:
+                self._send_json({"error": str(exc), "paper_only": True}, 500)
+        elif route == "/api/discovery/history/tape":
+            ok, err, code = self._discovery_ingest_authorized()
+            if not ok:
+                self._send_json({"ok": False, "error": err, "paper_only": True}, code)
+                return
+            try:
+                from hedge_fund.trading.price_history import tape_blob
+
+                blob = tape_blob(_state_dir())
+                self._send_bytes(blob, "application/octet-stream")
+            except Exception as exc:
+                self._send_json({"error": str(exc), "paper_only": True}, 500)
         elif route == "/api/discovery":
             try:
                 log_path = _state_dir() / "discovery_log.json"

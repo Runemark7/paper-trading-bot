@@ -1119,20 +1119,14 @@ class RefillBatchTests(unittest.TestCase):
     def test_dry_refill_emits_fresh_winner_shaped_3atoms(self):
         uni = generate_universe()
         added = next_refill_batch(taken_names=uni, n=DISCOVERY_REFILL_BATCH_SIZE)
+        from hedge_fund.trading.mint_quality import REASON_FILLER, mint_block_reason
+
+        old_lead = "h1_ema_abv_50&mom_18b_gt2pc&sma_abv_30&rsi_14_>45"
         self.assertEqual(len(added), DISCOVERY_REFILL_BATCH_SIZE)
-        self.assertEqual(
-            added[0],
-            "h1_ema_abv_50&mom_18b_gt2pc&sma_abv_30&rsi_14_>45",
-        )
-        hit = [
-            n for n in added
-            if n.count("&") == 3
-            and any(tok.startswith("h1_") for tok in n.split("&"))
-            and "mom_18b_gt2pc" in n.split("&")
-            and any(tok in ("sma_abv_30", "ema_abv_30") for tok in n.split("&"))
-            and "rsi_14_>45" in n.split("&")
-        ]
-        self.assertTrue(hit, msg=f"expected h1×mom×abv_30×rsi_>45 in {added}")
+        self.assertEqual(added[0], "h1_ema_abv_20&mom_36b_gt8pc")
+        self.assertEqual(mint_block_reason(old_lead), REASON_FILLER)
+        self.assertNotIn(old_lead, added)
+        self.assertTrue(all(mint_block_reason(n) is None for n in added))
         self.assertTrue(all(n.startswith("h1_") for n in added), added)
         self.assertFalse(any("mom_12b_" in n for n in added))
         for name in added:
@@ -1446,17 +1440,12 @@ class RefillBatchTests(unittest.TestCase):
                     "h1_ema_abv_20&mom_18b_gt2pc&sma_abv_30&dip_24b_lt5pc",
                     "h1_ema_abv_20&mom_18b_gt2pc&sma_abv_30",
                     "h1_ema_abv_20&dip_24b_lt5pc",
+                    "h1_ema_abv_20&mom_18b_gt2pc",
                 ]
             ),
         ):
             skipped = next_refill_batch(taken_names=[], n=DISCOVERY_REFILL_BATCH_SIZE)
-        self.assertEqual(
-            skipped,
-            [
-                "h1_ema_abv_20&mom_18b_gt2pc&sma_abv_30",
-                "h1_ema_abv_20&dip_24b_lt5pc",
-            ],
-        )
+        self.assertEqual(skipped, ["h1_ema_abv_20&mom_18b_gt2pc"])
         self.assertFalse(any(name_has_mom_gt_and_dip(n) for n in skipped))
 
     def test_recipe_emits_depth_4_through_7_admit_stacks(self):
@@ -1545,6 +1534,8 @@ class RefillBatchTests(unittest.TestCase):
         while len(taken) < 5037:
             taken.add(f"parked_dummy_{i}")
             i += 1
+        from hedge_fund.trading.mint_quality import mint_block_reason
+
         added = next_refill_batch(taken_names=taken, n=DISCOVERY_REFILL_BATCH_SIZE)
         self.assertEqual(len(added), DISCOVERY_REFILL_BATCH_SIZE)
         taken_keys = {near_duplicate_key(n) for n in taken}
@@ -1552,8 +1543,8 @@ class RefillBatchTests(unittest.TestCase):
             self.assertNotIn(name, taken)
             self.assertNotIn(near_duplicate_key(name), taken_keys, msg=name)
             self.assertTrue(name_is_parseable(name), msg=name)
-            self.assertGreaterEqual(name.count("&") + 1, 3, msg=name)
-            self.assertLessEqual(name.count("&") + 1, 7, msg=name)
+            self.assertLess(name.count("&") + 1, 5, msg=name)
+            self.assertIsNone(mint_block_reason(name), name)
             self.assertTrue(_has_mint_tag(name), msg=name)
             self.assertFalse(name_has_mom_gt_and_dip(name), msg=name)
             for _atom, n in structure_lookbacks(name):
@@ -1565,6 +1556,8 @@ class RefillBatchTests(unittest.TestCase):
         while len(taken) < 7200:
             taken.add(f"parked_dummy_{i}")
             i += 1
+        from hedge_fund.trading.mint_quality import REASON_FILLER, mint_block_reason
+
         self.assertGreaterEqual(len(taken), 7200)
         added = next_refill_batch(taken_names=taken, n=DISCOVERY_REFILL_BATCH_SIZE)
         self.assertEqual(len(added), DISCOVERY_REFILL_BATCH_SIZE)
@@ -1573,18 +1566,18 @@ class RefillBatchTests(unittest.TestCase):
             self.assertNotIn(name, taken)
             self.assertNotIn(near_duplicate_key(name), taken_keys, msg=name)
             self.assertTrue(name_is_parseable(name), msg=name)
-            self.assertGreaterEqual(name.count("&") + 1, 3, msg=name)
-            self.assertLessEqual(name.count("&") + 1, 5, msg=name)
+            self.assertLess(name.count("&") + 1, 5, msg=name)
+            self.assertIsNone(mint_block_reason(name), name)
             self.assertTrue(_has_mint_tag(name), msg=name)
             self.assertFalse(
                 any(tok.startswith(("don_hi_", "near_swing_")) for tok in name.split("&")),
                 msg=name,
             )
             self.assertFalse(name_has_mom_gt_and_dip(name), msg=name)
-        self.assertEqual(
-            added[0],
-            "h1_ema_abv_50&mom_18b_gt2pc&sma_abv_30&rsi_14_>45",
-        )
+        old_lead = "h1_ema_abv_50&mom_18b_gt2pc&sma_abv_30&rsi_14_>45"
+        self.assertEqual(added[0], "h1_ema_abv_20&mom_36b_gt8pc")
+        self.assertEqual(mint_block_reason(old_lead), REASON_FILLER)
+        self.assertNotIn(old_lead, added)
         self.assertEqual(MIN_BACKTEST_TRADES, 30)
         self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
         self.assertEqual(QUAL_N_WINDOWS, 23)
@@ -1625,10 +1618,12 @@ class RefillBatchTests(unittest.TestCase):
             self.assertNotIn("mom_12b_gt2pc", name.split("&"), msg=name)
             for _atom, n in structure_lookbacks(name):
                 self.assertLessEqual(n, 96, msg=name)
-        self.assertEqual(added[0], "h1_ema_abv_20&mom_18b_gt2pc&sma_abv_40")
-        self.assertTrue(
-            any(tok in ("sma_abv_40", "ema_abv_40") for tok in added[0].split("&"))
-        )
+        from hedge_fund.trading.mint_quality import REASON_FILLER, mint_block_reason
+
+        filler = "h1_ema_abv_20&mom_18b_gt2pc&sma_abv_40"
+        self.assertEqual(added[0], "h1_ema_abv_20&mom_36b_gt8pc")
+        self.assertEqual(mint_block_reason(filler), REASON_FILLER)
+        self.assertNotIn(filler, added)
         self.assertEqual(MIN_BACKTEST_TRADES, 30)
         self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
         self.assertEqual(QUAL_N_WINDOWS, 23)
@@ -1681,28 +1676,12 @@ class RefillBatchTests(unittest.TestCase):
         while len(taken) < 9498:
             taken.add(f"parked_dummy_{i}")
             i += 1
+        from hedge_fund.trading.mint_quality import REASON_FILLER, mint_block_reason
+
         added = next_refill_batch(taken_names=taken, n=20)
-        self.assertGreaterEqual(len(added), 20)
-        taken_keys = {near_duplicate_key(n) for n in taken}
-        seen = set()
-        for name in added:
-            self.assertNotIn(name, taken)
-            key = near_duplicate_key(name)
-            self.assertNotIn(key, taken_keys, msg=name)
-            self.assertNotIn(key, seen)
-            seen.add(key)
-            self.assertTrue(name_is_parseable(name), msg=name)
-            self.assertFalse(name_has_mom_gt_and_dip(name), msg=name)
-            self.assertIn("h4_", name)
-            self.assertTrue(
-                any(tok in ("sma_abv_30", "ema_abv_30") for tok in name.split("&")),
-                msg=name,
-            )
-        self.assertEqual(added[0], "h4_ema_abv_20&mom_18b_gt2pc&sma_abv_30&rsi_14_>50")
-        self.assertNotEqual(
-            near_duplicate_key(added[0]),
-            near_duplicate_key("h1_ema_abv_20&mom_18b_gt2pc&sma_abv_30&rsi_14_>50"),
-        )
+        # The h4 island is filler or depth≥5, so a drained farm does not lease it.
+        self.assertEqual(added, [])
+        self.assertEqual(mint_block_reason(h4_lead), REASON_FILLER)
         self.assertEqual(MIN_BACKTEST_TRADES, 30)
         self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
         self.assertEqual(QUAL_N_WINDOWS, 23)
@@ -1753,9 +1732,11 @@ class RefillBatchTests(unittest.TestCase):
             self.assertLessEqual(name.count("&") + 1, 7, msg=name)
             self.assertFalse(structure_lookbacks(name), msg=name)
         taken = set(names[len(prefix):]) | set(generate_universe())
+        from hedge_fund.trading.mint_quality import REASON_FILLER, mint_block_reason
+
         added = next_refill_batch(taken_names=taken, n=20)
-        self.assertEqual(len(added), 20)
-        self.assertEqual(added[0], lead)
+        self.assertEqual(added, [])
+        self.assertEqual(mint_block_reason(lead), REASON_FILLER)
         taken_keys = {near_duplicate_key(n) for n in taken}
         for name in added:
             self.assertNotIn(near_duplicate_key(name), taken_keys, msg=name)

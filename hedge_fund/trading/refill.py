@@ -1318,10 +1318,16 @@ def iter_recipe_names() -> Iterator[str]:
     same-indicator redundant threshold (or empty band), and any mom/dip
     percent above the reachability cap. No WaveTrend, no MFI.
     """
-    from hedge_fund.trading.mint_quality import mint_block_reason
+    from hedge_fund.trading.mint_quality import (
+        redundant_bound_reason,
+        unreachable_threshold_reason,
+    )
 
+    # The catalog keeps historical shapes, including measured zero-trade
+    # zones. next_refill_batch / densify / claim apply the full mint block
+    # (dead zones, canonical duplicates) and are what actually gets leased.
     for name in _iter_without_mom_and_dip(_iter_recipe_families()):
-        if mint_block_reason(name):
+        if redundant_bound_reason(name) or unreachable_threshold_reason(name):
             continue
         yield name
 
@@ -1353,7 +1359,11 @@ def next_refill_batch(
     or flat model returns the recipe order unchanged.
     """
     from hedge_fund.trading.atom_lift import LIFT_SEED, STEER_WINDOW, steer_candidates
-    from hedge_fund.trading.mint_quality import mint_block_reason as _mint_block_reason
+    from hedge_fund.trading.mint_quality import (
+        canonical_key_set,
+        canonical_name,
+        mint_block_reason as _mint_block_reason,
+    )
 
     want = max(0, int(n))
     if want == 0:
@@ -1362,19 +1372,21 @@ def next_refill_batch(
     target = want * STEER_WINDOW if informative else want
     taken = {name for name in taken_names if name}
     taken_keys = {near_duplicate_key(name) for name in taken}
+    taken_canon = canonical_key_set(taken)
     out: list[str] = []
     for cand in iter_recipe_names():
         if len(out) >= target:
             break
-        if not name_is_parseable(cand):
+        canon = canonical_name(cand)
+        if not canon or not name_is_parseable(cand):
             continue
         if name_has_mom_gt_and_dip(cand):
             continue
-        if _mint_block_reason(cand):
+        if _mint_block_reason(cand, taken_canon):
             continue
         if not _is_refillable_name(cand):
             continue
-        if cand in taken:
+        if cand in taken or canon in taken_canon:
             continue
         key = near_duplicate_key(cand)
         if key in taken_keys:
@@ -1382,6 +1394,7 @@ def next_refill_batch(
         out.append(cand)
         taken.add(cand)
         taken_keys.add(key)
+        taken_canon.add(canon)
     if not informative:
         return out
     return steer_candidates(

@@ -113,8 +113,9 @@ class MetricsStoreTests(unittest.TestCase):
                 {name for name, qual in index.items() if qual},
                 {name for name, row in rows.items() if row["qualified"]},
             )
-            self.assertIn("h1_ema_abv_24&mom_18b_gt2pc", seeds)
-            self.assertTrue(set(seeds) <= set(index))
+            self.assertTrue(index["h1_ema_abv_24&mom_18b_gt2pc"])
+            self.assertNotIn("h1_ema_abv_24&mom_18b_gt2pc", seeds)
+            self.assertEqual(seeds, [])
 
     def test_backfill_is_idempotent(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -208,10 +209,18 @@ class CapTests(unittest.TestCase):
                 qualified=True,
                 tested_at=f"2026-09-01T00:00:0{i}+00:00",
                 windows=[{"test_pnl": 1.0, "test_trades": 10, "sharpe": 0.4}],
+                regimes_tested=8,
             )
             for i, name in enumerate(OLD_PASSES)
         ]
-        recent = _eval("recent_pass", qualified=True, tested_at="2026-10-08T12:00:00+00:00")
+        recent = _eval(
+            "recent_pass",
+            qualified=True,
+            tested_at="2026-10-08T12:00:00+00:00",
+            regimes_tested=23,
+            test_pnl=40.0,
+            bh_oos_pnl=5.0,
+        )
         records = [recent, *fails, *old]
         with tempfile.TemporaryDirectory() as tmp:
             with patch.dict(os.environ, {"PAPER_STATE": tmp}):
@@ -224,14 +233,15 @@ class CapTests(unittest.TestCase):
                 rows = records_by_name()
                 summary = build_discovery_summary(lists=False)
                 index = load_tested_index()
-                seeds = order_seeds(index, metrics)
+                seeds = order_seeds(index, metrics, rows)
                 taken = set(index)
                 batch, _exhausted = next_densify_batch(taken_names=taken, n=8)
                 self.assertTrue(batch)
                 self.assertTrue(all(name not in taken for name in batch))
+        self.assertEqual(seeds, ["recent_pass"])
         for name in OLD_PASSES:
             self.assertNotIn(name, log_names)
-            self.assertIn(name, seeds)
+            self.assertNotIn(name, seeds)
             self.assertTrue(index[name])
             self.assertTrue(rows[name]["qualified"])
             self.assertEqual(rows[name]["gate"], DISCOVERY_GATE_TAG)

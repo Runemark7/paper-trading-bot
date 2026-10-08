@@ -74,9 +74,17 @@ class NewStructureAndsTests(unittest.TestCase):
             {"strategy": n, "qualified": False, "tested_at": "2026-09-10T00:00:00+00:00"}
             for n in prior
         ]
+        from hedge_fund.trading.mint_quality import REASON_DEAD_DIP, mint_block_reason
+
         leftovers = untested_candidates(set(), uni)
         eligible = prioritize_leftovers(leftovers, log)
-        self.assertEqual(set(eligible), set(NEW_STRUCTURE_ANDS))
+        live = [name for name in NEW_STRUCTURE_ANDS if mint_block_reason(name) is None]
+        dead = [name for name in NEW_STRUCTURE_ANDS if name not in live]
+        self.assertEqual(set(eligible), set(live))
+        self.assertEqual(
+            {name: mint_block_reason(name) for name in dead},
+            {name: REASON_DEAD_DIP for name in dead},
+        )
         self.assertFalse(set(prior) & set(eligible))
 
     def test_champions_and_parked_fails_are_still_skipped(self):
@@ -85,8 +93,13 @@ class NewStructureAndsTests(unittest.TestCase):
         leftovers = untested_candidates({champ}, uni)
         self.assertNotIn(champ, leftovers)
         self.assertNotIn("sma_stack_7_25_50", leftovers)  # near-dup of fallback
+        from hedge_fund.trading.mint_quality import mint_block_reason
+
         for name in NEW_STRUCTURE_ANDS:
-            self.assertIn(name, leftovers)
+            if mint_block_reason(name):
+                self.assertNotIn(name, leftovers)
+            else:
+                self.assertIn(name, leftovers)
         log = [
             {"strategy": NEW_STRUCTURE_ANDS[0], "qualified": False, "tested_at": "2026-09-11T00:00:00+00:00"},
         ]

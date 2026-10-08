@@ -34,7 +34,13 @@ from hedge_fund.trading.discovery_guard import (
     is_ops_park_record,
     lookback_too_expensive_reason,
 )
-from hedge_fund.trading.mint_quality import max_move_pct, mint_block_reason
+from hedge_fund.trading.constants import MIN_BACKTEST_TRADES, QUAL_N_WINDOWS
+from hedge_fund.trading.mint_quality import (
+    canonical_key_set,
+    canonical_name,
+    max_move_pct,
+    mint_block_reason,
+)
 from hedge_fund.trading.refill import (
     RECIPE_MAX_ATOMS,
     _is_refillable_name,
@@ -277,39 +283,106 @@ def _metric_numbers(metric: dict | None) -> tuple[float | None, int | None]:
     return sharpe_n, trades_n
 
 
-def order_seeds(index: dict[str, bool], metrics: dict | None = None) -> list[str]:
+def _row_for_seed(name: str, metrics: dict | None, results: dict | None) -> dict:
+    row: dict = {}
+    if metrics and isinstance(metrics.get(name), dict):
+        row.update(metrics[name])
+    if results and isinstance(results.get(name), dict):
+        for key, value in results[name].items():
+            if value is not None:
+                row[key] = value
+    return row
+
+
+def _window_count(row: dict) -> int | None:
+    regimes = row.get("regimes_tested")
+    if isinstance(regimes, bool) or not isinstance(regimes, (int, float)):
+        windows = row.get("windows")
+        if isinstance(windows, list):
+            return len(windows)
+        return None
+    return int(regimes)
+
+
+def _excess_pnl(row: dict) -> float | None:
+    pnl = row.get("test_pnl")
+    bh = row.get("bh_oos_pnl")
+    if isinstance(pnl, bool) or not isinstance(pnl, (int, float)):
+        return None
+    if isinstance(bh, bool) or not isinstance(bh, (int, float)):
+        return None
+    excess = float(pnl) - float(bh)
+    if excess != excess or excess in (float("inf"), float("-inf")):
+        return None
+    return excess
+
+
+def order_seeds(
+    index: dict[str, bool],
+    metrics: dict | None = None,
+    results: dict | None = None,
+) -> list[str]:
     """Seed names for densify.
 
-    No metrics → qualified names in the historical heuristic order.
-    With metrics → highest measured OOS Sharpe first (passes and
-    non-passes that still have Sharpe > 0 and trades > 0), then
-    unmeasured passes. Capped at ``SEED_CAP`` once metrics exist.
+    No metrics and no results → qualified names in the historical
+    heuristic order (unit tests of the neighbor walk).
+
+    Otherwise seed only names whose result used the current window
+    count (``regimes_tested`` or ``len(windows)`` == ``QUAL_N_WINDOWS``)
+    and at least ``MIN_BACKTEST_TRADES`` trades, best net OOS P&L minus
+    buy-and-hold first. Sharpe breaks ties. Old 8-window passes stay in
+    the index and are not seeds.
+
+    When nothing was tested on the current window set, the near-miss
+    band is trades ≥ 30 and net P&L > 0. Known other window counts are
+    left out of that band too: the fallback is for rows that never
+    recorded a window count.
     """
-    if not metrics:
+    if results is None and not metrics:
         names = [name for name, qual in index.items() if qual and isinstance(name, str) and name]
         names.sort(key=_seed_sort_key)
         return names
-    measured: list[tuple[float, str]] = []
-    heuristic: list[str] = []
-    for name, qual in index.items():
+    current: list[tuple[bool, float, float, str]] = []
+    any_current = False
+    for name in index:
         if not isinstance(name, str) or not name:
             continue
-        sharpe, trades = _metric_numbers(metrics.get(name))
-        measured_ok = (
-            sharpe is not None
+        row = _row_for_seed(name, metrics, results)
+        windows = _window_count(row)
+        sharpe, trades = _metric_numbers(row)
+        if windows == QUAL_N_WINDOWS:
+            any_current = True
+        if (
+            windows == QUAL_N_WINDOWS
             and trades is not None
-            and trades > 0
-            and (bool(qual) or sharpe > 0)
-        )
-        if measured_ok:
-            measured.append((sharpe, name))
+            and trades >= MIN_BACKTEST_TRADES
+        ):
+            excess = _excess_pnl(row)
+            current.append((excess is None, -(excess or 0.0), -(sharpe or 0.0), name))
+    if any_current:
+        current.sort()
+        return [item[3] for item in current[:SEED_CAP]]
+    near: list[tuple[bool, float, float, str]] = []
+    for name in index:
+        if not isinstance(name, str) or not name:
             continue
-        if qual:
-            heuristic.append(name)
-    measured.sort(key=lambda item: (-item[0], item[1]))
-    heuristic.sort(key=_seed_sort_key)
-    ordered = [name for _sharpe, name in measured] + heuristic
-    return ordered[:SEED_CAP]
+        row = _row_for_seed(name, metrics, results)
+        if _window_count(row) is not None:
+            continue
+        _sharpe, trades = _metric_numbers(row)
+        pnl = row.get("test_pnl")
+        if (
+            trades is None
+            or trades < MIN_BACKTEST_TRADES
+            or isinstance(pnl, bool)
+            or not isinstance(pnl, (int, float))
+            or float(pnl) <= 0
+        ):
+            continue
+        excess = _excess_pnl(row)
+        near.append((excess is None, -(excess or 0.0), -float(pnl), name))
+    near.sort()
+    return [item[3] for item in near[:SEED_CAP]]
 
 
 def _atom_replacements(atom: str, rank: int) -> list[str]:
@@ -562,13 +635,14 @@ def candidate_allowed(
     taken: set[str],
     taken_keys: set[str],
     burned: set[str],
+    tested_keys: set[str] | None = None,
 ) -> bool:
     """Mint rules for one generated name."""
     if not name or not name_is_parseable(name):
         return False
     if name_has_mom_gt_and_dip(name):
         return False
-    if mint_block_reason(name):
+    if mint_block_reason(name, tested_keys):
         return False
     if name in taken or near_duplicate_key(name) in taken_keys:
         return False
@@ -594,6 +668,7 @@ def next_densify_batch(
     zero_trade_names: Iterable[str] | None = None,
     lift=None,
     metrics: dict | None = None,
+    results: dict | None = None,
     lift_seed: int | None = None,
 ) -> tuple[list[str], bool]:
     """First ``n`` densify names not in ``taken_names``.
@@ -605,9 +680,10 @@ def next_densify_batch(
 
     ``lift`` is ignored unless it is informative. Then a window of legal
     names is ranked by expected lift and about a quarter of the slots are
-    an explore draw. ``metrics`` reorders seeds by measured OOS Sharpe.
-    Both default to off so a caller that only has the bool index keeps
-    the historical stream.
+    an explore draw. ``results`` (full per-name records) reorder seeds by
+    net OOS P&L minus buy-and-hold on the current window count. ``metrics``
+    fills sharpe/trades when the result row is thin. Both default to off
+    so a caller that only has the bool index keeps the historical stream.
     """
     from hedge_fund.trading.atom_lift import LIFT_SEED, STEER_WINDOW, steer_candidates
 
@@ -623,18 +699,27 @@ def next_densify_batch(
 
         zero_trade_names = zero_trade_names_from_rows(load_discovery_log())
     burned = burned_keys(index)
-    passes = order_seeds(index, metrics)
+    passes = order_seeds(index, metrics, results)
     taken = {name for name in taken_names if name}
     taken_keys = {near_duplicate_key(name) for name in taken}
+    taken_canon = canonical_key_set(taken)
     informative = lift is not None and bool(getattr(lift, "informative", False))
     target = want * STEER_WINDOW if informative else want
     out: list[str] = []
-    for cand in iter_densify_names(passes, burned, zero_trade_names, keep_order=True):
-        if not candidate_allowed(cand, taken=taken, taken_keys=taken_keys, burned=burned):
+    for raw in iter_densify_names(passes, burned, zero_trade_names, keep_order=True):
+        cand = canonical_name(raw) or raw
+        if not candidate_allowed(
+            cand,
+            taken=taken,
+            taken_keys=taken_keys,
+            burned=burned,
+            tested_keys=taken_canon,
+        ):
             continue
         out.append(cand)
         taken.add(cand)
         taken_keys.add(near_duplicate_key(cand))
+        taken_canon.add(cand)
         if len(out) >= target:
             if not informative:
                 return out, False

@@ -1,10 +1,16 @@
-"""Marginal OOS-Sharpe lift of mint atoms, and how refill uses it.
+"""Marginal lift of mint atoms, and how refill uses it.
 
 The tested index is uncapped and includes failures. Each name is split with
 the shared atom parser. When a parent stack and the same stack plus one
-atom were both tested, that pair is the atom's marginal effect. A ridge
-fit (coefficients shrunk toward 0, intercept unpenalized) fills in atoms
-that do not have enough pairs. Nothing here reads or writes the OOS gate.
+atom were both tested, that pair is the atom's marginal effect. The score
+is net OOS P&L minus buy-and-hold (``test_pnl - bh_oos_pnl``) from the full
+per-name record. Sharpe is only the tiebreak, or the whole score when P&L
+is missing. A ridge fit (coefficients shrunk toward 0, intercept
+unpenalized) fills in atoms that do not have enough pairs. Nothing here
+reads or writes the OOS gate.
+
+The fit runs on the background refresh thread. Claim, ingest, and
+``GET /api/discovery/lift`` read the published snapshot.
 """
 from __future__ import annotations
 
@@ -37,7 +43,9 @@ LIFT_SEED = 7063
 # even when every eval changes the tested-metrics fingerprint.
 LIFT_REFRESH_SECONDS = 300.0
 INFORMATIVE_EPS = 1e-4
-_CACHE_V = 1
+_CACHE_V = 2
+LIFT_METRIC = "pnl_minus_bh"
+SHARPE_METRIC = "sharpe"
 
 STRATEGY_LIFT = "lift_ucb"
 STRATEGY_PLAIN = "recipe_order"
@@ -54,6 +62,9 @@ class AtomEstimate:
     zero_trade_rate: float
     source: str
     name_count: int = 0
+    pnl_lift: float | None = None
+    score_lift: float | None = None
+    metric: str = SHARPE_METRIC
 
 
 @dataclass
@@ -66,6 +77,7 @@ class LiftModel:
     explore_share: float = EXPLORE_SHARE
     strategy: str = STRATEGY_PLAIN
     fingerprint: str = ""
+    metric: str = SHARPE_METRIC
 
 
 def family_key(atom: str) -> str | None:
@@ -119,8 +131,8 @@ def _ridge_coefs(
     gram = np.zeros((width, width), dtype=np.float64)
     rhs = np.zeros(width, dtype=np.float64)
     gram[0, 0] = float(len(records))
-    for atoms, sharpe, _trades in records:
-        rhs[0] += sharpe
+    for atoms, target, _trades in records:
+        rhs[0] += target
         cols: list[int] = []
         for atom in atoms:
             column = index.get(atom)
@@ -130,7 +142,7 @@ def _ridge_coefs(
             gram[0, column] += 1.0
             gram[column, 0] += 1.0
             gram[column, column] += 1.0
-            rhs[column] += sharpe
+            rhs[column] += target
         for left in range(len(cols)):
             for right in range(left + 1, len(cols)):
                 a = cols[left]
@@ -146,27 +158,53 @@ def _ridge_coefs(
     return {atom: float(beta[column]) for atom, column in index.items()}
 
 
+def _excess_pnl(row: dict) -> float | None:
+    pnl = _finite(row.get("test_pnl"))
+    bh = _finite(row.get("bh_oos_pnl"))
+    if pnl is None or bh is None:
+        return None
+    return pnl - bh
+
+
+def _ranking_lift(est: AtomEstimate) -> float:
+    if est.score_lift is not None:
+        return est.score_lift
+    return est.sharpe_lift
+
+
 def estimate_lifts(rows: list) -> LiftModel:
-    """Fit atom and family+param lifts. Ops-park rows are ignored."""
-    by_atoms: dict[frozenset[str], tuple[float, int | None]] = {}
+    """Fit atom and family+param lifts. Ops-park rows are ignored.
+
+    Primary target is ``test_pnl - bh_oos_pnl`` when both are present.
+    Sharpe pairs stay available as a tiebreak and as the score for an
+    atom that never appears on a P&L row. Ridge is fit on whichever
+    target the file actually has: excess when any row has it, else Sharpe.
+    Dollar excess and Sharpe are never mixed in one ridge.
+    """
+    # atoms -> (excess or None, sharpe or None, trades or None)
+    by_atoms: dict[frozenset[str], tuple[float | None, float | None, int | None]] = {}
     for row in rows:
         if not isinstance(row, dict) or is_ops_park_record(row):
             continue
         name = row.get("strategy")
         if not isinstance(name, str) or not name:
             continue
+        excess = _excess_pnl(row)
         sharpe = _finite(row.get("sharpe"))
-        if sharpe is None:
+        if excess is None and sharpe is None:
             continue
         atoms = _split(name)
         if not atoms or atoms in by_atoms:
             continue
         trades = _finite(row.get("trades"))
-        by_atoms[atoms] = (sharpe, None if trades is None else int(trades))
+        by_atoms[atoms] = (excess, sharpe, None if trades is None else int(trades))
 
-    records = [(atoms, sharpe, trades) for atoms, (sharpe, trades) in by_atoms.items()]
+    has_excess = any(item[0] is not None for item in by_atoms.values())
+    metric = LIFT_METRIC if has_excess else SHARPE_METRIC
+    pair_score: dict[str, list[float]] = {}
     pair_sharpe: dict[str, list[float]] = {}
     pair_trades: dict[str, list[float]] = {}
+    family_score: dict[str, list[float]] = {}
     family_sharpe: dict[str, list[float]] = {}
     family_trades: dict[str, list[float]] = {}
     name_count: dict[str, int] = {}
@@ -175,8 +213,12 @@ def estimate_lifts(rows: list) -> LiftModel:
     fam_zero_num: dict[str, int] = {}
     fam_zero_den: dict[str, int] = {}
     members: dict[str, set[str]] = {}
+    ridge_records: list[tuple[frozenset[str], float, int | None]] = []
 
-    for atoms, sharpe, trades in records:
+    for atoms, (excess, sharpe, trades) in by_atoms.items():
+        primary = excess if has_excess else sharpe
+        if primary is not None:
+            ridge_records.append((atoms, primary, trades))
         families_here: set[str] = set()
         for atom in atoms:
             name_count[atom] = name_count.get(atom, 0) + 1
@@ -192,13 +234,24 @@ def estimate_lifts(rows: list) -> LiftModel:
             parent_row = by_atoms.get(parent)
             if parent_row is None:
                 continue
-            pair_sharpe.setdefault(atom, []).append(sharpe - parent_row[0])
-            if trades is not None and parent_row[1] is not None:
-                pair_trades.setdefault(atom, []).append(float(trades - parent_row[1]))
+            parent_excess, parent_sharpe, parent_trades = parent_row
+            if excess is not None and parent_excess is not None:
+                pair_score.setdefault(atom, []).append(excess - parent_excess)
+            elif not has_excess and sharpe is not None and parent_sharpe is not None:
+                pair_score.setdefault(atom, []).append(sharpe - parent_sharpe)
+            if sharpe is not None and parent_sharpe is not None:
+                pair_sharpe.setdefault(atom, []).append(sharpe - parent_sharpe)
+            if trades is not None and parent_trades is not None:
+                pair_trades.setdefault(atom, []).append(float(trades - parent_trades))
             if fkey is not None:
-                family_sharpe.setdefault(fkey, []).append(sharpe - parent_row[0])
-                if trades is not None and parent_row[1] is not None:
-                    family_trades.setdefault(fkey, []).append(float(trades - parent_row[1]))
+                if excess is not None and parent_excess is not None:
+                    family_score.setdefault(fkey, []).append(excess - parent_excess)
+                elif not has_excess and sharpe is not None and parent_sharpe is not None:
+                    family_score.setdefault(fkey, []).append(sharpe - parent_sharpe)
+                if sharpe is not None and parent_sharpe is not None:
+                    family_sharpe.setdefault(fkey, []).append(sharpe - parent_sharpe)
+                if trades is not None and parent_trades is not None:
+                    family_trades.setdefault(fkey, []).append(float(trades - parent_trades))
         for fkey in families_here:
             if trades is None:
                 continue
@@ -206,7 +259,7 @@ def estimate_lifts(rows: list) -> LiftModel:
             if trades == 0:
                 fam_zero_num[fkey] = fam_zero_num.get(fkey, 0) + 1
 
-    ridge = _ridge_coefs(records, name_count)
+    ridge = _ridge_coefs(ridge_records, name_count)
 
     def _zero(num: dict[str, int], den: dict[str, int], key: str) -> float:
         total = den.get(key, 0)
@@ -214,98 +267,140 @@ def estimate_lifts(rows: list) -> LiftModel:
             return 0.0
         return num.get(key, 0) / total
 
+    def _pick(
+        score_pairs: list[float],
+        sharpe_pairs: list[float],
+        atom: str | None,
+        group: set[str] | None,
+    ):
+        support = len(score_pairs)
+        sharpe_lift = _shrunk(sharpe_pairs) if sharpe_pairs else 0.0
+        if support >= MIN_SUPPORT:
+            score = _shrunk(score_pairs)
+            source = "paired"
+        elif atom is not None and atom in ridge:
+            score = ridge[atom]
+            source = "ridge"
+        elif group is not None:
+            coefs = [ridge[item] for item in group if item in ridge]
+            score = sum(coefs) / len(coefs) if coefs else 0.0
+            source = "ridge" if coefs else "none"
+        else:
+            score = 0.0
+            source = "none"
+        pnl_lift = score if has_excess and source != "none" else None
+        if has_excess and source == "none" and sharpe_pairs:
+            score = sharpe_lift
+            source = "paired" if len(sharpe_pairs) >= MIN_SUPPORT else "none"
+            support = len(sharpe_pairs)
+            pnl_lift = None
+        return score, sharpe_lift, pnl_lift, support, source
+
     atoms_out: dict[str, AtomEstimate] = {}
     for atom, count in sorted(name_count.items()):
-        support = len(pair_sharpe.get(atom, ()))
-        if support >= MIN_SUPPORT:
-            sharpe_lift = _shrunk(pair_sharpe[atom])
-            source = "paired"
-        elif atom in ridge:
-            sharpe_lift = ridge[atom]
-            source = "ridge"
-        else:
-            sharpe_lift = 0.0
-            source = "none"
+        score, sharpe_lift, pnl_lift, support, source = _pick(
+            pair_score.get(atom, []),
+            pair_sharpe.get(atom, []),
+            atom,
+            None,
+        )
         atoms_out[atom] = AtomEstimate(
             key=atom,
             level="atom",
-            sharpe_lift=sharpe_lift,
+            sharpe_lift=sharpe_lift if has_excess else score,
             trades_lift=_shrunk(pair_trades.get(atom, ())),
             support=support,
             zero_trade_rate=_zero(zero_num, zero_den, atom),
             source=source,
             name_count=count,
+            pnl_lift=pnl_lift,
+            score_lift=score,
+            metric=LIFT_METRIC if pnl_lift is not None else SHARPE_METRIC,
         )
 
     families_out: dict[str, AtomEstimate] = {}
     for fkey, group in sorted(members.items()):
-        support = len(family_sharpe.get(fkey, ()))
-        if support >= MIN_SUPPORT:
-            sharpe_lift = _shrunk(family_sharpe[fkey])
-            source = "paired"
-        else:
-            coefs = [ridge[atom] for atom in group if atom in ridge]
-            sharpe_lift = sum(coefs) / len(coefs) if coefs else 0.0
-            source = "ridge" if coefs else "none"
+        score, sharpe_lift, pnl_lift, support, source = _pick(
+            family_score.get(fkey, []),
+            family_sharpe.get(fkey, []),
+            None,
+            group,
+        )
         families_out[fkey] = AtomEstimate(
             key=fkey,
             level="family",
-            sharpe_lift=sharpe_lift,
+            sharpe_lift=sharpe_lift if has_excess else score,
             trades_lift=_shrunk(family_trades.get(fkey, ())),
             support=support,
             zero_trade_rate=_zero(fam_zero_num, fam_zero_den, fkey),
             source=source,
             name_count=sum(name_count.get(atom, 0) for atom in group),
+            pnl_lift=pnl_lift,
+            score_lift=score,
+            metric=LIFT_METRIC if pnl_lift is not None else SHARPE_METRIC,
         )
 
     informative = any(
-        est.support >= MIN_SUPPORT and abs(est.sharpe_lift) > INFORMATIVE_EPS
+        est.support >= MIN_SUPPORT and abs(_ranking_lift(est)) > INFORMATIVE_EPS
         for est in atoms_out.values()
     )
     return LiftModel(
         atoms=atoms_out,
         families=families_out,
-        names_used=len(records),
+        names_used=len(by_atoms),
         informative=informative,
         support_min=MIN_SUPPORT,
         explore_share=EXPLORE_SHARE,
         strategy=STRATEGY_LIFT if informative else STRATEGY_PLAIN,
+        metric=metric,
     )
 
 
-def _effect(model: LiftModel, atom: str) -> tuple[float, float, int]:
-    """Sharpe lift, zero-trade rate, and support used for the UCB term.
+def _effect(model: LiftModel, atom: str) -> tuple[float, float, float, int]:
+    """Score lift, sharpe tiebreak, zero-trade rate, and support.
 
     Exact atom when it has enough pairs, else the family+param pool, else
-    the ridge coefficient.
+    the ridge coefficient. Score lift is net P&L minus buy-and-hold when
+    that atom was fit on P&L, otherwise Sharpe.
     """
     est = model.atoms.get(atom)
     fam = None
     fkey = family_key(atom)
     if fkey is not None:
         fam = model.families.get(fkey)
+    chosen = None
     if est is not None and est.support >= model.support_min:
-        return est.sharpe_lift, est.zero_trade_rate, est.support
-    if fam is not None and fam.support >= model.support_min:
-        return fam.sharpe_lift, fam.zero_trade_rate, fam.support
-    if est is not None and est.source == "ridge":
-        return est.sharpe_lift, est.zero_trade_rate, est.support
-    zero = est.zero_trade_rate if est is not None else 0.0
-    return 0.0, zero, 0
+        chosen = est
+    elif fam is not None and fam.support >= model.support_min:
+        chosen = fam
+    elif est is not None and est.source == "ridge":
+        chosen = est
+    if chosen is None:
+        zero = est.zero_trade_rate if est is not None else 0.0
+        sharpe = est.sharpe_lift if est is not None else 0.0
+        return 0.0, sharpe, zero, 0
+    return _ranking_lift(chosen), chosen.sharpe_lift, chosen.zero_trade_rate, chosen.support
 
 
 def score_name(model: LiftModel, name: str) -> float:
     """Sum of atom lifts. Shared atoms cancel when two stacks are compared."""
+    return score_name_parts(model, name)[0]
+
+
+def score_name_parts(model: LiftModel, name: str) -> tuple[float, float]:
+    """``(score, sharpe tiebreak)``. Sharpe does not enter the score."""
     atoms = [part.strip() for part in str(name).split("&") if part.strip()]
     if not atoms:
-        return 0.0
+        return 0.0, 0.0
     log_term = math.log(model.names_used + 1.0)
     total = 0.0
+    sharpe_total = 0.0
     for atom in atoms:
-        lift, zero_rate, support = _effect(model, atom)
+        lift, sharpe, zero_rate, support = _effect(model, atom)
         bonus = UCB_C * math.sqrt(log_term / (support + 1.0))
         total += lift - ZERO_WEIGHT * zero_rate + bonus
-    return total
+        sharpe_total += sharpe
+    return total, sharpe_total
 
 
 def explore_count(n: int, share: float = EXPLORE_SHARE) -> int:
@@ -335,37 +430,47 @@ def steer_candidates(
     take = min(want, len(candidates))
     n_explore = explore_count(take, model.explore_share)
     n_exploit = take - n_explore
-    scored = [(score_name(model, name), pos, name) for pos, name in enumerate(candidates)]
-    scored.sort(key=lambda item: (-item[0], item[1]))
-    exploit = [name for _score, _pos, name in scored[:n_exploit]]
-    rest = [name for _score, _pos, name in scored[n_exploit:]]
+    scored = []
+    for pos, name in enumerate(candidates):
+        score, sharpe = score_name_parts(model, name)
+        scored.append((score, sharpe, pos, name))
+    scored.sort(key=lambda item: (-item[0], -item[1], item[2]))
+    exploit = [name for _score, _sharpe, _pos, name in scored[:n_exploit]]
+    rest = [name for _score, _sharpe, _pos, name in scored[n_exploit:]]
     random.Random(int(seed)).shuffle(rest)
     return (exploit + rest)[:take]
 
 
 def _public_estimate(est: AtomEstimate) -> dict:
-    return {
+    lift = _ranking_lift(est)
+    item = {
         "atom": est.key,
         "level": est.level,
+        "lift": round(lift, 6),
         "sharpe_lift": round(est.sharpe_lift, 6),
         "trades_lift": round(est.trades_lift, 4),
         "support": int(est.support),
         "zero_trade_rate": round(est.zero_trade_rate, 4),
         "source": est.source,
+        "metric": est.metric,
     }
+    if est.pnl_lift is not None:
+        item["pnl_lift"] = round(est.pnl_lift, 6)
+    return item
 
 
 def lift_api_payload(model: LiftModel, *, k: int = 10) -> dict:
     """Top and bottom atoms by lift. The two lists do not overlap."""
     ranked = sorted(
         model.atoms.values(),
-        key=lambda est: (-est.sharpe_lift, -est.support, est.key),
+        key=lambda est: (-_ranking_lift(est), -est.sharpe_lift, -est.support, est.key),
     )
     top = ranked[: max(0, int(k))]
     top_keys = {est.key for est in top}
     bottom = [est for est in reversed(ranked) if est.key not in top_keys][: max(0, int(k))]
     return {
         "paper_only": True,
+        "metric": model.metric,
         "strategy": model.strategy,
         "explore_share": model.explore_share,
         "names_used": model.names_used,
@@ -379,16 +484,23 @@ def fingerprint_rows(rows: list[dict]) -> str:
     count = 0
     sharpe_sum = 0.0
     trades_sum = 0
+    excess_sum = 0.0
+    excess_n = 0
     for row in rows:
         sharpe = _finite(row.get("sharpe"))
-        if sharpe is None:
+        excess = _excess_pnl(row)
+        if sharpe is None and excess is None:
             continue
         count += 1
-        sharpe_sum += sharpe
+        if sharpe is not None:
+            sharpe_sum += sharpe
+        if excess is not None:
+            excess_sum += excess
+            excess_n += 1
         trades = _finite(row.get("trades"))
         if trades is not None:
             trades_sum += int(trades)
-    return f"{count}:{sharpe_sum:.5f}:{trades_sum}"
+    return f"v{_CACHE_V}:{count}:{sharpe_sum:.5f}:{trades_sum}:{excess_n}:{excess_sum:.5f}"
 
 
 def _estimate_from_mapping(raw: object, level: str) -> AtomEstimate | None:
@@ -409,6 +521,9 @@ def _estimate_from_mapping(raw: object, level: str) -> AtomEstimate | None:
         name_count = int(raw.get("name_count") or 0)
     except (TypeError, ValueError):
         name_count = 0
+    score = _finite(raw.get("score_lift"))
+    pnl = _finite(raw.get("pnl_lift"))
+    metric = raw.get("metric") if raw.get("metric") in (LIFT_METRIC, SHARPE_METRIC) else SHARPE_METRIC
     return AtomEstimate(
         key=key,
         level=level,
@@ -418,6 +533,9 @@ def _estimate_from_mapping(raw: object, level: str) -> AtomEstimate | None:
         zero_trade_rate=0.0 if zero is None else zero,
         source=source,
         name_count=name_count,
+        pnl_lift=pnl,
+        score_lift=score,
+        metric=metric,
     )
 
 
@@ -434,11 +552,15 @@ def _model_to_payload(model: LiftModel) -> dict:
         item["trades_lift"] = est.trades_lift
         item["zero_trade_rate"] = est.zero_trade_rate
         item["name_count"] = est.name_count
+        item["score_lift"] = est.score_lift
+        item["pnl_lift"] = est.pnl_lift
+        item["metric"] = est.metric
         return item
 
     return {
         "v": _CACHE_V,
         "paper_only": True,
+        "metric": model.metric,
         "fingerprint": model.fingerprint,
         "strategy": model.strategy,
         "explore_share": model.explore_share,
@@ -474,6 +596,7 @@ def _model_from_payload(data: dict) -> LiftModel | None:
         support_min = int(data.get("support_min") or MIN_SUPPORT)
     except (TypeError, ValueError):
         support_min = MIN_SUPPORT
+    metric = data.get("metric") if data.get("metric") in (LIFT_METRIC, SHARPE_METRIC) else SHARPE_METRIC
     return LiftModel(
         atoms=atoms,
         families=families,
@@ -483,6 +606,7 @@ def _model_from_payload(data: dict) -> LiftModel | None:
         explore_share=explore,
         strategy=strategy,
         fingerprint=data.get("fingerprint") if isinstance(data.get("fingerprint"), str) else "",
+        metric=metric,
     )
 
 
@@ -507,28 +631,47 @@ def save_lift_cache(model: LiftModel) -> None:
 
 
 def training_rows() -> list[dict]:
-    """Newest metrics per name, ops parks left out.
+    """Newest metrics per name, joined with full-record P&L. Ops parks left out.
 
+    Background refit only. ``records_by_name`` reads ``discovery_results.jsonl``
+    at most once per process; request handlers must not call this.
     ``ensure_tested_index`` merges the display log first (log parse is
-    outside the discovery lock). Callers that serve HTTP use the published
-    snapshot instead of this.
+    outside the discovery lock).
     """
+    from hedge_fund.trading.discovery_results import records_by_name
     from hedge_fund.trading.tested_index import ensure_tested_index, load_tested_metrics
 
     ensure_tested_index()
+    metrics = load_tested_metrics()
+    results = records_by_name()
+    names = set(metrics) | set(results)
     rows: list[dict] = []
-    for name, metric in load_tested_metrics().items():
-        if not isinstance(name, str) or not isinstance(metric, dict):
+    for name in names:
+        if not isinstance(name, str) or not name:
             continue
-        if metric.get("ops_park"):
+        metric = metrics.get(name) if isinstance(metrics.get(name), dict) else {}
+        result = results.get(name) if isinstance(results.get(name), dict) else {}
+        if metric.get("ops_park") or is_ops_park_record(result):
             continue
         sharpe = _finite(metric.get("sharpe"))
         if sharpe is None:
+            sharpe = _finite(result.get("sharpe"))
+        test_pnl = _finite(result.get("test_pnl"))
+        bh = _finite(result.get("bh_oos_pnl"))
+        if sharpe is None and (test_pnl is None or bh is None):
             continue
-        row = {"strategy": name, "sharpe": sharpe, "ops_park": False}
+        row: dict = {"strategy": name, "ops_park": False}
+        if sharpe is not None:
+            row["sharpe"] = sharpe
         trades = _finite(metric.get("trades"))
+        if trades is None:
+            trades = _finite(result.get("trades"))
         if trades is not None:
             row["trades"] = int(trades)
+        if test_pnl is not None:
+            row["test_pnl"] = test_pnl
+        if bh is not None:
+            row["bh_oos_pnl"] = bh
         rows.append(row)
     return rows
 
@@ -585,6 +728,7 @@ def pending_lift_payload() -> dict:
         "explore_share": EXPLORE_SHARE,
         "names_used": 0,
         "support_min": MIN_SUPPORT,
+        "metric": LIFT_METRIC,
         "top": [],
         "bottom": [],
         "ready": False,

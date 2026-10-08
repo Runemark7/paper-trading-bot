@@ -43,7 +43,11 @@ _CORE = (
     "tested_at",
     "windows",
     "all_windows_nonneg",
+    "regimes_tested",
 )
+# Provenance is not part of _CORE. A deploy must not rewrite every
+# historical line just to stamp worker_id / data_end / data_hash.
+_PROVENANCE_UNKNOWN = "unknown"
 
 _lock = threading.Lock()
 _backfill_once = threading.Lock()
@@ -54,6 +58,9 @@ _bound: str | None = None
 _map: dict[str, dict] | None = None
 _counts_key: tuple | None = None
 _counts: dict | None = None
+# Slim rows for densify seeds. Published by the write path and backfill.
+# Claim reads this and does not open the jsonl.
+_seed_view: dict[str, dict] | None = None
 
 
 def discovery_results_path() -> Path:
@@ -65,7 +72,7 @@ def discovery_results_index_path() -> Path:
 
 
 def _reset_if_moved() -> None:
-    global _bound, _map, _counts_key, _counts
+    global _bound, _map, _counts_key, _counts, _seed_view
     root = str(state_root())
     if _bound == root:
         return
@@ -73,6 +80,7 @@ def _reset_if_moved() -> None:
     _map = None
     _counts_key = None
     _counts = None
+    _seed_view = None
 
 
 def _invalidate_counts() -> None:
@@ -151,6 +159,70 @@ def _fail_reasons(value: object) -> list[str]:
     return [item for item in value if isinstance(item, str)]
 
 
+def _regimes_tested(row: dict) -> int | None:
+    value = row.get("regimes_tested")
+    if not isinstance(value, bool) and isinstance(value, (int, float)):
+        number = int(value)
+        if number >= 0:
+            return number
+    windows = row.get("windows")
+    if isinstance(windows, list):
+        return len(windows)
+    return None
+
+
+def _provenance_fields(row: dict) -> dict:
+    """worker_id, data_end, data_hash. Absent fields are unknown provenance."""
+    worker = row.get("worker_id")
+    if isinstance(worker, str) and worker.strip():
+        worker = worker.strip()
+    else:
+        worker = None
+    data_end = row.get("data_end")
+    if isinstance(data_end, bool) or not isinstance(data_end, (int, float)):
+        data_end = None
+    else:
+        data_end = int(data_end)
+    data_hash = row.get("data_hash")
+    if isinstance(data_hash, str) and data_hash.strip():
+        data_hash = data_hash.strip().lower()
+    else:
+        data_hash = None
+    marked = row.get("provenance")
+    if worker and data_end is not None and data_hash and marked in ("shared", "unverified"):
+        provenance = marked
+    elif worker and data_end is not None and data_hash:
+        provenance = "shared"
+    else:
+        provenance = _PROVENANCE_UNKNOWN
+        worker = worker or _PROVENANCE_UNKNOWN
+    return {
+        "worker_id": worker,
+        "data_end": data_end,
+        "data_hash": data_hash,
+        "provenance": provenance,
+    }
+
+
+def _seed_item(row: dict) -> dict:
+    """Fields densify needs. Window payloads are not copied."""
+    item: dict = {}
+    for field in ("sharpe", "trades", "test_pnl", "bh_oos_pnl", "qualified"):
+        if field in row and row.get(field) is not None:
+            item[field] = row[field]
+    counted = _regimes_tested(row)
+    if counted is not None:
+        item["regimes_tested"] = counted
+    return item
+
+
+def _publish_seed(name: str, row: dict) -> None:
+    global _seed_view
+    if _seed_view is None:
+        _seed_view = {}
+    _seed_view[name] = _seed_item(row)
+
+
 def _tested_unix(value: object) -> int:
     if not isinstance(value, str) or not value:
         return 0
@@ -172,7 +244,9 @@ def _record_from_row(row: dict, *, gate: str) -> dict:
         "sma_stack_oos_pnl": _finite_number(row.get("sma_stack_oos_pnl")),
         "tested_at": row.get("tested_at") if isinstance(row.get("tested_at"), str) else None,
         "gate": gate,
+        "regimes_tested": _regimes_tested(row),
     }
+    record.update(_provenance_fields(row))
     sharpe = _finite_number(row.get("sharpe"))
     trades = _finite_number(row.get("trades"))
     if sharpe is not None:
@@ -197,6 +271,11 @@ def _stub(name: str, qualified: bool) -> dict:
         "sma_stack_oos_pnl": None,
         "tested_at": None,
         "gate": "index_only",
+        "regimes_tested": None,
+        "worker_id": _PROVENANCE_UNKNOWN,
+        "data_end": None,
+        "data_hash": None,
+        "provenance": _PROVENANCE_UNKNOWN,
         "partial": True,
     }
 
@@ -253,11 +332,26 @@ def _scan_jsonl() -> dict[str, dict]:
 
 def _load_map() -> dict[str, dict]:
     """Caller holds ``_lock``. Scans the jsonl at most once per state dir."""
-    global _map
+    global _map, _seed_view
     _reset_if_moved()
     if _map is None:
         _map = _scan_jsonl()
+        _seed_view = {name: _seed_item(row) for name, row in _map.items()}
     return _map
+
+
+def load_seed_view() -> dict[str, dict]:
+    """Slim seed rows already in memory. Does not open the jsonl.
+
+    Ingest and the background backfill publish this view. Claim reads it.
+    A process that has not scanned yet returns an empty view rather than
+    parsing ``discovery_results.jsonl`` on the request.
+    """
+    with _lock:
+        _reset_if_moved()
+        if _seed_view is None:
+            return {}
+        return dict(_seed_view)
 
 
 def _sort_key(item: tuple[str, dict]) -> tuple:
@@ -313,6 +407,7 @@ def _append_records(pending: list[dict], rows: dict[str, dict]) -> None:
             name = stored.get("strategy")
             if isinstance(name, str) and name:
                 rows[name] = stored
+                _publish_seed(name, stored)
 
 
 def _apply_rows(
