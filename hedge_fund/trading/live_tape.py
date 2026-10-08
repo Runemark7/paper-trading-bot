@@ -1,6 +1,6 @@
 """Persistent 5m tape for the live paper cycle.
 
-Qualification walks the last ``qual_keep_bars()`` bars of BTC/USDT and
+Qualification walks every bar since ``QUAL_CANONICAL_START_MS`` (``qual_store_bars()``) of BTC/USDT and
 ETH/USDT 5m history. The live cycle used to ask Binance for 300 bars
 (~25h), so HTF atoms such as ``h1_ema_abv_60`` (60 completed hours) were
 always false.
@@ -39,6 +39,7 @@ from hedge_fund.trading.constants import (
     QUAL_WARMUP_BARS,
     live_signal_eval_bars,
     qual_keep_bars,
+    qual_store_bars,
 )
 from hedge_fund.web.candles import CHUNK_SIZE, TF_MS, CandleFetchError, fetch_chunk
 
@@ -373,7 +374,7 @@ def ensure_symbol(
     """
     if symbol not in SYMBOLS:
         raise ValueError(f"live tape is BTC/USDT and ETH/USDT only, got {symbol}")
-    target = qual_keep_bars() if target_bars is None else int(target_bars)
+    target = qual_store_bars() if target_bars is None else int(target_bars)
     if deadline is None:
         deadline = time.monotonic() + _backfill_budget_seconds()
     page_cap = (target // CHUNK_SIZE) + 20 if max_pages is None else int(max_pages)
@@ -420,7 +421,7 @@ def ensure_live_tape(
     """Import JSON if present, then incremental-append / backfill both symbols."""
     root = tape_dir(state_dir)
     root.mkdir(parents=True, exist_ok=True)
-    target = qual_keep_bars() if target_bars is None else int(target_bars)
+    target = qual_store_bars() if target_bars is None else int(target_bars)
     if deadline is None:
         deadline = time.monotonic() + _backfill_budget_seconds()
     try:
@@ -584,7 +585,7 @@ def live_history_health(state_dir: Path | None = None) -> dict:
             "timeframe": QUAL_TIMEFRAME,
             "error": str(exc),
             "symbols": symbols,
-            "target_bars": qual_keep_bars(),
+            "target_bars": qual_store_bars(),
             "signal_eval_bars": live_signal_eval_bars(),
             "minimum_bars": minimum_store_bars(),
             "store": "live_tape",
@@ -593,7 +594,7 @@ def live_history_health(state_dir: Path | None = None) -> dict:
         "paper_only": True,
         "timeframe": QUAL_TIMEFRAME,
         "symbols": symbols,
-        "target_bars": qual_keep_bars(),
+        "target_bars": qual_store_bars(),
         "signal_eval_bars": live_signal_eval_bars(),
         "minimum_bars": minimum_store_bars(),
         "store": "live_tape",

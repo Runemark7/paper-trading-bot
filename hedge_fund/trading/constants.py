@@ -54,7 +54,11 @@ RISK_POLICY = "rm_v1"
 # same windows, after fees) instead of raw net P&L. Every discovery record
 # carries this stamp; prod ingest rejects rows from a worker on older rules
 # so a stale checkout cannot park names under the old engine.
-GATE_RULES = "sltp_cap100_bhdsr_20261008"
+# Amendment 2026-10-08 18:08 (Alexander, option b): OOS segments are
+# contiguous, non-overlapping and tile the tape end to end, anchored to a
+# fixed start so a new day only extends the last segment. Bumped so a
+# worker still on end-aligned windows is paused and its rows are refused.
+GATE_RULES = "sltp_cap100_bhdsr_tiled87_20261008"
 # Prior bars fed into each window so EMA/SMA/HTF/ATR are warm when scored
 # bars begin. Binding HTF: parser-allowed ``h4_ema_abv_N`` with N=70 needs
 # 70 completed 4h closes = 70×48=3360 five-minute bars, plus up to 47 for
@@ -66,6 +70,58 @@ GATE_RULES = "sltp_cap100_bhdsr_20261008"
 # closes only. Does not steal 90d window length — pad is extra prefix.
 QUAL_WARMUP_DAYS = 14
 QUAL_WARMUP_BARS = QUAL_WARMUP_DAYS * 24 * 12  # 4032
+
+
+# Tiled OOS layout (amendment 2026-10-08 18:08). Everything is fixed by
+# timestamp, not by distance from the tape end:
+#   lead-in   = QUAL_WARMUP_BARS (indicator seed) + QUAL_TRAIN_BARS (train,
+#               logged only) of bars right before each OOS segment
+#   segment k = [QUAL_OOS_START_MS + k*QUAL_SEGMENT_MS, +QUAL_SEGMENT_MS)
+#   last      = [QUAL_OOS_START_MS + (N-1)*QUAL_SEGMENT_MS, tape end]
+# Segments touch end to end, never overlap, and each one only sees bars
+# before its own end (train/warm-up strictly before its OOS start). A new
+# UTC day appends to the last segment; earlier segments never move.
+# 23 x 90d + 77d lead-in does not fit in the shared store (it starts
+# 2021-01-23), so segments are 87d: 22 full segments + the open-ended last
+# one (2026-07-17 ->) fit with a week of margin before QUAL_TAPE_START_MS.
+TF_MS_5M = 300_000
+QUAL_TRAIN_BARS = int(QUAL_WINDOW_BARS * 0.70)  # 18144 = old 63d train span
+QUAL_SEGMENT_DAYS = 87
+QUAL_SEGMENT_BARS = QUAL_SEGMENT_DAYS * 24 * 12  # 25056
+QUAL_SEGMENT_MS = QUAL_SEGMENT_DAYS * 86_400_000
+QUAL_TAPE_START_MS = 1_612_224_000_000  # 2021-02-02 00:00 UTC
+QUAL_OOS_START_MS = QUAL_TAPE_START_MS + (QUAL_TRAIN_BARS + QUAL_WARMUP_BARS) * TF_MS_5M
+# 2021-04-20 00:00 UTC. Last segment starts 2026-07-17 00:00 UTC.
+QUAL_LAST_SEGMENT_START_MS = QUAL_OOS_START_MS + (QUAL_N_WINDOWS - 1) * QUAL_SEGMENT_MS
+# Store keeps this much tape before QUAL_TAPE_START_MS so gaps never cut
+# into segment 0's lead-in.
+QUAL_STORE_MARGIN_BARS = 7 * 24 * 12
+# Canonical (hashed, shared) tape starts here: the margin before segment 0's
+# lead-in. Cut by timestamp, so the hash does not depend on store length.
+QUAL_CANONICAL_START_MS = QUAL_TAPE_START_MS - QUAL_STORE_MARGIN_BARS * TF_MS_5M
+
+
+def qual_segment_bounds(k: int, n_windows: int | None = None) -> tuple[int, int | None]:
+    """[start_ms, end_ms) of OOS segment ``k``; the last one is open-ended (None)."""
+    n = QUAL_N_WINDOWS if n_windows is None else int(n_windows)
+    if not 0 <= int(k) < n:
+        raise ValueError(f"segment {k} outside 0..{n - 1}")
+    start = QUAL_OOS_START_MS + int(k) * QUAL_SEGMENT_MS
+    end = None if int(k) == n - 1 else start + QUAL_SEGMENT_MS
+    return start, end
+
+
+def qual_store_bars(now_ms: int | None = None) -> int:
+    """Live-tape / loader bar budget: every 5m slot since QUAL_TAPE_START_MS + margin.
+
+    Grows one bar per 5 minutes, so the store appends instead of trimming the
+    oldest bars, and the fixed segment-0 lead-in never falls off the front.
+    """
+    import time as _time
+
+    now = int(_time.time() * 1000) if now_ms is None else int(now_ms)
+    slots = max(0, (now - QUAL_TAPE_START_MS) // TF_MS_5M + 1)
+    return int(slots + QUAL_STORE_MARGIN_BARS)
 
 
 def qual_keep_bars(n_windows: int | None = None, warmup_bars: int | None = None) -> int:

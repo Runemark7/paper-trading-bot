@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from hedge_fund.trading.constants import QUAL_N_WINDOWS
+from hedge_fund.trading.constants import GATE_RULES, QUAL_N_WINDOWS
 from hedge_fund.trading.qualify import qualification_from_record, requalify_parked_log
 from scripts.tournament_engine import (
     _leftover_batch,
@@ -154,6 +154,7 @@ class OosGateTests(unittest.TestCase):
         # Fixture that used to fail only on windows (dbl_bot_120-shaped, but beats B&H).
         row = {
             "strategy": "window_veto_only",
+            "gate_rules": GATE_RULES,
             "qualified": False,
             "sharpe": 0.58,
             "trades": 296,

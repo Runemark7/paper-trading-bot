@@ -61,6 +61,7 @@ from hedge_fund.trading.constants import (
     QUAL_STRIDE,
     QUAL_WINDOW_BARS,
     qual_keep_bars,
+    qual_store_bars,
 )
 from hedge_fund.trading.discovery import (
     append_discovery_evaluation,
@@ -606,13 +607,16 @@ def run_batch(
             history_stamp["provenance"] = "unverified"
         except Exception:
             history_stamp = None
-    data = _load_qual_history(keep_bars=qual_keep_bars(n_windows=n_windows))
+    data = _load_qual_history(keep_bars=qual_store_bars())
     if not data:
         raise SystemExit(
             "crypto_history_5m.json missing or empty under PAPER_STATE. "
             "Run: python scripts/fetch_history.py"
         )
-    slices = _window_slices(data, QUAL_WINDOW_BARS, n_windows, QUAL_STRIDE)
+    try:
+        slices = _window_slices(data, QUAL_WINDOW_BARS, n_windows, QUAL_STRIDE, tiled=True)
+    except ValueError as exc:
+        raise SystemExit(f"history does not cover the tiled OOS segments: {exc}") from exc
     del data
     if len(slices) != n_windows:
         raise SystemExit("history too short for qualification windows")

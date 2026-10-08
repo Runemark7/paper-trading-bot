@@ -21,7 +21,7 @@ from pathlib import Path
 import numpy as np
 
 from hedge_fund.paths import state_root
-from hedge_fund.trading.constants import QUAL_SYMBOLS, qual_keep_bars
+from hedge_fund.trading.constants import QUAL_CANONICAL_START_MS, QUAL_SYMBOLS, qual_keep_bars
 from hedge_fund.trading.live_tape import TAPE_DTYPE, load_array, load_tail, save_array, tape_path
 
 HISTORY_JSON = "crypto_history_5m.json"
@@ -170,17 +170,23 @@ def _trim(arr: np.ndarray, keep: int) -> np.ndarray:
     return np.ascontiguousarray(arr, dtype=TAPE_DTYPE)
 
 
-def _cut_to_pin(arr: np.ndarray, pin: int | None, keep: int) -> np.ndarray:
-    """Drop the incomplete UTC day, then keep the qualification tail.
+def _cut_to_pin(arr: np.ndarray, pin: int | None, keep: int = 0) -> np.ndarray:
+    """Drop the incomplete UTC day and everything before the canonical start.
 
-    Bars at exactly ``pin`` (00:00 UTC) stay. Later bars do not, so the
-    walk-forward windows end on that day boundary.
+    Bars at exactly ``pin`` (00:00 UTC) stay. Later bars do not, so the last
+    OOS segment ends on that day boundary. The front is cut by timestamp at
+    ``QUAL_CANONICAL_START_MS`` (tiled OOS layout, amendment 2026-10-08
+    18:08), so the hash does not depend on how much older tape a store holds.
+    ``keep`` > 0 still caps the bar count (legacy callers / tests).
     """
     if arr.size == 0:
         return _trim(arr, keep)
     if pin is not None and len(arr):
         idx = int(np.searchsorted(arr["ts"], np.int64(pin), side="right"))
         arr = arr[:idx]
+    if len(arr):
+        lo = int(np.searchsorted(arr["ts"], np.int64(QUAL_CANONICAL_START_MS), side="left"))
+        arr = arr[lo:]
     return _trim(arr, keep)
 
 
@@ -191,7 +197,7 @@ def canonical_arrays(
     root = state_root() if state_dir is None else Path(state_dir)
     raw, source = _raw_end(root)
     pin = _active_pin(root, raw)
-    keep = qual_keep_bars()
+    keep = 0  # cut by timestamp (QUAL_CANONICAL_START_MS), not by count
     out: dict[str, np.ndarray] = {}
     for symbol in QUAL_SYMBOLS:
         arr, source = _source_array(root, symbol)
@@ -222,7 +228,8 @@ def _hash_manifest(
         "data_end": pin,
         "symbols": symbols,
         "source": source or "missing",
-        "keep_bars": qual_keep_bars(),
+        "keep_bars": int(len(arrays[QUAL_SYMBOLS[0]])) if arrays else 0,
+        "canonical_start": QUAL_CANONICAL_START_MS,
     }
 
 
