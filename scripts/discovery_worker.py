@@ -206,34 +206,56 @@ def _http_bytes(url: str, *, token: str | None = None, timeout: int = 120) -> by
         raise RuntimeError(f"GET {url} failed: {exc.reason}") from exc
 
 
+# Shared-tape problems skip this batch. They must not kill the farm loop.
+HISTORY_BACKOFF_SECONDS = 60
+
+
+class HistoryUnavailable(Exception):
+    """Prod tape is missing or still mismatched. Back off and do not eval."""
+
+
 def ensure_shared_history(base_url: str, token: str) -> dict:
     """Fetch prod's canonical tape when the local hash differs.
 
-    Raises ``SystemExit`` when the hash still disagrees after refresh,
-    so the batch does not evaluate on a private price history.
+    A mismatch after refresh, or a failed fetch (including HTTP 502),
+    raises ``HistoryUnavailable``. The farm loop sleeps and retries.
+    It does not exit.
     """
     from hedge_fund.trading.price_history import install_tape_blob, manifest_for
 
-    remote = _http_json(
-        f"{base_url.rstrip('/')}/api/discovery/history",
-        token=token,
-        timeout=60,
-    )
-    local = manifest_for()
-    remote_hash = remote.get("sha256") if isinstance(remote, dict) else None
-    if remote_hash and local.get("sha256") == remote_hash:
-        local["provenance"] = "shared"
-        return local
-    blob = _http_bytes(
-        f"{base_url.rstrip('/')}/api/discovery/history/tape",
-        token=token,
-        timeout=180,
-    )
-    installed = install_tape_blob(blob)
-    if not remote_hash or installed.get("sha256") != remote_hash:
-        raise SystemExit(
-            "discovery_worker: price history hash mismatch after refresh; refusing to eval"
+    try:
+        remote = _http_json(
+            f"{base_url.rstrip('/')}/api/discovery/history",
+            token=token,
+            timeout=60,
         )
+        local = manifest_for()
+        remote_hash = remote.get("sha256") if isinstance(remote, dict) else None
+        if remote_hash and local.get("sha256") == remote_hash:
+            local["provenance"] = "shared"
+            return local
+        blob = _http_bytes(
+            f"{base_url.rstrip('/')}/api/discovery/history/tape",
+            token=token,
+            timeout=180,
+        )
+        installed = install_tape_blob(blob)
+    except HistoryUnavailable:
+        raise
+    except Exception as exc:
+        print(
+            f"discovery_worker: shared tape fetch failed ({exc}); skipping eval",
+            flush=True,
+        )
+        raise HistoryUnavailable(str(exc)) from exc
+    if not remote_hash or installed.get("sha256") != remote_hash:
+        print(
+            "discovery_worker: price history hash still differs after refresh "
+            f"(local={str(installed.get('sha256'))[:12]} remote={str(remote_hash)[:12]}); "
+            "skipping eval",
+            flush=True,
+        )
+        raise HistoryUnavailable("price history hash mismatch after refresh")
     installed["provenance"] = "shared"
     print(
         f"discovery_worker: refreshed shared tape hash={installed['sha256'][:12]} "
@@ -920,6 +942,16 @@ def _run_loop(
                     sync_base=None if args.no_ingest else base,
                     sync_token=None if args.no_ingest else token,
                 )
+            except HistoryUnavailable as exc:
+                print(
+                    f"discovery_worker: shared tape not ready ({exc}); "
+                    f"backing off {HISTORY_BACKOFF_SECONDS}s",
+                    flush=True,
+                )
+                if args.once:
+                    return 1
+                time.sleep(HISTORY_BACKOFF_SECONDS)
+                continue
             except SystemExit:
                 raise
             except Exception as exc:
@@ -986,6 +1018,17 @@ def _run_loop(
                     sync_base=base,
                     sync_token=token,
                 )
+            except HistoryUnavailable as exc:
+                print(
+                    f"discovery_worker: shared tape not ready ({exc}); "
+                    f"backing off {HISTORY_BACKOFF_SECONDS}s",
+                    flush=True,
+                )
+                _release_remote_safe(base, token, worker_id, names=names, status="idle")
+                if args.once:
+                    return 1
+                time.sleep(HISTORY_BACKOFF_SECONDS)
+                continue
             except SystemExit:
                 raise
             except Exception as exc:

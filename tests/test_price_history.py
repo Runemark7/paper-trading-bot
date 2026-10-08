@@ -1,11 +1,13 @@
 """Shared 5m tape: one hash for every worker, provenance on ingest."""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import tempfile
 import threading
 import unittest
+from datetime import datetime, timezone
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
@@ -17,9 +19,11 @@ import numpy as np
 from hedge_fund.trading.constants import QUAL_SYMBOLS
 from hedge_fund.trading.discovery import append_discovery_evaluations
 from hedge_fund.trading.discovery_results import records_by_name
-from hedge_fund.trading.live_tape import TAPE_DTYPE, save_array
+from hedge_fund.trading.live_tape import TAPE_DTYPE, load_array, save_array
 from hedge_fund.trading.price_history import (
+    DAY_MS,
     clear_manifest_cache,
+    floor_utc_day,
     install_tape_blob,
     manifest_for,
     tape_blob,
@@ -34,10 +38,30 @@ def _bars(start: int, n: int, price: float) -> np.ndarray:
     return arr
 
 
+def _ms(year: int, month: int, day: int, hour: int = 0, minute: int = 0) -> int:
+    moment = datetime(year, month, day, hour, minute, tzinfo=timezone.utc)
+    return int(moment.timestamp() * 1000)
+
+
 def _write_tape(root: Path, *, end_shift: int = 0) -> None:
     root.mkdir(parents=True, exist_ok=True)
     for i, symbol in enumerate(QUAL_SYMBOLS):
         save_array(symbol, _bars(1_700_000_000_000 + end_shift, 8, 100.0 + i), root)
+
+
+def _write_span(root: Path, start_ms: int, end_ms: int) -> None:
+    """Inclusive 5m bars from ``start_ms`` through ``end_ms``."""
+    root.mkdir(parents=True, exist_ok=True)
+    n = (end_ms - start_ms) // 300_000 + 1
+    for i, symbol in enumerate(QUAL_SYMBOLS):
+        save_array(symbol, _bars(start_ms, n, 100.0 + i), root)
+
+
+def _append_bar(root: Path, ts: int) -> None:
+    for i, symbol in enumerate(QUAL_SYMBOLS):
+        prev = load_array(symbol, root)
+        extra = _bars(ts, 1, 100.0 + i + len(prev))
+        save_array(symbol, np.concatenate([prev, extra]), root)
 
 
 def _eval(name: str, **extra) -> dict:
@@ -69,17 +93,61 @@ class ManifestTests(unittest.TestCase):
             clear_manifest_cache()
             first = manifest_for(root)
             second = manifest_for(root)
+            last = 1_700_000_000_000 + 7 * 300_000
             self.assertEqual(first["sha256"], second["sha256"])
             self.assertEqual(len(first["sha256"]), 64)
             self.assertEqual(first["source"], "live_tape")
-            # ETH ends one symbol later in price but the same timestamps.
-            self.assertEqual(first["data_end"], 1_700_000_000_000 + 7 * 300_000)
+            self.assertEqual(first["data_end"], floor_utc_day(last))
+            self.assertEqual(first["data_end"] % DAY_MS, 0)
             other = Path(tmp) / "other"
             _write_tape(other, end_shift=300_000)
-            clear_manifest_cache()
             shifted = manifest_for(other)
-            self.assertNotEqual(shifted["sha256"], first["sha256"])
-            self.assertEqual(shifted["data_end"], first["data_end"] + 300_000)
+            self.assertEqual(shifted["sha256"], first["sha256"])
+            self.assertEqual(shifted["data_end"], first["data_end"])
+
+    def test_hash_ignores_a_bar_inside_the_utc_day_and_changes_when_the_day_rolls(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write_span(root, _ms(2026, 10, 7, 22, 0), _ms(2026, 10, 8, 1, 0))
+            clear_manifest_cache()
+            with patch(
+                "hedge_fund.trading.price_history.hashlib.sha256",
+                wraps=hashlib.sha256,
+            ) as hashed:
+                first = manifest_for(root)
+                built = hashed.call_count
+                self.assertGreaterEqual(built, 1)
+                self.assertEqual(first["data_end"], _ms(2026, 10, 8))
+                symbol = QUAL_SYMBOLS[0]
+                self.assertEqual(first["symbols"][symbol]["data_end"], _ms(2026, 10, 8))
+                bars = first["symbols"][symbol]["bars"]
+                _append_bar(root, _ms(2026, 10, 8, 1, 5))
+                second = manifest_for(root)
+                self.assertEqual(hashed.call_count, built)
+                self.assertEqual(second["sha256"], first["sha256"])
+                self.assertEqual(second["data_end"], first["data_end"])
+                self.assertEqual(second["symbols"][symbol]["bars"], bars)
+                _append_bar(root, _ms(2026, 10, 9, 0, 5))
+                third = manifest_for(root)
+                self.assertGreater(hashed.call_count, built)
+            self.assertNotEqual(third["sha256"], first["sha256"])
+            self.assertEqual(third["data_end"], _ms(2026, 10, 9))
+            self.assertGreater(third["symbols"][symbol]["bars"], bars)
+
+    def test_repeated_tape_downloads_reuse_the_cached_blob(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write_span(root, _ms(2026, 10, 7, 22, 0), _ms(2026, 10, 8, 1, 0))
+            clear_manifest_cache()
+            with patch(
+                "hedge_fund.trading.price_history.np.savez_compressed",
+                wraps=np.savez_compressed,
+            ) as packed:
+                first = tape_blob(root)
+                second = tape_blob(root)
+            self.assertEqual(packed.call_count, 1)
+            self.assertEqual(first, second)
+            self.assertGreater(len(first), 0)
 
     def test_install_roundtrip_matches_the_served_hash(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -176,7 +244,7 @@ class SharedHistoryHttpTests(unittest.TestCase):
             prod = Path(tmp) / "prod"
             worker = Path(tmp) / "worker"
             _write_tape(prod)
-            _write_tape(worker, end_shift=300_000)
+            _write_tape(worker, end_shift=DAY_MS)
             clear_manifest_cache()
             remote = manifest_for(prod)
             blob = tape_blob(prod)
@@ -196,8 +264,15 @@ class SharedHistoryHttpTests(unittest.TestCase):
                 clear_manifest_cache()
                 self.assertEqual(manifest_for(worker)["sha256"], remote["sha256"])
 
-    def test_worker_refuses_when_the_hash_still_differs(self):
-        from scripts.discovery_worker import ensure_shared_history
+    def test_worker_backs_off_instead_of_exiting_on_persistent_mismatch(self):
+        import argparse
+
+        from scripts.discovery_worker import (
+            HISTORY_BACKOFF_SECONDS,
+            HistoryUnavailable,
+            _run_loop,
+            ensure_shared_history,
+        )
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -214,5 +289,49 @@ class SharedHistoryHttpTests(unittest.TestCase):
                     "hedge_fund.trading.price_history.install_tape_blob",
                     return_value={"sha256": "f" * 64, "data_end": 1},
                 ):
-                    with self.assertRaises(SystemExit):
+                    with self.assertRaises(HistoryUnavailable):
                         ensure_shared_history("http://prod", "token")
+                with patch(
+                    "scripts.discovery_worker._http_json",
+                    side_effect=RuntimeError(
+                        "GET http://prod/api/discovery/history -> 502: bad gateway"
+                    ),
+                ):
+                    with self.assertRaises(HistoryUnavailable):
+                        ensure_shared_history("http://prod", "token")
+
+        sleeps: list[int] = []
+        calls = {"n": 0}
+
+        def boom(**_kwargs):
+            calls["n"] += 1
+            if calls["n"] > 1:
+                raise KeyboardInterrupt()
+            raise HistoryUnavailable("price history hash mismatch after refresh")
+
+        args = argparse.Namespace(
+            once=False,
+            no_ingest=True,
+            no_bootstrap=True,
+            idle_sleep=5,
+            pause_sleep=1,
+        )
+        with patch("scripts.discovery_worker.run_batch", side_effect=boom), patch(
+            "scripts.discovery_worker.time.sleep",
+            side_effect=lambda seconds: sleeps.append(seconds),
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                _run_loop(
+                    args,
+                    workers=1,
+                    max_names=1,
+                    local_plan=True,
+                    worker_id="linux-1",
+                    token=None,
+                    ingest_url=None,
+                    base="http://prod",
+                    farm_enabled=True,
+                )
+        self.assertEqual(sleeps, [HISTORY_BACKOFF_SECONDS])
+        self.assertEqual(calls["n"], 2)
+        self.assertGreaterEqual(HISTORY_BACKOFF_SECONDS, 60)
