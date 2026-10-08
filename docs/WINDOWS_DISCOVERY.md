@@ -141,9 +141,15 @@ the discovery log — only the URL, the token, and `crypto_history_5m.json`.
    twice the active lease capacity, prod refills `discovery_extended.json`.
    The recipe runs first (`iter_recipe_names` / `next_refill_batch`). When
    it yields fewer names than requested, prod densifies around qualified
-   passes (one axis, or one extra parser-allowed atom, up to 7). Skip uses
-   `discovery_tested.json`, not the capped display log, plus
-   `near_duplicate_key`.
+   passes (one axis, or one extra parser-allowed atom, up to 7). Qualified
+   seeds are the bool names in `discovery_tested.json`. Slim
+   metrics (`sharpe`, `trades`, `ops_park`) only reorder `order_seeds`.
+   Full records are append-only `discovery_results.jsonl`, paged by
+   `discovery_results.ix`. Counts are that file's 24-byte header. A
+   daemon thread backfills older rows and does not take the discovery
+   lock. Skip uses the names map, not the capped display log, plus
+   `near_duplicate_key`. Claim and ingest read the published lift
+   snapshot and do not fit it.
 3. Evaluates that batch (default size = `--workers`) against local
    `crypto_history_5m.json`.
 4. POSTs each finished evaluation to

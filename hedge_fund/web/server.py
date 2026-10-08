@@ -13,7 +13,10 @@ A small, dependency-free HTTP server (stdlib only) that exposes:
   GET /api/status       -> running-now vs in-progress (last-known stamps);
                            running_now.live_history is the same tape summary
   GET /api/discovery/summary -> tested / in-flight / leftover-untested; farm Start/Stop status
-                                (?compact=1 omits those lists; counts/farm/stuck stay)
+                                (?compact=1 omits those lists; counts/farm/stuck stay).
+                                Pass/fail/unique counts are the discovery_results.ix header.
+  GET /api/discovery/results -> paged full records (?offset=&limit=&status=pass|fail);
+                                seeks one page, does not load the results log.
   GET /api/discovery/lift -> top and bottom atoms by OOS Sharpe lift (read-only)
   POST /api/discovery/ingest -> Windows worker: append evals + admit / force_admit (shared secret)
   POST /api/discovery/claim -> lease never-tested names (same ingest token)
@@ -482,6 +485,15 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(cached_discovery_summary(lists=not compact_query(qs.get("compact"))))
             except Exception as exc:
                 self._send_json({"error": str(exc)}, 500)
+        elif route == "/api/discovery/results":
+            try:
+                from hedge_fund.web.discovery import discovery_results_response
+
+                self._send_json(discovery_results_response(qs))
+            except ValueError as exc:
+                self._send_json({"error": str(exc)}, 400)
+            except Exception as exc:
+                self._send_json({"error": str(exc)}, 500)
         elif route == "/api/discovery/lift":
             try:
                 from hedge_fund.trading.atom_lift import lift_payload_for_request
@@ -681,6 +693,9 @@ def main():
 
     start_read_refresh()
     start_report_refresh()
+    from hedge_fund.trading.discovery_results import start_results_backfill
+
+    start_results_backfill()
     httpd = ThreadingHTTPServer((args.host, args.port), Handler)
     print(f"paperbot dashboard service on http://{args.host}:{args.port}")
     try:

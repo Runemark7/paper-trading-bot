@@ -210,7 +210,8 @@ def _heartbeat_block(now: datetime) -> dict:
 
 
 def _discovery_block(root: Path) -> dict:
-    from hedge_fund.trading.discovery import latest_eval_per_strategy, load_discovery_log, newest_eval
+    from hedge_fund.trading.discovery import load_discovery_log, newest_eval
+    from hedge_fund.trading.discovery_results import peek_result_counts
 
     path = root / "discovery_log.json"
     last_tested_at = None
@@ -218,11 +219,21 @@ def _discovery_block(root: Path) -> dict:
     last_qualified = None
     count = 0
     unique = 0
+    published = None
+    try:
+        published = peek_result_counts()
+    except (OSError, ValueError):
+        published = None
     if path.exists():
         try:
             log = load_discovery_log()
             count = len(log)
-            unique = len(latest_eval_per_strategy(log))
+            if published is None:
+                seen: set[str] = set()
+                for row in log:
+                    if isinstance(row, dict) and isinstance(row.get("strategy"), str):
+                        seen.add(row["strategy"])
+                unique = len(seen)
             row = newest_eval(log)
             if row:
                 last_tested_at = row.get("tested_at")
@@ -230,6 +241,8 @@ def _discovery_block(root: Path) -> dict:
                 last_qualified = row.get("qualified")
         except (OSError, ValueError):
             pass
+    if published is not None:
+        unique = published["unique"]
     return {
         "certainty": "last_known" if path.exists() else "no_signal",
         "running": False,
@@ -241,7 +254,9 @@ def _discovery_block(root: Path) -> dict:
         "file": _file_mtime_note(path),
         "note": (
             "Discovery appends discovery_log.json after each name. "
-            "log_count is raw rows; unique_tested is latest-eval-per-name. "
+            "log_count is the capped display tail; unique_tested is "
+            "the discovery_results.ix header when published, else the "
+            "display log. "
             "GET /api/discovery/summary has tested / in-flight / leftover buckets. "
             "Rejected names are parked forever. "
             "Empty leftover eligible auto-refills discovery_extended.json. "

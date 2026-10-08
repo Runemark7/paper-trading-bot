@@ -133,6 +133,8 @@ export default function DiscoveryBuckets() {
   const counts = data?.counts;
   const uniqueTested = counts?.unique_tested ?? counts?.tested;
   const logRows = counts?.log_rows;
+  const displayPass = tested.filter((row) => row.qualified).length;
+  const displayFail = tested.length - displayPass;
   const stuck = Boolean(data?.stuck || flight?.stale);
   const filtersOn = testedFiltersActive(filters);
   const sortOn = !isDefaultTestedSort(sort);
@@ -164,8 +166,9 @@ export default function DiscoveryBuckets() {
         Last-known backtest evaluations (5m history, same tape as live). Not a live
         job. Walk-forwards run on the Windows discovery worker, not the k8s cycle
         sidecar. Champions and graduated names stay on the Champions page — they are
-        not leftover untested. Stamp in-flight is not process liveness. Unique
-        tested is latest-eval-per-name, not how many log rows were ever written.
+        not leftover untested. Stamp in-flight is not process liveness. Qualified,
+        rejected, and unique totals count every tested name, including rows that
+        have scrolled off the display log. The table is only that newest tail.
         Already tested · rejected is parked forever — fail once, never retested.
       </p>
 
@@ -190,7 +193,7 @@ export default function DiscoveryBuckets() {
         <Badge tone="wait">not tested {counts?.untested ?? "…"}</Badge>
         <Badge tone="neutral">
           unique {uniqueTested ?? "…"}
-          {logRows != null ? ` · ${logRows} log rows` : ""}
+          {logRows != null ? ` · ${logRows} in the display log` : ""}
         </Badge>
         <Badge tone="neutral">evals today {counts?.evals_today ?? "…"}</Badge>
         <Badge tone="wait">leased {counts?.leased ?? data?.leases?.active ?? 0}</Badge>
@@ -312,8 +315,8 @@ export default function DiscoveryBuckets() {
                       {key === "all"
                         ? ` (${tested.length})`
                         : key === "qualified"
-                          ? ` (${counts?.tested_pass ?? 0})`
-                          : ` (${counts?.tested_fail ?? 0})`}
+                          ? ` (${displayPass})`
+                          : ` (${displayFail})`}
                     </button>
                   ))}
                 </div>
@@ -496,8 +499,8 @@ export default function DiscoveryBuckets() {
         {!queued.length ? (
           <Empty>
             No never-tested leftover names. Unique tested ({uniqueTested ?? tested.length})
-            is latest-eval-per-name
-            {logRows != null ? ` (${logRows} log rows)` : ""}
+            counts every tested name
+            {logRows != null ? ` (${logRows} in the display log)` : ""}
             {(counts?.rejected_parked ?? counts?.tested_fail ?? 0) > 0
               ? `. ${counts?.rejected_parked ?? counts?.tested_fail} already tested · rejected ${
                   (counts?.rejected_parked ?? counts?.tested_fail) === 1 ? "is" : "are"
