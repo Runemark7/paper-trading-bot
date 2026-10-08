@@ -52,7 +52,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from hedge_fund.paths import state_root
-from hedge_fund.trading.champions import load_graduated, load_pool, save_graduated, save_pool
+from hedge_fund.trading.champions import load_graduated, load_pool, retired_names, save_graduated, save_pool
 from hedge_fund.trading.constants import (
     DISCOVER_CYCLE_MAX_NAMES,
     DISCOVERY_REFILL_BATCH_SIZE,
@@ -335,6 +335,7 @@ def _plan_batch(max_names: int) -> tuple[list[str], list[str], list[str]]:
     grads = load_graduated()
     blocked = {c["name"] for c in (st.get("champions") or []) if c.get("name")}
     blocked |= {g["name"] for g in grads if isinstance(g, dict) and g.get("name")}
+    blocked |= retired_names()
     universe = discovery_universe()
     leftovers = untested_candidates(blocked, universe)
     log = load_discovery_log()

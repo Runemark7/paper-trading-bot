@@ -21,6 +21,7 @@ this file is the living topology.
 | **Prod** | k8s cycle sidecar | `DISCOVERY_ON_CYCLE=0` — live trading only (`run_isolated` → collect → report). Klines are the persistent BTC/ETH 5m tape at `state/live_tape/*.npy` (qualification span, incremental append), not a 300-bar tail. `GET /api/status` and `/api/summary` include `live_history` (bars and last bar time per symbol). Do not turn discovery back on in-cluster. UI: `/discovery`. |
 | **Farm Start/Stop** | `/discovery` → `POST /api/discovery/farm` | Same ingest token. Worker **idles** (does not exit). Start cannot relaunch a dead process. |
 | **Champion pool ops** | `POST /api/champions/retain` and `POST /api/champions/cull_undated` | Same ingest token. Explicit paper-ops exception: drop names from `champions.json` so `live_cycle` stops them. Does not delete trade DBs. `cull_undated` keeps only non-empty `champion_since`. |
+| **Retire** | `hedge_fund.trading.retire` (one-shot batch at server start) | Moves names that failed a named requalify batch from `champions.json` / `graduated.json` to `retired.json` (archive, not delete). Retired names never re-admit or re-mint. `GET /api/champions/retired`. |
 
 **Current walk-forward (full jensa 5m tape):**
 `QUAL_N_WINDOWS` = 23, `QUAL_WINDOW_DAYS` = 90, `QUAL_COVERAGE_DAYS` = 2070

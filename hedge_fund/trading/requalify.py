@@ -316,7 +316,7 @@ def _pnl_minus_bh(result: dict) -> float | None:
 
 def requalify_payload(batch_id: str | None = None) -> dict[str, Any]:
     """``GET /api/discovery/requalify``. Read-only; no lock."""
-    from hedge_fund.trading.champions import load_graduated, load_pool
+    from hedge_fund.trading.champions import load_graduated, load_pool, retired_names
 
     state = load_requalify_state()
     champs = {
@@ -325,6 +325,7 @@ def requalify_payload(batch_id: str | None = None) -> dict[str, Any]:
         if isinstance(row, dict)
     }
     grads = {row.get("name") for row in load_graduated() if isinstance(row, dict)}
+    retired = retired_names()
     rows: list[dict] = []
     counts = {"queued": 0, "leased": 0, "done": 0, "no_result": 0, "pass": 0, "fail": 0}
     for name, meta in state["names"].items():
@@ -340,7 +341,12 @@ def requalify_payload(batch_id: str | None = None) -> dict[str, Any]:
             "batch_id": meta.get("batch_id"),
             "status": status,
             "attempts": meta.get("attempts"),
-            "role": "champion" if name in champs else ("graduated" if name in grads else "tested_pass"),
+            "role": (
+                "champion" if name in champs
+                else "graduated" if name in grads
+                else "retired" if name in retired
+                else "tested_pass"
+            ),
         }
         if result is not None:
             row.update(result)
@@ -358,6 +364,7 @@ def requalify_payload(batch_id: str | None = None) -> dict[str, Any]:
         "results": rows,
         "note": (
             "Re-check only. Results never change discovery_log, fail-once, or the "
-            "champion pool. Nothing is retired automatically."
+            "champion pool. Retiring is a separate, named one-shot batch "
+            "(hedge_fund.trading.retire)."
         ),
     }

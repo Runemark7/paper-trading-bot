@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from hedge_fund.trading.champions import load_graduated, load_pool
+from hedge_fund.trading.champions import load_graduated, load_pool, retired_names
 from hedge_fund.trading.constants import (
     DISCOVERY_QUIET_SECONDS,
 )
@@ -157,7 +157,8 @@ def build_discovery_summary(*, lists: bool = True) -> dict:
     pool = load_pool()
     champs = [c.get("name") for c in (pool.get("champions") or []) if c.get("name")]
     grads = [g.get("name") for g in load_graduated() if g.get("name")]
-    blocked = set(champs) | set(grads)
+    retired = retired_names()
+    blocked = set(champs) | set(grads) | retired
 
     universe_static = generate_universe()
     extended = load_extended_names()
@@ -395,6 +396,7 @@ def build_discovery_summary(*, lists: bool = True) -> dict:
             "tested_index": len(tested_index),
             "champions": len(champs),
             "graduated": len(grads),
+            "retired": len(retired),
             "in_flight": len(flight_names) if show_flight else 0,
             "leased": len(lease_names),
             "workers": len(snap["workers"]),

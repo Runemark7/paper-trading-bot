@@ -32,7 +32,7 @@ from hedge_fund.backtest.stride import downsample
 from hedge_fund.paths import state_root
 from hedge_fund.signals.dynamic import parse_strategy
 from hedge_fund.trading.buy_and_hold import buy_and_hold_window_pnl
-from hedge_fund.trading.champions import load_graduated, load_pool, save_pool
+from hedge_fund.trading.champions import load_graduated, load_pool, retired_names, save_pool
 from hedge_fund.trading.discovery import (
     append_discovery_evaluation,
     clear_in_flight,
@@ -574,6 +574,7 @@ def replenish_and_evaluate(
     existing_names = {c["name"] for c in st["champions"]}.union(
         {g["name"] for g in grad_list}
     )
+    existing_names |= retired_names()
 
     qualified, all_eval = discover_and_qualify(batch_size=batch_size, **discover_kwargs)
     admitted = []

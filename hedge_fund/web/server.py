@@ -28,6 +28,7 @@ A small, dependency-free HTTP server (stdlib only) that exposes:
   POST /api/discovery/farm -> Start/Stop Windows farm (same ingest token)
   POST /api/champions/retain -> keep-list filter of champions.json (same ingest token)
   POST /api/champions/cull_undated -> drop missing champion_since (same ingest token)
+  GET /api/champions/retired -> archived (retired) champions + graduated rows
   POST /run             -> trigger a live decision cycle, then regenerate
   GET /health           -> liveness probe
 
@@ -482,6 +483,13 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(pool_status(read_only=True))
             except Exception as exc:
                 self._send_json({"error": str(exc), "champions": [], "count": 0}, 500)
+        elif route == "/api/champions/retired":
+            try:
+                from hedge_fund.trading.retire import retired_payload
+
+                self._send_json(retired_payload())
+            except Exception as exc:
+                self._send_json({"error": str(exc), "retired": [], "retired_count": 0}, 500)
         elif route == "/api/graduated":
             try:
                 from hedge_fund.trading.champions import load_graduated
@@ -760,6 +768,9 @@ def main():
     from hedge_fund.trading.requalify import start_requalify_autoseed
 
     start_requalify_autoseed()
+    from hedge_fund.trading.retire import start_auto_retire
+
+    start_auto_retire()
     httpd = ThreadingHTTPServer((args.host, args.port), Handler)
     print(f"paperbot dashboard service on http://{args.host}:{args.port}")
     try:

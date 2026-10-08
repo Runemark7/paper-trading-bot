@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from hedge_fund.paths import state_root
-from hedge_fund.trading.champions import load_graduated, load_pool
+from hedge_fund.trading.champions import load_graduated, load_pool, retired_names
 from hedge_fund.trading.constants import DISCOVERY_REFILL_BATCH_SIZE
 from hedge_fund.trading.discovery import (
     load_discovery_log,
@@ -241,6 +241,7 @@ def _blocked_names(log: list[dict]) -> set[str]:
     grads = load_graduated()
     blocked = {c["name"] for c in (st.get("champions") or []) if isinstance(c, dict) and c.get("name")}
     blocked |= {g["name"] for g in grads if isinstance(g, dict) and g.get("name")}
+    blocked |= retired_names()
     blocked |= tested_discovery_names(log)
     return blocked
 

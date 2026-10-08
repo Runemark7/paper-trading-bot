@@ -39,10 +39,12 @@ __all__ = [
     "infer_champion_since",
     "load_graduated",
     "load_pool",
+    "load_retired",
     "paper_beats_buy_and_hold",
     "pool_status",
     "promote_candidates",
     "retain_champions",
+    "retired_names",
     "save_graduated",
     "save_pool",
 ]
@@ -87,6 +89,37 @@ def save_pool(st: dict):
         if prev and prev.get("champion_since"):
             c["champion_since"] = prev["champion_since"]
     path.write_text(json.dumps(st, indent=2))
+
+
+def _retired_file() -> Path:
+    return state_root() / "retired.json"
+
+
+def load_retired() -> dict:
+    """Archive of retired champions / graduated rows. Never deleted.
+
+    ``{"retired": {name: row}, "applied": [batch_id], "batches": [...]}``.
+    A retired name is off the live book and blocked from auto re-admit and
+    re-mint, the same way a pooled or graduated name is.
+    """
+    path = _retired_file()
+    empty = {"retired": {}, "applied": [], "batches": []}
+    if not path.exists():
+        return empty
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return empty
+    if not isinstance(data, dict):
+        return empty
+    retired = data.get("retired") if isinstance(data.get("retired"), dict) else {}
+    applied = [b for b in (data.get("applied") or []) if isinstance(b, str)]
+    batches = [b for b in (data.get("batches") or []) if isinstance(b, dict)]
+    return {"retired": retired, "applied": applied, "batches": batches}
+
+
+def retired_names() -> set[str]:
+    return {n for n in load_retired()["retired"] if isinstance(n, str) and n}
 
 
 def load_graduated() -> list[dict]:
@@ -349,6 +382,7 @@ def promote_candidates(candidates: list[dict]) -> dict:
     st = load_pool()
     grad_list = load_graduated()
     existing = {c["name"] for c in st["champions"]}.union({g["name"] for g in grad_list})
+    existing |= retired_names()
 
     added = []
     for cand in candidates:
@@ -463,5 +497,6 @@ def pool_status(*, read_only: bool = False) -> dict:
         "evaluation_limit": TRADE_EVALUATION_LIMIT,
         "graduated_count": len(grad),
         "graduated": grad,
+        "retired_count": len(retired_names()),
         "synced_until": st.get("synced_until") or None,
     })

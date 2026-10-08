@@ -31,6 +31,7 @@ forward. To restrict, pass `--host 127.0.0.1`.
 | POST   | `/api/discovery/farm` | Start (`enabled=true`) / Stop (`enabled=false`) the discovery farm. **Authenticated** — same `PAPER_DISCOVERY_INGEST_TOKEN` as ingest (`Authorization: Bearer`, `X-Discovery-Token`, or `X-Paper-Discovery-Token`). No/wrong token → 401. Unset token → 503. Not an open toggle. Durable `state/discovery_farm.json` flag — does not kill the worker. |
 | POST   | `/api/champions/retain` | Body `{ "keep": ["name", ...] }`. Keep only those names in `champions.json`; drop the rest from the active pool. Same ingest token. Does not delete trade DBs. |
 | POST   | `/api/champions/cull_undated` | Keep only champions with a non-empty persisted `champion_since` (UI "before dating" / missing since). Same ingest token. Does not infer dates or delete trade DBs. |
+| GET    | `/api/champions/retired` | Read-only archive of retired champions / graduated rows (`retired.json`): reason, batch id, requalify numbers, closed / P&L. Retired accounts are off the live book; their trade DBs stay on disk. |
 | GET    | `/api/trades`  | Recent closed trades                              |
 | POST   | `/run`         | Trigger one live paper cycle, then regenerate      |
 | GET    | `/health`      | Liveness probe                                     |
