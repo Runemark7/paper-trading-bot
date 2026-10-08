@@ -21,7 +21,6 @@ from hedge_fund.trading.constants import (
 )
 from hedge_fund.trading.discovery import (
     evals_on_utc_date,
-    failed_discovery_names,
     latest_eval_per_strategy,
     load_discovery_log,
     newest_eval,
@@ -33,7 +32,8 @@ from hedge_fund.trading.discovery_mode import discovery_on_cycle
 from hedge_fund.trading.farm import farm_status_block
 from hedge_fund.trading.leases import lease_snapshot, load_refill_status
 from hedge_fund.trading.refill import load_extended_names
-from hedge_fund.trading.tested_index import ensure_tested_index, load_tested_index
+from hedge_fund.trading.discovery_results import page_result_records, peek_result_counts
+from hedge_fund.trading.tested_index import ensure_tested_index, merge_tested_rows
 from hedge_fund.trading.universe import generate_universe, untested_candidates
 from hedge_fund.web.status import _iso, _pipeline_block
 from hedge_fund.web.ttl_cache import StaleCache
@@ -42,6 +42,41 @@ from hedge_fund.web.ttl_cache import StaleCache
 def compact_query(value: str | None) -> bool:
     """True for ``?compact=1`` / true / yes — UI polls that must not ship lists."""
     return str(value or "").strip().lower() in ("1", "true", "yes")
+
+
+def _query_int(value: str | None, *, default: int, name: str, lo: int, hi: int) -> int:
+    if value is None or str(value).strip() == "":
+        return default
+    try:
+        number = int(str(value).strip())
+    except (TypeError, ValueError):
+        raise ValueError(f"{name} must be an integer") from None
+    if number < lo or number > hi:
+        raise ValueError(f"{name} must be between {lo} and {hi}")
+    return number
+
+
+def discovery_results_response(qs: dict | None = None) -> dict:
+    """GET /api/discovery/results — paged uncapped records. Read-only."""
+    query = qs or {}
+    raw_status = str(query.get("status") or "").strip().lower()
+    status = raw_status or None
+    if status not in (None, "pass", "fail"):
+        raise ValueError("status must be pass or fail")
+    offset = _query_int(query.get("offset"), default=0, name="offset", lo=0, hi=1_000_000_000)
+    limit = _query_int(query.get("limit"), default=100, name="limit", lo=1, hi=1000)
+    rows, total, counts = page_result_records(offset=offset, limit=limit, status=status)
+    return {
+        "paper_only": True,
+        "offset": offset,
+        "limit": limit,
+        "total": total,
+        "status": status,
+        "unique": counts["unique"],
+        "tested_pass": counts["tested_pass"],
+        "tested_fail": counts["tested_fail"],
+        "results": rows,
+    }
 
 
 def _eval_row(row: dict) -> dict:
@@ -112,7 +147,7 @@ def _with_live_strategy(summary: dict) -> dict:
 
 def build_discovery_summary(*, lists: bool = True) -> dict:
     now = datetime.now(timezone.utc)
-    ensure_tested_index()
+    index = ensure_tested_index()
     pipeline = _pipeline_block(now)
     stamp_in_progress = bool(pipeline.get("stamp_says_in_progress"))
     stamp_stale = bool(pipeline.get("stale"))
@@ -129,19 +164,34 @@ def build_discovery_summary(*, lists: bool = True) -> dict:
     universe = sorted(set(universe_static) | set(extended))
     log = load_discovery_log()
     latest = latest_eval_per_strategy(log)
-    tested_names = {r.get("strategy") for r in latest if r.get("strategy")}
-    tested_pass = sum(1 for r in latest if r.get("qualified"))
-    tested_fail = len(latest) - tested_pass
+    flags = dict(index)
+    merge_tested_rows(flags, log)
+    published = peek_result_counts()
+    if published is not None:
+        tested_pass = published["tested_pass"]
+        tested_fail = published["tested_fail"]
+        unique_tested = published["unique"]
+    else:
+        tested_pass = sum(1 for row in latest if row.get("qualified"))
+        tested_fail = len(latest) - tested_pass
+        unique_tested = len(latest)
+    tested_names = set(flags)
     tested = (
         _sort_tested_newest_first([_eval_row(r) for r in latest]) if lists else []
     )
 
     leftovers = untested_candidates(blocked, universe)
-    failed_names = failed_discovery_names(log)
+    failed_names = {name for name, qual in flags.items() if not qual}
+    for row in log:
+        if not isinstance(row, dict):
+            continue
+        name = row.get("strategy")
+        if name and not row.get("qualified"):
+            failed_names.add(name)
     queued = [n for n in leftovers if n not in tested_names and n not in failed_names]
     rejected_parked = [n for n in leftovers if n in failed_names]
     eligible = prioritize_leftovers(leftovers, log, now=now)
-    tested_index = load_tested_index()
+    tested_index = flags
     refill_state = load_refill_status()
     from hedge_fund.trading.atom_lift import peek_refill_strategy
 
@@ -334,8 +384,8 @@ def build_discovery_summary(*, lists: bool = True) -> dict:
             "universe": len(universe),
             "tested_pass": tested_pass,
             "tested_fail": tested_fail,
-            "tested": len(latest),
-            "unique_tested": len(latest),
+            "tested": unique_tested,
+            "unique_tested": unique_tested,
             "log_rows": len(log),
             "untested": len(queued),
             "leftovers": len(leftovers),
@@ -365,7 +415,11 @@ def build_discovery_summary(*, lists: bool = True) -> dict:
             "graduated.json, and (when the tournament stamp is started) "
             "discovery_in_flight.json. Active claim leases are discovery_leases.json. "
             "counts.tested is unique strategy names "
-            "(latest eval per name), not the number of log rows. "
+            "from the discovery_results.ix header when that file exists "
+            "(a 24-byte read; the results log is not re-parsed). "
+            "Until the header exists, totals follow the display log. "
+            "log_rows is that display tail. "
+            "GET /api/discovery/results seeks one page and does not load the file. "
             "Already tested · rejected is parked forever — not a cooldown "
             "retest queue. Skip/dedupe reads discovery_tested.json (uncapped); "
             "discovery_log.json stays a capped display. "

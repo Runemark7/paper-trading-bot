@@ -3,8 +3,11 @@
 Last-known files, not a job runner. Tournament appends one evaluation to
 ``discovery_log.json`` as soon as that name finishes (newest-first, capped).
 Skip / fail-once does **not** read that cap: each append also records the
-name in ``discovery_tested.json`` (uncapped, qualified flag) before old
-display rows are trimmed. A non-qualified eval parks that name forever —
+name in ``discovery_tested.json`` (uncapped qualified flag, slim metrics)
+before old display rows are trimmed. The full row is appended to
+``discovery_results.jsonl`` after that lock is released. A background
+thread backfills older rows and does not take the discovery lock.
+A non-qualified eval parks that name forever —
 no cooldown retest.
 ``discovery_in_flight.json`` lists this cycle's budget names and shrinks as
 they complete. ``discovery_cursor.json`` remembers where the leftover drain
@@ -25,7 +28,6 @@ from hedge_fund.trading.store import paper_state_lock
 from hedge_fund.trading.tested_index import (
     flags_for_skip,
     load_index_and_metrics,
-    load_tested_index,
     merge_tested_metrics,
     merge_tested_rows,
     save_tested_index,
@@ -130,8 +132,9 @@ def evals_on_utc_date(log: list[dict], day: datetime | None = None) -> int:
 def append_discovery_evaluations(eval_records: list[dict], *, cap: int = DISCOVERY_LOG_CAP) -> list[dict]:
     """Prepend records (newest-first) and cap the display log.
 
-    The tested-name index is updated from the pre-trim list, so a name
-    that falls off the display cap stays skipped.
+    The tested-name index is updated from the pre-trim list under the
+    discovery lock, so a name that falls off the display cap stays skipped.
+    Full records for this batch are appended after the lock is released.
     """
     if not eval_records:
         return load_discovery_log()
@@ -147,7 +150,16 @@ def append_discovery_evaluations(eval_records: list[dict], *, cap: int = DISCOVE
             save_tested_index(index, metrics)
         log = log[:cap]
         path.write_text(json.dumps(log, separators=(",", ":")))
-        return log
+        saved = log
+    from hedge_fund.trading.discovery_results import sync_discovery_results
+
+    fresh = {
+        row.get("strategy")
+        for row in eval_records
+        if isinstance(row, dict) and isinstance(row.get("strategy"), str)
+    }
+    sync_discovery_results(eval_records, fresh=fresh)
+    return saved
 
 
 def append_discovery_evaluation(record: dict, *, cap: int = DISCOVERY_LOG_CAP) -> list[dict]:
@@ -158,8 +170,9 @@ def append_discovery_evaluation(record: dict, *, cap: int = DISCOVERY_LOG_CAP) -
 def save_discovery_log(log: list[dict]) -> None:
     """Rewrite discovery_log.json in place (requalify / force-admit flips).
 
-    Qualified flags in the tested-name index follow the saved rows. Names
-    that are only in the index (trimmed off the display log) stay.
+    Qualified flags follow the saved rows. Full records for those names
+    are appended when the eval changed, after the discovery lock is
+    released. Names that are only in the index stay for the backfill.
     """
     with paper_state_lock("discovery"):
         path = discovery_log_path()
@@ -170,6 +183,9 @@ def save_discovery_log(log: list[dict]) -> None:
         metrics_changed = merge_tested_metrics(metrics, log)
         if flags_changed or metrics_changed:
             save_tested_index(index, metrics)
+    from hedge_fund.trading.discovery_results import sync_discovery_results
+
+    sync_discovery_results(log)
 
 
 def write_in_flight(

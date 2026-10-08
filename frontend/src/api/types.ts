@@ -198,7 +198,9 @@ export interface DiscoveryCounts {
   tested_pass: number;
   tested_fail: number;
   tested: number;
+  /** Uncapped unique count from the results index header when published. */
   unique_tested?: number;
+  /** Capped display-log length. Totals do not use this. */
   log_rows?: number;
   untested: number;
   leftovers?: number;
@@ -211,7 +213,7 @@ export interface DiscoveryCounts {
   leased?: number;
   workers?: number;
   evals_today?: number;
-  /** Uncapped tested-name index. The display log stays capped. */
+  /** Uncapped tested-name index (dedupe). Pass/fail totals use the results header. */
   tested_index?: number;
 }
 
