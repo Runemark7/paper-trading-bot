@@ -912,7 +912,10 @@ class ProtocolAmendmentTests(unittest.TestCase):
         te = (REPO / "scripts" / "tournament_engine.py").read_text()
         self.assertIn("window_size * n_windows", te)
         worker = (REPO / "scripts" / "discovery_worker.py").read_text()
-        self.assertIn("qual_keep_bars(n_windows=n_windows)", worker)
+        # Amendment 2026-10-08 18:08: tiled OOS segments over every bar since
+        # QUAL_CANONICAL_START_MS (store budget grows; segments fixed by ts).
+        self.assertIn("qual_store_bars()", worker)
+        self.assertIn("tiled=True", worker)
 
     def test_amendment_2026_09_14_indicator_warmup(self):
         from hedge_fund.trading.constants import (

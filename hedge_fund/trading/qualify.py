@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 
 from hedge_fund.trading.buy_and_hold import daily_returns_sharpe
 from hedge_fund.trading.constants import (
+    GATE_RULES,
     MIN_BACKTEST_SHARPE,
     MIN_BACKTEST_TRADES,
     QUAL_N_WINDOWS,
@@ -245,6 +246,10 @@ def requalify_parked_log(
         if name in existing_names:
             continue
         if is_ops_park_record(row):
+            continue
+        # A row measured under older rules (other windows / exits / benchmark)
+        # is never re-decided into a pass under the current ones.
+        if row.get("gate_rules") != GATE_RULES:
             continue
         decision = qualification_from_record(row, expected_windows=expected_windows)
         if not decision["passed"]:

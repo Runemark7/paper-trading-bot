@@ -39,6 +39,13 @@ REQUALIFY_AUTO_BATCH = "gate23-20261008"
 RULES_V2_BATCH = "rules-v2-nearmiss-20261008"
 RULES_V2_NAMES_FILE = Path(__file__).with_name("requalify_rules_v2_names.json")
 RULES_V2_ROLE = "rules_v2_candidate"
+# Alexander, 2026-10-08 18:08 (option b, tiled OOS segments): the same 448
+# names once more under GATE_RULES "..._tiled87_...". Seeded at startup;
+# claim hands names only to a worker on the current tag, so the batch waits
+# for the laptop to pull + restart. Re-check only.
+RULES_V3_BATCH = "rules-v3-tiled-20261008"
+RULES_V3_ROLE = "rules_v3_candidate"
+_BATCH_ROLES = {RULES_V2_BATCH: RULES_V2_ROLE, RULES_V3_BATCH: RULES_V3_ROLE}
 MAX_ATTEMPTS = 3
 MAX_BATCH_NAMES = 2000
 _BATCH_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
@@ -237,11 +244,23 @@ def ensure_rules_v2_batch_unlocked(now: datetime) -> bool:
     return True
 
 
+def ensure_rules_v3_batch_unlocked(now: datetime) -> bool:
+    """Seed ``RULES_V3_BATCH`` (same names as v2) once. Caller holds the lock."""
+    state = load_requalify_state()
+    if RULES_V3_BATCH in state["seeded"]:
+        return False
+    _enqueue_unlocked(state, RULES_V3_BATCH, rules_v2_batch_names(), now)
+    state["seeded"].append(RULES_V3_BATCH)
+    save_requalify_state(state)
+    return True
+
+
 # Startup one-shots, in order. Each records its id in ``seeded`` and never
 # runs again. None of them admits, retires or touches fail-once.
 STARTUP_BATCHES = (
     (REQUALIFY_AUTO_BATCH, ensure_auto_batch_unlocked),
     (RULES_V2_BATCH, ensure_rules_v2_batch_unlocked),
+    (RULES_V3_BATCH, ensure_rules_v3_batch_unlocked),
 )
 
 
@@ -400,8 +419,7 @@ def requalify_payload(batch_id: str | None = None) -> dict[str, Any]:
                 "champion" if name in champs
                 else "graduated" if name in grads
                 else "retired" if name in retired
-                else RULES_V2_ROLE if meta.get("batch_id") == RULES_V2_BATCH
-                else "tested_pass"
+                else _BATCH_ROLES.get(meta.get("batch_id"), "tested_pass")
             ),
         }
         if result is not None:

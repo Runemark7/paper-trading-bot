@@ -38,7 +38,7 @@
         "daily_sharpe": 12.844,
         "bh_daily_sharpe": 10.961,
         "avg_hold_hours": 5.84,
-        "gate_rules": "sltp_cap100_bhdsr_20261008",
+        "gate_rules": "sltp_cap100_bhdsr_tiled87_20261008",
         "fail_reasons": [
           "oos_pnl 4047.49 <= sma_stack 13153.61"
         ],
@@ -295,7 +295,7 @@
         "daily_sharpe": 8.884,
         "bh_daily_sharpe": 10.961,
         "avg_hold_hours": 6.99,
-        "gate_rules": "sltp_cap100_bhdsr_20261008",
+        "gate_rules": "sltp_cap100_bhdsr_tiled87_20261008",
         "fail_reasons": [
           "oos_trades 16 < 30",
           "daily_sharpe 8.88 <= bh_daily_sharpe 10.96",
@@ -554,7 +554,7 @@
         "daily_sharpe": 8.884,
         "bh_daily_sharpe": 10.961,
         "avg_hold_hours": 6.99,
-        "gate_rules": "sltp_cap100_bhdsr_20261008",
+        "gate_rules": "sltp_cap100_bhdsr_tiled87_20261008",
         "fail_reasons": [
           "oos_trades 16 < 30",
           "daily_sharpe 8.88 <= bh_daily_sharpe 10.96",
@@ -813,7 +813,7 @@
         "daily_sharpe": 8.732,
         "bh_daily_sharpe": 10.961,
         "avg_hold_hours": 6.42,
-        "gate_rules": "sltp_cap100_bhdsr_20261008",
+        "gate_rules": "sltp_cap100_bhdsr_tiled87_20261008",
         "fail_reasons": [
           "oos_trades 14 < 30",
           "daily_sharpe 8.73 <= bh_daily_sharpe 10.96",
@@ -1072,7 +1072,7 @@
         "daily_sharpe": 15.113,
         "bh_daily_sharpe": 10.961,
         "avg_hold_hours": 6.39,
-        "gate_rules": "sltp_cap100_bhdsr_20261008",
+        "gate_rules": "sltp_cap100_bhdsr_tiled87_20261008",
         "fail_reasons": [
           "oos_pnl 13153.61 <= sma_stack 13153.61"
         ],

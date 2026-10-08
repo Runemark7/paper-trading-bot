@@ -26,6 +26,7 @@ equity, and beat-B&H compares daily-equity Sharpe (``GATE_RULES``).
 """
 from __future__ import annotations
 
+import bisect
 import json
 import time
 from datetime import datetime, timezone
@@ -58,12 +59,17 @@ from hedge_fund.trading.constants import (
     GATE_RULES,
     PAPER_START_CASH,
     QUAL_N_WINDOWS,
+    QUAL_OOS_START_MS,
+    QUAL_SEGMENT_MS,
     QUAL_STRIDE,
     QUAL_SYMBOLS,
     QUAL_TIMEFRAME,
+    QUAL_TRAIN_BARS,
     QUAL_WARMUP_BARS,
     QUAL_WINDOW_BARS,
     RISK_POLICY,
+    TF_MS_5M,
+    qual_store_bars,
     TRADE_EVALUATION_LIMIT,
 )
 from hedge_fund.trading.discovery_guard import (
@@ -170,19 +176,81 @@ def _prepare_sample(w_sample: dict, warmup_len: int) -> dict:
     return prepared
 
 
+def _tiled_slices(
+    data: dict,
+    n_windows: int = QUAL_N_WINDOWS,
+    *,
+    oos_start_ms: int = QUAL_OOS_START_MS,
+    segment_ms: int = QUAL_SEGMENT_MS,
+    train_bars: int = QUAL_TRAIN_BARS,
+    warmup_bars: int = QUAL_WARMUP_BARS,
+    tf_ms: int = TF_MS_5M,
+) -> list[dict]:
+    """Tiled OOS segments anchored to ``oos_start_ms`` (amendment 2026-10-08 18:08).
+
+    Segment ``k`` scores bars with ts in ``[oos_start + k*segment, +segment)``;
+    the last segment runs to the tape end. Segments touch end to end and never
+    overlap. Each slice is ``warmup_bars`` of indicator seed, then
+    ``train_bars`` of train (logged, never gated), then the OOS segment, all
+    located by timestamp, so extra history at the front or a new day at the
+    back never moves an earlier segment. Raises ``ValueError`` if the tape
+    does not cover segment 0's lead-in or does not reach the last segment.
+    """
+    bs.clear_qual_caches()
+    _SPLIT_MEMO.clear()
+    n = int(n_windows)
+    lead_ms = (int(train_bars) + int(warmup_bars)) * int(tf_ms)
+    train_ms = int(train_bars) * int(tf_ms)
+    last_start = int(oos_start_ms) + (n - 1) * int(segment_ms)
+    stamps: dict[str, list[int]] = {}
+    for sym, rows in data.items():
+        if not rows:
+            raise ValueError(f"{sym}: empty tape")
+        ts = [int(r[0]) for r in rows]
+        if ts[0] > int(oos_start_ms) - lead_ms:
+            raise ValueError(f"{sym}: tape starts after segment 0 lead-in")
+        if ts[-1] < last_start:
+            raise ValueError(f"{sym}: tape ends before the last OOS segment")
+        stamps[sym] = ts
+    slices = []
+    for k in range(n):
+        start = int(oos_start_ms) + k * int(segment_ms)
+        end = None if k == n - 1 else start + int(segment_ms)
+        w_sample = {}
+        for sym, rows in data.items():
+            ts = stamps[sym]
+            i_lead = bisect.bisect_left(ts, start - lead_ms)
+            i_train = bisect.bisect_left(ts, start - train_ms)
+            i_oos = bisect.bisect_left(ts, start)
+            i_end = len(ts) if end is None else bisect.bisect_left(ts, end)
+            closes, highs, lows = _ohlc(rows[i_lead:i_end])
+            w_sample[sym] = (closes, highs, lows, i_train - i_lead, i_oos - i_lead)
+        slices.append(w_sample)
+    return slices
+
+
 def _window_slices(
     data: dict,
     window_size: int,
     n_windows: int,
     stride: int,
     warmup_bars: int | None = None,
+    *,
+    tiled: bool = False,
 ) -> list[dict]:
-    """End-aligned scored windows, each prefixed with prior ``warmup_bars``.
+    """Walk-forward slices. ``tiled=True`` is the production layout.
 
-    Scored span is the last ``min(len, window_size * n_windows)`` bars.
-    Warm-up is clipped at tape start so the first window may be partial.
-    ``warmup_bars=0`` restores isolated-window slices (no pad).
+    ``tiled=True``: ``_tiled_slices`` (contiguous OOS segments anchored to
+    ``QUAL_OOS_START_MS``; ``window_size``/``stride``/``warmup_bars`` unused).
+
+    Legacy (tests/fixtures only): end-aligned scored windows, each prefixed
+    with prior ``warmup_bars``. Scored span is the last
+    ``min(len, window_size * n_windows)`` bars. Warm-up is clipped at tape
+    start so the first window may be partial. ``warmup_bars=0`` restores
+    isolated-window slices (no pad).
     """
+    if tiled:
+        return _tiled_slices(data, n_windows)
     # New list identities; drop caches so id() reuse cannot serve stale series.
     bs.clear_qual_caches()
     _SPLIT_MEMO.clear()
@@ -481,11 +549,18 @@ def discover_and_qualify(
     still run ``run_isolated`` in the same 300s tick. ``batch_size`` is a
     leftover-prefix test hook, not a random sample of 30.
     """
-    data = _load_qual_history(keep_bars=window_size * n_windows + QUAL_WARMUP_BARS)
+    data = _load_qual_history(keep_bars=qual_store_bars())
     if not data:
         return [], []
 
-    window_slices = _window_slices(data, window_size, n_windows, stride)
+    # Production defaults use the tiled OOS layout. A custom window size or
+    # count is a test hook and keeps the legacy end-aligned slices.
+    tiled = window_size == QUAL_WINDOW_BARS and n_windows == QUAL_N_WINDOWS
+    try:
+        window_slices = _window_slices(data, window_size, n_windows, stride, tiled=tiled)
+    except ValueError as exc:
+        print(f"discover_and_qualify: {exc}", flush=True)
+        return [], []
     del data
     if len(window_slices) != n_windows:
         return [], []

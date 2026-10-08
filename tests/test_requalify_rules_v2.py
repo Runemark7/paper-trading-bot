@@ -61,7 +61,8 @@ class BundledNamesTests(unittest.TestCase):
     def test_bundle_is_stamped_with_current_rules(self):
         path = Path(__file__).resolve().parents[1] / "hedge_fund/trading/requalify_rules_v2_names.json"
         data = json.loads(path.read_text())
-        self.assertEqual(data["gate_rules"], GATE_RULES)
+        # Built under rules v2; the v3 (tiled) batch re-uses the same names.
+        self.assertEqual(data["gate_rules"], "sltp_cap100_bhdsr_20261008")
         self.assertEqual(data["batch_id"], "rules-v2-nearmiss-20261008")
 
     def test_every_name_parses(self):
@@ -229,14 +230,15 @@ class RulesV2BatchTests(unittest.TestCase):
         from hedge_fund.trading.requalify import (
             REQUALIFY_AUTO_BATCH,
             RULES_V2_BATCH,
+            RULES_V3_BATCH,
             load_requalify_state,
             run_requalify_startup_batches,
         )
 
         first = run_requalify_startup_batches(self.t0)
-        self.assertEqual(first, [REQUALIFY_AUTO_BATCH, RULES_V2_BATCH])
+        self.assertEqual(first, [REQUALIFY_AUTO_BATCH, RULES_V2_BATCH, RULES_V3_BATCH])
         self.assertEqual(run_requalify_startup_batches(self.t0), [])
-        self.assertEqual(len(load_requalify_state()["batches"]), 2)
+        self.assertEqual(len(load_requalify_state()["batches"]), 3)
 
 
 if __name__ == "__main__":

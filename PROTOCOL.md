@@ -1222,3 +1222,17 @@ This amendment does not rewrite original §§ 1–8 or prior amendments. Alexand
 **Stale workers.** `POST /api/discovery/claim` gives no names to a worker that does not send the current `gate_rules` (response `stale_rules: true`), and ingest rejects rows without it (no log row, no admit). A farm checkout must `git pull` and restart `discovery_worker` to keep evaluating.
 
 **Fail-once.** Names already in the tested index keep their old-engine verdict and are not re-evaluated by the farm. Re-testing them under these rules needs a separate, explicit decision.
+
+### Amendment 2026-10-08 — tiled OOS segments anchored to the tape start
+
+Alexander, 2026-10-08 18:08 (option b). The 23 walk-forward windows were end-aligned, and only the last 27 days of each 90-day window were OOS. Each new UTC day slid every OOS chunk, so B&H daily Sharpe on the same history swung from −0.66 to 2.72 (sd 0.80) across 91 consecutive end dates.
+
+- OOS segments are now contiguous, non-overlapping, and tile the tape end to end. Boundaries are fixed timestamps: segment *k* = `[2021-04-20 + 87d·k, +87d)` UTC for k = 0..21. Segment 22 runs from 2026-07-17 to the tape end, so a new day only extends it. `QUAL_N_WINDOWS` stays 23.
+- 87d instead of 90d because 23 × 90d plus the lead-in does not fit in the shared store, which starts 2021-01-23.
+- Each segment is preceded by `QUAL_TRAIN_BARS` = 18144 (63d of train, logged and never gated). Before that come `QUAL_WARMUP_BARS` = 4032 (14d indicator seed). Everything is strictly before the segment's OOS start, so there is no lookahead. Scoring is on OOS only.
+- The shared tape is cut by timestamp at `QUAL_CANONICAL_START_MS` (2021-01-26, a week before the 2021-02-02 lead-in) instead of keeping the last N bars. The live-tape store budget grows one bar per 5 minutes (`qual_store_bars()`), so the front never falls off.
+- B&H and the strategy are measured on the same OOS days. Daily-equity Sharpe uses √365 across all segments' days; days flat in cash are zero returns.
+- Thresholds unchanged: trades ≥ 30, gate Sharpe ≥ 0.30, beat sma_stack, beat B&H daily-equity Sharpe, fail-once. Exits, notional cap, fees, sizing and mint bans also unchanged. OOS now covers ~1,998 days instead of 621, so trade counts are about 3× larger against the same 30-trade floor.
+- `GATE_RULES` = `sltp_cap100_bhdsr_tiled87_20261008`. Stale workers get no claims, and their rows are refused. Parked rows from older rules are never re-decided into a pass.
+- Requalify batch `rules-v3-tiled-20261008` re-checks the same 448 names once a current-tag worker claims them. It never admits or retires.
+- When segment 22 grows past 2 × 87d (2027-01-07), add segment 23 with a rules bump.
