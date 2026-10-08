@@ -54,7 +54,7 @@ Honesty contract: [PROTOCOL.md](../PROTOCOL.md).
 
 ```mermaid
 flowchart TB
-  recipe["Mint: hedge_fund/trading/refill.py\nisland densify #2c first (h1 x mom_18 x rsi_14_>45)\nthen deprioritized island densify #2b (h4 x mom)\nthen drained undry (sma_abv_40 / rsi_14_>60)\nthen drained winner 3-atoms (no mom AND dip)\nthen 4-7 atom admit stacks (RSI/continuation)\nthen HTF×mom 2-atom + leftover structure"]
+  recipe["Mint: hedge_fund/trading/refill.py\nliterature undry #3 first (slow h4 SMA/EMA 150-450 x dip 8h-60h 6-18%)\nthen island densify #2c (h1 x mom_18 x rsi_14_>45)\nthen deprioritized island densify #2b (h4 x mom)\nthen drained undry (sma_abv_40 / rsi_14_>60)\nthen drained winner 3-atoms (no mom AND dip)\nthen 4-7 atom admit stacks (RSI/continuation)\nthen HTF×mom 2-atom + leftover structure"]
   ext["state/discovery_extended.json"]
   recipe --> ext
 
@@ -159,7 +159,9 @@ are SMA twins of the winning EMA island (distinct from ema; no
 `h1_sma_abv_18` — 18→20). Long-only book:
 HTF sellers → no new long (flat), not short. When HTF says buyers
 and 5m is in a dip, that is buy-the-dip; disagree → HTF wins
-(no long). Recipe emits **island densify #2c first**
+(no long). Recipe emits **literature undry #3 first**
+(`LITDIP_*`: `dip_{8h-60h}_lt{6-18}pc` × slow `h4_{sma,ema}_abv_{150-450}`,
+2 atoms, no mom) then **island densify #2c**
 (h1 × `mom_18b_gt2pc` × `rsi_14_>45`, gap MAs including `sma_abv_35`)
 then deprioritized island densify #2b
 (h4 twins of `mom_18b_gt2pc` × `sma_abv_30` / `ema_abv_30` ×
@@ -191,7 +193,7 @@ OOS gates are unchanged.
 ```mermaid
 flowchart TB
   shipped["SHIPPED v1 + densify + 2026-09-14 neighbors + unused:\nh1_ema_abv_12/15/18/20/24/30/36/40/50/60/70\nh1_sma_abv_12/15/20/24/30/36/40/50/60/70\nh4_ema_abv_12/15/20/24/30/36/40/48/60\nh4_sma_abv_12/15/20/24/30/36/40/50"]
-  order["island densify #2c first:\nh1 x mom_18b_gt2pc x rsi_14_>45 / sma_abv_35\nthen deprioritized island densify #2b:\nh4 x mom_18/24 x sma_abv_30 / ema_abv_30 x rsi_14_>50\nthen dual h1+h4 5-7 (no mom AND dip)\nthen drained undry:\nHTF x mom_18/24 x sma_abv_40 / ema_abv_40 / rsi_14_>60\nthen drained sma_abv_30 / rsi_55 (no mom AND dip)\nthen 4-7 atom role-bucket stacks\n(depth 4-5 continuation / RSI; no dip on mom spine)\nthen mom-before-dip:\nHTF x mom 2-atom only vs expensive structure\nthen HTF x dip 2-atom"]
+  order["literature undry #3 first:\nslow h4 SMA/EMA 150-450 x capitulation dip (no mom)\nthen island densify #2c:\nh1 x mom_18b_gt2pc x rsi_14_>45 / sma_abv_35\nthen deprioritized island densify #2b:\nh4 x mom_18/24 x sma_abv_30 / ema_abv_30 x rsi_14_>50\nthen dual h1+h4 5-7 (no mom AND dip)\nthen drained undry:\nHTF x mom_18/24 x sma_abv_40 / ema_abv_40 / rsi_14_>60\nthen drained sma_abv_30 / rsi_55 (no mom AND dip)\nthen 4-7 atom role-bucket stacks\n(depth 4-5 continuation / RSI; no dip on mom spine)\nthen mom-before-dip:\nHTF x mom 2-atom only vs expensive structure\nthen HTF x dip 2-atom"]
   mintOnly["AND into refill recipe only\nnew names in discovery_extended.json"]
   sameEval["Same 5m walk-forward + rm_v1\n23 x 90d + 14d pad"]
   sameGate["Same frozen OOS gates\nin qualify.py"]

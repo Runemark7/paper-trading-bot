@@ -103,6 +103,24 @@ from hedge_fund.trading.universe import (
 )
 
 
+# 2026-10-08: literature undry #3 (``LITDIP_*``) is the recipe prefix.
+# Older amendment tests pin the pre-#3 stream, so they read the recipe
+# without that prefix and treat its names as already taken.
+from hedge_fund.trading.refill import iter_lit_trend_dip_names as _iter_lit
+
+_LIT_NAMES = frozenset(_iter_lit())
+
+
+def _legacy_recipe_names():
+    from hedge_fund.trading.refill import iter_recipe_names as _iter
+
+    return (n for n in _iter() if n not in _LIT_NAMES)
+
+
+def _with_lit(taken):
+    return set(taken) | _LIT_NAMES
+
+
 _STRUCTURE_MARKERS = (
     "don_hi_",
     "don_lo_",
@@ -241,7 +259,7 @@ def _snapshot_2026_09_12_wide_two_atoms(ns: tuple[int, ...] | None = None) -> li
 def _snapshot_htf_regime() -> list[str]:
     from hedge_fund.trading.refill import _regime_ands
 
-    return list(_regime_ands())
+    return [n for n in _regime_ands() if n not in _LIT_NAMES]
 
 
 _PRE_2026_09_14_REGIME_ATOMS: tuple[str, ...] = (
@@ -351,7 +369,7 @@ def _snapshot_2026_09_12_morning(ns: tuple[int, ...] | None = None) -> list[str]
 
 class RecipeBoundsTests(unittest.TestCase):
     def test_recipe_is_finite_and_not_tens_of_thousands(self):
-        names = list(iter_recipe_names())
+        names = list(_legacy_recipe_names())
         self.assertGreater(len(names), 1500)
         self.assertLessEqual(len(names), 8000)
         self.assertEqual(STRUCTURE_NS, STRUCTURE_NS_THROUGH_96)
@@ -633,7 +651,7 @@ class RecipeBoundsTests(unittest.TestCase):
         highs = [101.0] * n_bars
         lows = [99.0] * n_bars
         seen = set()
-        for name in iter_recipe_names():
+        for name in _legacy_recipe_names():
             self.assertTrue(name_is_parseable(name), msg=name)
             self.assertFalse(name_is_refused(name), msg=name)
             self.assertTrue(_has_mint_tag(name), msg=name)
@@ -650,7 +668,7 @@ class RecipeBoundsTests(unittest.TestCase):
             eval_predicate(parse_strategy(name), closes, None, highs=highs, lows=lows)
 
     def test_recipe_includes_unused_near_level_ands(self):
-        names = list(iter_recipe_names())
+        names = list(_legacy_recipe_names())
         # Longer unused lookbacks (7h / 8h on 5m).
         self.assertIn("dip_6b_lt2pc&don_lo_84", names)
         self.assertIn("mom_12b_gt3pc&don_hi_96", names)
@@ -674,7 +692,7 @@ class RecipeBoundsTests(unittest.TestCase):
             self.assertNotIn(needle, blob)
 
     def test_recipe_does_not_mint_structure_lookbacks_above_96(self):
-        names = list(iter_recipe_names())
+        names = list(_legacy_recipe_names())
         self.assertEqual(STRUCTURE_NS, STRUCTURE_NS_THROUGH_96)
         self.assertEqual(max(STRUCTURE_NS), DEFAULT_STRUCTURE_LOOKBACK_MAX)
         for name in names:
@@ -690,7 +708,7 @@ class RecipeBoundsTests(unittest.TestCase):
         self.assertFalse(any("dbl_bot_168" in n for n in names))
 
     def test_recipe_includes_longer_lookbacks_and_leftover_ands(self):
-        names = list(iter_recipe_names())
+        names = list(_legacy_recipe_names())
         # Mint stops at 96 (farm ops cap). Leftover TREND ANDs stay at ≤96.
         self.assertNotIn("dip_6b_lt2pc&don_lo_108", names)
         self.assertNotIn("mom_12b_gt3pc&don_hi_192", names)
@@ -722,7 +740,7 @@ class RecipeBoundsTests(unittest.TestCase):
             self.assertNotIn(needle, blob)
 
     def test_recipe_includes_wide_dip_mom_and_continuation_ands(self):
-        names = list(iter_recipe_names())
+        names = list(_legacy_recipe_names())
         # Wider parser-allowed bases (not the frozen 3×3).
         self.assertIn("mom_12b_gt2pc&don_hi_12", names)
         self.assertIn("mom_24b_gt2pc&don_hi_36", names)
@@ -750,7 +768,7 @@ class RecipeBoundsTests(unittest.TestCase):
             self.assertNotIn(needle, blob)
 
     def test_recipe_includes_grind_one_pct_and_full_wide_3atoms(self):
-        names = list(iter_recipe_names())
+        names = list(_legacy_recipe_names())
         # 1% grind at unused lookbacks (canon 1%→2% would collide on 12/18/24/36…).
         self.assertIn("mom_30b_gt1pc&don_hi_12", names)
         self.assertIn("mom_42b_gt1pc&near_swing_hi_24", names)
@@ -779,7 +797,7 @@ class RecipeBoundsTests(unittest.TestCase):
             self.assertNotIn(needle, blob)
 
     def test_recipe_includes_htf_regime_ands(self):
-        names = list(iter_recipe_names())
+        names = list(_legacy_recipe_names())
         # 2-atom regime × grind / wide (dry refill picks these first).
         self.assertIn("h4_ema_abv_24&sma_abv_20", names)
         self.assertIn("h4_ema_abv_24&mom_12b_gt2pc", names)
@@ -1082,7 +1100,7 @@ class RecipeBoundsTests(unittest.TestCase):
         self.assertGreater(novel, 200)
 
     def test_legacy_families_stay_contiguous_after_new_pass(self):
-        names = list(iter_recipe_names())
+        names = list(_legacy_recipe_names())
         htf = _snapshot_htf_regime()
         new_pass = _snapshot_trend_participation(STRUCTURE_NS)
         legacy = _snapshot_2026_09_11_recipe(STRUCTURE_NS)
@@ -1094,7 +1112,7 @@ class RecipeBoundsTests(unittest.TestCase):
         )
 
     def test_refused_families_stay_out_of_recipe_and_static(self):
-        recipe = list(iter_recipe_names())
+        recipe = list(_legacy_recipe_names())
         recipe_blob = " ".join(recipe)
         for needle in _REFUSED_NEEDLES:
             self.assertNotIn(needle, recipe_blob)
@@ -1118,7 +1136,7 @@ class RecipeBoundsTests(unittest.TestCase):
 class RefillBatchTests(unittest.TestCase):
     def test_dry_refill_emits_fresh_winner_shaped_3atoms(self):
         uni = generate_universe()
-        added = next_refill_batch(taken_names=uni, n=DISCOVERY_REFILL_BATCH_SIZE)
+        added = next_refill_batch(taken_names=_with_lit(uni), n=DISCOVERY_REFILL_BATCH_SIZE)
         from hedge_fund.trading.mint_quality import REASON_FILLER, mint_block_reason
 
         old_lead = "h1_ema_abv_50&mom_18b_gt2pc&sma_abv_30&rsi_14_>45"
@@ -1169,7 +1187,7 @@ class RefillBatchTests(unittest.TestCase):
         taken = set(uni) | set(parked) | {champ, "sma_stack_7_25_50"}
         with tempfile.TemporaryDirectory() as tmp:
             with patch.dict(os.environ, {"PAPER_STATE": str(tmp)}):
-                added = next_refill_batch(taken_names=taken, n=DISCOVERY_REFILL_BATCH_SIZE)
+                added = next_refill_batch(taken_names=_with_lit(taken), n=DISCOVERY_REFILL_BATCH_SIZE)
         self.assertEqual(len(added), DISCOVERY_REFILL_BATCH_SIZE)
         taken_keys = {near_duplicate_key(n) for n in taken}
         seen = set()
@@ -1188,7 +1206,7 @@ class RefillBatchTests(unittest.TestCase):
             "h1_sma_abv_20&mom_18b_gt2pc",
             "h1_ema_abv_24&dip_24b_lt5pc",
         }
-        added = next_refill_batch(taken_names=taken, n=DISCOVERY_REFILL_BATCH_SIZE)
+        added = next_refill_batch(taken_names=_with_lit(taken), n=DISCOVERY_REFILL_BATCH_SIZE)
         self.assertEqual(len(added), DISCOVERY_REFILL_BATCH_SIZE)
         taken_keys = {near_duplicate_key(n) for n in taken}
         for name in added:
@@ -1263,7 +1281,7 @@ class RefillBatchTests(unittest.TestCase):
         taken_keys = {near_duplicate_key(n) for n in taken}
         with tempfile.TemporaryDirectory() as tmp:
             with patch.dict(os.environ, {"PAPER_STATE": str(tmp)}):
-                added = next_refill_batch(taken_names=taken, n=DISCOVERY_REFILL_BATCH_SIZE)
+                added = next_refill_batch(taken_names=_with_lit(taken), n=DISCOVERY_REFILL_BATCH_SIZE)
         self.assertEqual(len(added), DISCOVERY_REFILL_BATCH_SIZE)
         for name in added:
             self.assertNotIn(name, taken)
@@ -1283,12 +1301,12 @@ class RefillBatchTests(unittest.TestCase):
             | set(_snapshot_htf_regime())
         )
         taken_keys = {near_duplicate_key(n) for n in taken}
-        leftover = [n for n in iter_recipe_names() if n not in taken]
+        leftover = [n for n in _legacy_recipe_names() if n not in taken]
         leftover = [n for n in leftover if near_duplicate_key(n) not in taken_keys]
         self.assertGreater(len(leftover), 400)
         with tempfile.TemporaryDirectory() as tmp:
             with patch.dict(os.environ, {"PAPER_STATE": str(tmp)}):
-                added = next_refill_batch(taken_names=taken, n=DISCOVERY_REFILL_BATCH_SIZE)
+                added = next_refill_batch(taken_names=_with_lit(taken), n=DISCOVERY_REFILL_BATCH_SIZE)
         self.assertEqual(len(added), DISCOVERY_REFILL_BATCH_SIZE)
         leftover_set = set(_snapshot_2026_09_12_leftover())
         for name in added:
@@ -1308,12 +1326,12 @@ class RefillBatchTests(unittest.TestCase):
         prior = _snapshot_2026_09_12_leftover()
         taken = set(uni) | set(prior) | set(_snapshot_htf_regime())
         taken_keys = {near_duplicate_key(n) for n in taken}
-        leftover = [n for n in iter_recipe_names() if n not in taken]
+        leftover = [n for n in _legacy_recipe_names() if n not in taken]
         leftover = [n for n in leftover if near_duplicate_key(n) not in taken_keys]
         self.assertGreater(len(leftover), 200)
         with tempfile.TemporaryDirectory() as tmp:
             with patch.dict(os.environ, {"PAPER_STATE": str(tmp)}):
-                added = next_refill_batch(taken_names=taken, n=DISCOVERY_REFILL_BATCH_SIZE)
+                added = next_refill_batch(taken_names=_with_lit(taken), n=DISCOVERY_REFILL_BATCH_SIZE)
         self.assertEqual(len(added), DISCOVERY_REFILL_BATCH_SIZE)
         continuation = set(_snapshot_trend_participation())
         for name in added:
@@ -1335,12 +1353,12 @@ class RefillBatchTests(unittest.TestCase):
         prior = _snapshot_2026_09_12_leftover() + _snapshot_2026_09_12_wide_two_atoms()
         taken = set(uni) | set(prior) | set(_snapshot_htf_regime())
         taken_keys = {near_duplicate_key(n) for n in taken}
-        leftover = [n for n in iter_recipe_names() if n not in taken]
+        leftover = [n for n in _legacy_recipe_names() if n not in taken]
         leftover = [n for n in leftover if near_duplicate_key(n) not in taken_keys]
         self.assertGreater(len(leftover), 100)
         with tempfile.TemporaryDirectory() as tmp:
             with patch.dict(os.environ, {"PAPER_STATE": str(tmp)}):
-                added = next_refill_batch(taken_names=taken, n=DISCOVERY_REFILL_BATCH_SIZE)
+                added = next_refill_batch(taken_names=_with_lit(taken), n=DISCOVERY_REFILL_BATCH_SIZE)
         self.assertEqual(len(added), DISCOVERY_REFILL_BATCH_SIZE)
         for name in added:
             self.assertNotIn(name, taken)
@@ -1357,7 +1375,7 @@ class RefillBatchTests(unittest.TestCase):
         }
         new_keys = {
             near_duplicate_key(n)
-            for n in iter_recipe_names()
+            for n in _legacy_recipe_names()
             if name_is_parseable(n)
         }
         added = new_keys - old_keys
@@ -1376,7 +1394,7 @@ class RefillBatchTests(unittest.TestCase):
             taken.add(f"parked_dummy_{i}")
             i += 1
         self.assertGreaterEqual(len(taken), 5037)
-        added = next_refill_batch(taken_names=taken, n=DISCOVERY_REFILL_BATCH_SIZE)
+        added = next_refill_batch(taken_names=_with_lit(taken), n=DISCOVERY_REFILL_BATCH_SIZE)
         self.assertEqual(len(added), DISCOVERY_REFILL_BATCH_SIZE)
         taken_keys = {near_duplicate_key(n) for n in taken}
         for name in added:
@@ -1405,7 +1423,7 @@ class RefillBatchTests(unittest.TestCase):
         self.assertFalse(name_has_mom_gt_and_dip("h1_ema_abv_20&dip_24b_lt5pc"))
         self.assertFalse(name_has_mom_gt_and_dip("dip_24b_lt5pc&sma_abv_50"))
         self.assertFalse(name_has_mom_gt_and_dip("mom_18b_gt2pc&don_hi_12"))
-        names = list(iter_recipe_names())
+        names = list(_legacy_recipe_names())
         bad = [n for n in names if name_has_mom_gt_and_dip(n)]
         self.assertEqual(bad, [])
         self.assertIn("h1_ema_abv_20&mom_18b_gt2pc&sma_abv_30", names)
@@ -1429,7 +1447,7 @@ class RefillBatchTests(unittest.TestCase):
         self.assertEqual(QUAL_N_WINDOWS, 23)
         self.assertEqual(max(STRUCTURE_NS), 96)
         uni = generate_universe()
-        added = next_refill_batch(taken_names=uni, n=DISCOVERY_REFILL_BATCH_SIZE)
+        added = next_refill_batch(taken_names=_with_lit(uni), n=DISCOVERY_REFILL_BATCH_SIZE)
         self.assertEqual(len(added), DISCOVERY_REFILL_BATCH_SIZE)
         self.assertFalse(any(name_has_mom_gt_and_dip(n) for n in added))
         with patch(
@@ -1444,12 +1462,12 @@ class RefillBatchTests(unittest.TestCase):
                 ]
             ),
         ):
-            skipped = next_refill_batch(taken_names=[], n=DISCOVERY_REFILL_BATCH_SIZE)
+            skipped = next_refill_batch(taken_names=_with_lit([]), n=DISCOVERY_REFILL_BATCH_SIZE)
         self.assertEqual(skipped, ["h1_ema_abv_20&mom_18b_gt2pc"])
         self.assertFalse(any(name_has_mom_gt_and_dip(n) for n in skipped))
 
     def test_recipe_emits_depth_4_through_7_admit_stacks(self):
-        names = list(iter_recipe_names())
+        names = list(_legacy_recipe_names())
         depths = [n.count("&") + 1 for n in names]
         self.assertGreaterEqual(max(depths), 4)
         self.assertGreaterEqual(max(depths), 5)
@@ -1515,7 +1533,7 @@ class RefillBatchTests(unittest.TestCase):
         prior_keys = {near_duplicate_key(n) for n in _snapshot_pre_fresh_recipe()}
         new_keys = {
             near_duplicate_key(n)
-            for n in iter_recipe_names()
+            for n in _legacy_recipe_names()
             if name_is_parseable(n)
         }
         added = new_keys - prior_keys
@@ -1536,7 +1554,7 @@ class RefillBatchTests(unittest.TestCase):
             i += 1
         from hedge_fund.trading.mint_quality import mint_block_reason
 
-        added = next_refill_batch(taken_names=taken, n=DISCOVERY_REFILL_BATCH_SIZE)
+        added = next_refill_batch(taken_names=_with_lit(taken), n=DISCOVERY_REFILL_BATCH_SIZE)
         self.assertEqual(len(added), DISCOVERY_REFILL_BATCH_SIZE)
         taken_keys = {near_duplicate_key(n) for n in taken}
         for name in added:
@@ -1559,7 +1577,7 @@ class RefillBatchTests(unittest.TestCase):
         from hedge_fund.trading.mint_quality import REASON_FILLER, mint_block_reason
 
         self.assertGreaterEqual(len(taken), 7200)
-        added = next_refill_batch(taken_names=taken, n=DISCOVERY_REFILL_BATCH_SIZE)
+        added = next_refill_batch(taken_names=_with_lit(taken), n=DISCOVERY_REFILL_BATCH_SIZE)
         self.assertEqual(len(added), DISCOVERY_REFILL_BATCH_SIZE)
         taken_keys = {near_duplicate_key(n) for n in taken}
         for name in added:
@@ -1589,7 +1607,7 @@ class RefillBatchTests(unittest.TestCase):
         )
         drained = [
             n
-            for n in iter_recipe_names()
+            for n in _legacy_recipe_names()
             if not (set(n.split("&")) & new_atoms)
         ]
         taken = set(drained) | set(generate_universe())
@@ -1598,7 +1616,7 @@ class RefillBatchTests(unittest.TestCase):
             taken.add(f"parked_dummy_{i}")
             i += 1
         self.assertGreaterEqual(len(taken), 8726)
-        added = next_refill_batch(taken_names=taken, n=20)
+        added = next_refill_batch(taken_names=_with_lit(taken), n=20)
         self.assertGreaterEqual(len(added), 20)
         taken_keys = {near_duplicate_key(n) for n in taken}
         seen = set()
@@ -1630,7 +1648,7 @@ class RefillBatchTests(unittest.TestCase):
 
     def test_next_refill_batch_fills_island_2b_against_drained_recipe(self):
         """After #2c is taken, island #2b still refills ahead of the #65 prefix."""
-        names = list(iter_recipe_names())
+        names = list(_legacy_recipe_names())
         h4_lead = "h4_ema_abv_20&mom_18b_gt2pc&sma_abv_30&rsi_14_>50"
         old_first = "h1_ema_abv_20&mom_18b_gt2pc&sma_abv_40"
         h4_at = names.index(h4_lead)
@@ -1678,7 +1696,7 @@ class RefillBatchTests(unittest.TestCase):
             i += 1
         from hedge_fund.trading.mint_quality import REASON_FILLER, mint_block_reason
 
-        added = next_refill_batch(taken_names=taken, n=20)
+        added = next_refill_batch(taken_names=_with_lit(taken), n=20)
         # The h4 island is filler or depth≥5, so a drained farm does not lease it.
         self.assertEqual(added, [])
         self.assertEqual(mint_block_reason(h4_lead), REASON_FILLER)
@@ -1691,7 +1709,7 @@ class RefillBatchTests(unittest.TestCase):
         """#2c is a few hundred new h1 names. Burned h4×mom is not the lead."""
         from hedge_fund.trading.constants import QUAL_WARMUP_BARS
 
-        names = list(iter_recipe_names())
+        names = list(_legacy_recipe_names())
         lead = "h1_ema_abv_50&mom_18b_gt2pc&sma_abv_30&rsi_14_>45"
         h4_lead = "h4_ema_abv_20&mom_18b_gt2pc&sma_abv_30&rsi_14_>50"
         self.assertEqual(names[0], lead)
@@ -1734,7 +1752,7 @@ class RefillBatchTests(unittest.TestCase):
         taken = set(names[len(prefix):]) | set(generate_universe())
         from hedge_fund.trading.mint_quality import REASON_FILLER, mint_block_reason
 
-        added = next_refill_batch(taken_names=taken, n=20)
+        added = next_refill_batch(taken_names=_with_lit(taken), n=20)
         self.assertEqual(added, [])
         self.assertEqual(mint_block_reason(lead), REASON_FILLER)
         taken_keys = {near_duplicate_key(n) for n in taken}
