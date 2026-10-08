@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from hedge_fund.trading.champions import load_graduated, load_pool, retired_names, save_pool
-from hedge_fund.trading.constants import QUAL_TIMEFRAME, RISK_POLICY
+from hedge_fund.trading.constants import GATE_RULES, QUAL_TIMEFRAME, RISK_POLICY
 from hedge_fund.trading.discovery import (
     append_discovery_evaluation,
     clear_in_flight,
@@ -56,6 +56,11 @@ def _validate_eval(row: Any) -> dict | None:
         return None
     policy = row.get("risk_policy") or RISK_POLICY
     if policy != RISK_POLICY:
+        return None
+    # A worker on an older checkout still exits on signal flips and gates on
+    # raw P&L vs B&H. Reject its rows: no log row, no admit, lease stays so
+    # the name is re-evaluated once the worker pulls the new rules.
+    if row.get("gate_rules") != GATE_RULES:
         return None
     reasons = row.get("fail_reasons")
     if reasons is not None and not isinstance(reasons, list):

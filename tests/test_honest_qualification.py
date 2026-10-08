@@ -30,6 +30,11 @@ def _win(test_pnl=100.0, test_trades=12, sharpe=0.5, train_pnl=0.0, skipped=Fals
     }
 
 
+# Amendment 2026-10-08: beat-B&H is daily-equity Sharpe, not raw P&L.
+_BH_BEAT = {"bh_daily_sharpe": 0.0, "strategy_daily_sharpe": 1.0}
+_BH_LOSE = {"bh_daily_sharpe": 2.0, "strategy_daily_sharpe": 1.0}
+
+
 def _assert_no_window_veto(reasons: list[str]) -> None:
     joined = " ".join(reasons)
     assert "window[" not in joined
@@ -44,14 +49,14 @@ class OosGateTests(unittest.TestCase):
             _win(test_pnl=-10, test_trades=15),
             _win(test_pnl=50, test_trades=15),
         ]
-        d = qualification_decision(windows, expected_windows=3, bh_oos_pnl=1.0, sma_stack_oos_pnl=1.0)
+        d = qualification_decision(windows, expected_windows=3, bh_oos_pnl=1.0, sma_stack_oos_pnl=1.0, **_BH_BEAT)
         self.assertTrue(d["passed"], d["reasons"])
         self.assertGreater(d["tot_test_pnl"], 0)
         self.assertFalse(d["all_windows_nonneg"])
         _assert_no_window_veto(d["reasons"])
 
         ok = [_win(test_pnl=50, test_trades=12) for _ in range(3)]
-        d_ok = qualification_decision(ok, expected_windows=3, bh_oos_pnl=1.0, sma_stack_oos_pnl=1.0)
+        d_ok = qualification_decision(ok, expected_windows=3, bh_oos_pnl=1.0, sma_stack_oos_pnl=1.0, **_BH_BEAT)
         self.assertTrue(d_ok["passed"], d_ok["reasons"])
         self.assertTrue(d_ok["all_windows_nonneg"])
 
@@ -62,7 +67,7 @@ class OosGateTests(unittest.TestCase):
             _win(skipped=True),
             _win(test_pnl=100, test_trades=20),
         ]
-        d = qualification_decision(windows, expected_windows=3, bh_oos_pnl=1.0, sma_stack_oos_pnl=1.0)
+        d = qualification_decision(windows, expected_windows=3, bh_oos_pnl=1.0, sma_stack_oos_pnl=1.0, **_BH_BEAT)
         self.assertTrue(d["passed"], d["reasons"])
         self.assertFalse(d["all_windows_nonneg"])
         _assert_no_window_veto(d["reasons"])
@@ -72,7 +77,7 @@ class OosGateTests(unittest.TestCase):
             _win(test_pnl=80, test_trades=0),
             _win(test_pnl=100, test_trades=20),
         ]
-        d2 = qualification_decision(empty, expected_windows=3, bh_oos_pnl=1.0, sma_stack_oos_pnl=1.0)
+        d2 = qualification_decision(empty, expected_windows=3, bh_oos_pnl=1.0, sma_stack_oos_pnl=1.0, **_BH_BEAT)
         self.assertTrue(d2["passed"], d2["reasons"])
         self.assertFalse(d2["all_windows_nonneg"])
         _assert_no_window_veto(d2["reasons"])
@@ -84,7 +89,7 @@ class OosGateTests(unittest.TestCase):
             _win(test_pnl=1, test_trades=20, train_pnl=10_000),
         ]
         # Aggregate OOS is -3; huge train must not rescue a miss vs B&H.
-        d = qualification_decision(windows, expected_windows=3, bh_oos_pnl=0.0, sma_stack_oos_pnl=0.0)
+        d = qualification_decision(windows, expected_windows=3, bh_oos_pnl=0.0, sma_stack_oos_pnl=0.0, **_BH_BEAT)
         self.assertFalse(d["passed"])
         _assert_no_window_veto(d["reasons"])
 
@@ -95,7 +100,7 @@ class OosGateTests(unittest.TestCase):
         self.assertGreater(strong_oos, weak_oos)
         self.assertEqual(weak_oos, 10 + 3.0)
         windows = [_win(test_pnl=5, test_trades=12, train_pnl=1_000_000) for _ in range(3)]
-        d = qualification_decision(windows, expected_windows=3, bh_oos_pnl=0.0, sma_stack_oos_pnl=0.0)
+        d = qualification_decision(windows, expected_windows=3, bh_oos_pnl=0.0, sma_stack_oos_pnl=0.0, **_BH_BEAT)
         self.assertAlmostEqual(d["score"], oos_admission_score(15.0, 0.5))
         self.assertNotIn("train", str(d["score"]))
 
@@ -105,7 +110,7 @@ class OosGateTests(unittest.TestCase):
             _win(test_pnl=40, test_trades=10),
             _win(test_pnl=40, test_trades=9),
         ]
-        d_fail = qualification_decision(fail, expected_windows=3, bh_oos_pnl=1.0, sma_stack_oos_pnl=1.0)
+        d_fail = qualification_decision(fail, expected_windows=3, bh_oos_pnl=1.0, sma_stack_oos_pnl=1.0, **_BH_BEAT)
         self.assertEqual(d_fail["tot_oos_trades"], 29)
         self.assertFalse(d_fail["passed"])
 
@@ -114,22 +119,22 @@ class OosGateTests(unittest.TestCase):
             _win(test_pnl=40, test_trades=10),
             _win(test_pnl=40, test_trades=10),
         ]
-        d_ok = qualification_decision(ok, expected_windows=3, bh_oos_pnl=1.0, sma_stack_oos_pnl=1.0)
+        d_ok = qualification_decision(ok, expected_windows=3, bh_oos_pnl=1.0, sma_stack_oos_pnl=1.0, **_BH_BEAT)
         self.assertEqual(d_ok["tot_oos_trades"], 30)
         self.assertTrue(d_ok["passed"], d_ok["reasons"])
 
     def test_must_beat_buy_and_hold_and_sma_stack(self):
         windows = [_win(test_pnl=20, test_trades=12) for _ in range(3)]  # tot 60
-        vs_bh = qualification_decision(windows, expected_windows=3, bh_oos_pnl=80.0, sma_stack_oos_pnl=1.0)
+        vs_bh = qualification_decision(windows, expected_windows=3, bh_oos_pnl=80.0, sma_stack_oos_pnl=1.0, **_BH_LOSE)
         self.assertFalse(vs_bh["passed"])
-        vs_sma = qualification_decision(windows, expected_windows=3, bh_oos_pnl=1.0, sma_stack_oos_pnl=80.0)
+        vs_sma = qualification_decision(windows, expected_windows=3, bh_oos_pnl=1.0, sma_stack_oos_pnl=80.0, **_BH_BEAT)
         self.assertFalse(vs_sma["passed"])
-        beat = qualification_decision(windows, expected_windows=3, bh_oos_pnl=10.0, sma_stack_oos_pnl=10.0)
+        beat = qualification_decision(windows, expected_windows=3, bh_oos_pnl=10.0, sma_stack_oos_pnl=10.0, **_BH_BEAT)
         self.assertTrue(beat["passed"], beat["reasons"])
 
     def test_missing_window_slice_still_fails(self):
         windows = [_win(test_pnl=50, test_trades=15) for _ in range(2)]
-        d = qualification_decision(windows, expected_windows=3, bh_oos_pnl=1.0, sma_stack_oos_pnl=1.0)
+        d = qualification_decision(windows, expected_windows=3, bh_oos_pnl=1.0, sma_stack_oos_pnl=1.0, **_BH_BEAT)
         self.assertFalse(d["passed"])
         self.assertTrue(any("windows" in r for r in d["reasons"]))
 
@@ -139,7 +144,7 @@ class OosGateTests(unittest.TestCase):
             _win(test_pnl=20, test_trades=12),
             _win(test_pnl=-5, test_trades=12),
         ]
-        d = qualification_decision(windows, expected_windows=3, bh_oos_pnl=80.0, sma_stack_oos_pnl=1.0)
+        d = qualification_decision(windows, expected_windows=3, bh_oos_pnl=80.0, sma_stack_oos_pnl=1.0, **_BH_LOSE)
         self.assertFalse(d["passed"])
         self.assertFalse(d["all_windows_nonneg"])
         _assert_no_window_veto(d["reasons"])
@@ -155,6 +160,8 @@ class OosGateTests(unittest.TestCase):
             "test_pnl": 946.0,
             "bh_oos_pnl": 100.0,
             "sma_stack_oos_pnl": 50.0,
+            "daily_sharpe": 0.9,
+            "bh_daily_sharpe": 0.4,
             "regimes_tested": QUAL_N_WINDOWS,
             "fail_reasons": [
                 "window[1] failed/skipped/neg/empty",
@@ -170,6 +177,7 @@ class OosGateTests(unittest.TestCase):
             **row,
             "strategy": "dbl_bot_120",
             "bh_oos_pnl": 2000.0,
+            "bh_daily_sharpe": 1.5,
         }
         d_dbl = qualification_from_record(dbl)
         self.assertFalse(d_dbl["passed"])
@@ -201,14 +209,14 @@ class OosGateTests(unittest.TestCase):
 
         windows = [_win(test_pnl=20, test_trades=8) for _ in range(QUAL_N_WINDOWS)]
         d = qualification_decision(
-            windows, expected_windows=QUAL_N_WINDOWS, bh_oos_pnl=1.0, sma_stack_oos_pnl=1.0
+            windows, expected_windows=QUAL_N_WINDOWS, bh_oos_pnl=1.0, sma_stack_oos_pnl=1.0, **_BH_BEAT
         )
         self.assertTrue(d["passed"], d["reasons"])
         self.assertEqual(d["tot_oos_trades"], QUAL_N_WINDOWS * 8)
 
         short = [_win(test_pnl=50, test_trades=15) for _ in range(3)]
         d_short = qualification_decision(
-            short, expected_windows=QUAL_N_WINDOWS, bh_oos_pnl=1.0, sma_stack_oos_pnl=1.0
+            short, expected_windows=QUAL_N_WINDOWS, bh_oos_pnl=1.0, sma_stack_oos_pnl=1.0, **_BH_BEAT
         )
         self.assertFalse(d_short["passed"])
         self.assertTrue(any("windows" in r for r in d_short["reasons"]))
@@ -221,6 +229,8 @@ class OosGateTests(unittest.TestCase):
             "test_pnl": 946.0,
             "bh_oos_pnl": 100.0,
             "sma_stack_oos_pnl": 50.0,
+            "daily_sharpe": 0.9,
+            "bh_daily_sharpe": 0.4,
             "regimes_tested": 3,
         }
         d_old = qualification_from_record(old_row)
@@ -237,7 +247,7 @@ class OosGateTests(unittest.TestCase):
 
         short = [_win(test_pnl=50, test_trades=15) for _ in range(3)]
         d_short = qualification_decision(
-            short, expected_windows=QUAL_N_WINDOWS, bh_oos_pnl=1.0, sma_stack_oos_pnl=1.0
+            short, expected_windows=QUAL_N_WINDOWS, bh_oos_pnl=1.0, sma_stack_oos_pnl=1.0, **_BH_BEAT
         )
         self.assertFalse(d_short["passed"])
         self.assertTrue(any("windows" in r for r in d_short["reasons"]))
@@ -250,6 +260,8 @@ class OosGateTests(unittest.TestCase):
             "test_pnl": 946.0,
             "bh_oos_pnl": 100.0,
             "sma_stack_oos_pnl": 50.0,
+            "daily_sharpe": 0.9,
+            "bh_daily_sharpe": 0.4,
             "regimes_tested": 3,
         }
         d_old = qualification_from_record(old_row)

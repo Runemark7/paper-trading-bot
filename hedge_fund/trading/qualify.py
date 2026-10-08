@@ -4,11 +4,18 @@ Aggregate test PnL / Sharpe / trade count decide. A single skipped, empty,
 or negative walk-forward window is a diagnostic, not a fail reason.
 Beat buy-and-hold and sma_stack stay. Fail-once still parks names that
 fail those remaining gates.
+
+Amendment 2026-10-08: "beat buy-and-hold" compares the strategy's
+daily-equity Sharpe (OOS, same windows, after fees) with B&H's daily-equity
+Sharpe on the same span and capital base. Raw P&L vs B&H is no longer a
+gate (``bh_oos_pnl`` is still recorded). Rows without both daily Sharpes
+fail, so stored rows from the old engine cannot flip to qualified.
 """
 from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from hedge_fund.trading.buy_and_hold import daily_returns_sharpe
 from hedge_fund.trading.constants import (
     MIN_BACKTEST_SHARPE,
     MIN_BACKTEST_TRADES,
@@ -40,6 +47,20 @@ def window_is_nonneg(window: dict) -> bool:
     return True
 
 
+def strategy_daily_sharpe_from_windows(windows: list[dict]) -> float | None:
+    """Annualized daily Sharpe over all windows' ``daily_returns``; None if absent."""
+    rets: list[float] = []
+    seen = False
+    for w in windows:
+        r = w.get("daily_returns")
+        if isinstance(r, list):
+            seen = True
+            rets.extend(float(x) for x in r)
+    if not seen:
+        return None
+    return daily_returns_sharpe(rets)
+
+
 def aggregate_fail_reasons(
     *,
     tot_test_pnl: float,
@@ -51,8 +72,13 @@ def aggregate_fail_reasons(
     expected_windows: int,
     min_sharpe: float = MIN_BACKTEST_SHARPE,
     min_trades: int = MIN_BACKTEST_TRADES,
+    strategy_daily_sharpe: float | None = None,
+    bh_daily_sharpe: float | None = None,
 ) -> list[str]:
-    """Fail reasons from stored or just-computed OOS aggregates. No per-window veto."""
+    """Fail reasons from stored or just-computed OOS aggregates. No per-window veto.
+
+    ``bh_oos_pnl`` is accepted for the record but is not a gate any more.
+    """
     reasons: list[str] = []
     if n_windows != expected_windows:
         reasons.append(f"windows {n_windows} != expected {expected_windows}")
@@ -60,10 +86,12 @@ def aggregate_fail_reasons(
         reasons.append(f"oos_trades {tot_oos_trades} < {min_trades}")
     if avg_sharpe < min_sharpe:
         reasons.append(f"oos_sharpe {avg_sharpe:.2f} < {min_sharpe}")
-    if bh_oos_pnl is None:
-        reasons.append("buy-and-hold missing")
-    elif tot_test_pnl <= bh_oos_pnl:
-        reasons.append(f"oos_pnl {tot_test_pnl:.2f} <= bh {bh_oos_pnl:.2f}")
+    if strategy_daily_sharpe is None or bh_daily_sharpe is None:
+        reasons.append("buy-and-hold daily sharpe missing")
+    elif strategy_daily_sharpe <= bh_daily_sharpe:
+        reasons.append(
+            f"daily_sharpe {strategy_daily_sharpe:.2f} <= bh_daily_sharpe {bh_daily_sharpe:.2f}"
+        )
     if sma_stack_oos_pnl is None:
         reasons.append("sma_stack missing")
     elif tot_test_pnl <= sma_stack_oos_pnl:
@@ -79,14 +107,22 @@ def qualification_decision(
     sma_stack_oos_pnl: float | None,
     min_sharpe: float = MIN_BACKTEST_SHARPE,
     min_trades: int = MIN_BACKTEST_TRADES,
+    bh_daily_sharpe: float | None = None,
+    strategy_daily_sharpe: float | None = None,
 ) -> dict:
-    """Pure OOS gate. Per-window skipped/neg/empty is diagnostic only."""
+    """Pure OOS gate. Per-window skipped/neg/empty is diagnostic only.
+
+    ``strategy_daily_sharpe`` defaults to the annualized Sharpe of every
+    window's ``daily_returns`` (book equity sampled daily), concatenated.
+    """
     tot_test_pnl = sum(float(w.get("test_pnl") or 0.0) for w in windows)
     tot_oos_trades = sum(int(w.get("test_trades") or 0) for w in windows)
     sharpes = [float(w.get("sharpe") or 0.0) for w in windows] or [0.0]
     avg_sharpe = sum(sharpes) / len(sharpes)
     tot_train_pnl = sum(float(w.get("train_pnl") or 0.0) for w in windows)
     all_windows_nonneg = all(window_is_nonneg(w) for w in windows) if windows else False
+    if strategy_daily_sharpe is None:
+        strategy_daily_sharpe = strategy_daily_sharpe_from_windows(windows)
     reasons = aggregate_fail_reasons(
         tot_test_pnl=tot_test_pnl,
         tot_oos_trades=tot_oos_trades,
@@ -97,10 +133,14 @@ def qualification_decision(
         expected_windows=expected_windows,
         min_sharpe=min_sharpe,
         min_trades=min_trades,
+        strategy_daily_sharpe=strategy_daily_sharpe,
+        bh_daily_sharpe=bh_daily_sharpe,
     )
     return {
         "passed": not reasons,
         "reasons": reasons,
+        "daily_sharpe": strategy_daily_sharpe,
+        "bh_daily_sharpe": bh_daily_sharpe,
         "tot_test_pnl": tot_test_pnl,
         "tot_train_pnl": tot_train_pnl,
         "tot_oos_trades": tot_oos_trades,
@@ -142,6 +182,8 @@ def qualification_from_record(
         n_windows = expected_windows
     bh = _optional_float(row.get("bh_oos_pnl")) if "bh_oos_pnl" in row else None
     sma = _optional_float(row.get("sma_stack_oos_pnl")) if "sma_stack_oos_pnl" in row else None
+    dsr = _optional_float(row.get("daily_sharpe"))
+    bh_dsr = _optional_float(row.get("bh_daily_sharpe"))
     reasons = aggregate_fail_reasons(
         tot_test_pnl=tot_test_pnl,
         tot_oos_trades=tot_oos_trades,
@@ -152,6 +194,8 @@ def qualification_from_record(
         expected_windows=expected_windows,
         min_sharpe=min_sharpe,
         min_trades=min_trades,
+        strategy_daily_sharpe=dsr,
+        bh_daily_sharpe=bh_dsr,
     )
     old_reasons = row.get("fail_reasons") if isinstance(row.get("fail_reasons"), list) else []
     all_windows_nonneg = not any(is_window_veto_reason(r) for r in old_reasons)
@@ -167,6 +211,8 @@ def qualification_from_record(
         "score": oos_admission_score(tot_test_pnl, avg_sharpe),
         "bh_oos_pnl": bh,
         "sma_stack_oos_pnl": sma,
+        "daily_sharpe": dsr,
+        "bh_daily_sharpe": bh_dsr,
     }
 
 

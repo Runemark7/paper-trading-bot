@@ -17,7 +17,9 @@ from hedge_fund.risk.managed import (
     CONFIDENCE_MAX,
     CONFIDENCE_MIN,
     MAX_DRAWDOWN,
+    MAX_NOTIONAL_FRAC,
     MAX_OPEN_RISK_FRAC,
+    MIN_LOT_NOTIONAL,
     RISK_FRAC,
 )
 
@@ -36,6 +38,13 @@ CONFIDENCE_REF_PROB = 0.50
 # Paper fee model (same as PaperBroker).
 FEE_TAKER = TAKER_FEE  # 0.1%
 FEE_SLIPPAGE = SLIPPAGE  # 2 bps
+# Cash cost of one unit of notional at the reference price (fill + fee).
+ENTRY_COST_MULT = (1.0 + FEE_SLIPPAGE) * (1.0 + FEE_TAKER)
+
+# Amendment 2026-10-08: a lot exits only on its stop or take-profit
+# (or the end of a backtest window). An entry signal turning off does not
+# close it. Backtests and the live loop both follow this.
+EXIT_POLICY = "stop_tp_only"
 
 
 def atr_stop_distance(entry: float, atr_value: float) -> float:
@@ -69,6 +78,10 @@ __all__ = [
     "CONFIDENCE_REF_PROB",
     "FEE_TAKER",
     "FEE_SLIPPAGE",
+    "ENTRY_COST_MULT",
+    "EXIT_POLICY",
+    "MAX_NOTIONAL_FRAC",
+    "MIN_LOT_NOTIONAL",
     "RISK_FRAC",
     "MAX_OPEN_RISK_FRAC",
     "MAX_DRAWDOWN",

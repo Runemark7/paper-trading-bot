@@ -13,6 +13,11 @@ Rules
       size = risk_per_trade / (entry - stop)
 - **5 % max open risk**: the sum of (entry - stop) * size across open positions
   may not exceed this fraction of equity. Prevents stacking correlated bets.
+- **100 % notional cap (spot, no leverage)**: total open notional may not
+  exceed equity. When ``cash`` is passed, a new lot is shrunk so its cost
+  (notional + entry fee/slippage) fits the cash left, or skipped when the
+  room is below ``MIN_LOT_NOTIONAL``. Marked at the entry price, open
+  notional = equity - cash, so "cash never negative" is the same rule.
 - **15 % drawdown circuit breaker**: if equity falls 15 % from the running
   peak, trading is halted (positions may still be closed) until the account
   is manually re-armed. A paused loser is data, not a secret.
@@ -32,6 +37,9 @@ MAX_OPEN_RISK_FRAC = 0.05     # 5% max open risk
 MAX_DRAWDOWN = 0.15           # 15% halt
 CONFIDENCE_MIN = 0.5          # size_position clamp
 CONFIDENCE_MAX = 2.0
+# Amendment 2026-10-08: spot book, no leverage. Open notional <= equity.
+MAX_NOTIONAL_FRAC = 1.0
+MIN_LOT_NOTIONAL = 10.0       # skip dust lots once the cap has shrunk them
 
 
 @dataclass
@@ -83,12 +91,18 @@ class RiskManager:
         stop: float,
         open_positions: list[tuple[float, float, float]] | None = None,
         confidence: float = 1.0,
+        *,
+        cash: float | None = None,
+        entry_cost_mult: float = 1.0,
     ) -> RiskDecision:
         """Compute the position size for a proposed long.
 
         confidence: 0.5 (low conviction probe) to 2.0 (high conviction).
         open_positions: list of (entry_price, stop_loss, quantity) for risks
-        already on. Returns a RiskDecision.
+        already on. cash: free cash in the account; when given, the size is
+        capped so ``size * entry * entry_cost_mult`` fits inside it (100%
+        notional cap; ``entry_cost_mult`` = (1 + slippage) * (1 + taker fee)).
+        Returns a RiskDecision.
         """
         if self.halted:
             return RiskDecision(False, self.halt_reason or "trading halted")
@@ -111,6 +125,19 @@ class RiskManager:
                     False,
                     f"open risk {current_open + this_risk:.0f} > cap {cap:.0f}",
                 )
+
+        # 100% notional cap: never spend more cash than the account has.
+        if cash is not None:
+            room = float(cash) - equity * (1.0 - MAX_NOTIONAL_FRAC)
+            unit_cost = entry * max(1.0, float(entry_cost_mult))
+            max_size = room / unit_cost if unit_cost > 0 else 0.0
+            if max_size * entry < MIN_LOT_NOTIONAL:
+                return RiskDecision(
+                    False,
+                    f"notional cap: free cash {max(room, 0.0):.0f} < min lot {MIN_LOT_NOTIONAL:.0f}",
+                )
+            if size > max_size:
+                size = max_size
 
         return RiskDecision(True, "ok", size=size, stop=stop)
 

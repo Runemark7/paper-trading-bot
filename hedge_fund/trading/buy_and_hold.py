@@ -7,10 +7,44 @@ computed. Amendment 2026-09-01: it is computed here and used by
 """
 from __future__ import annotations
 
+import math
+import statistics
+
 from hedge_fund.brokers.paper import SLIPPAGE, TAKER_FEE
 from hedge_fund.trading.constants import PAPER_START_CASH, QUAL_SYMBOLS
 
 BH_ANCHOR_KEY = "bh_start"
+DAYS_PER_YEAR = 365  # crypto trades every calendar day
+BARS_PER_DAY_5M = 288
+
+
+def equity_returns(points: list[float]) -> list[float]:
+    """Simple returns between consecutive equity samples (skips non-positive bases)."""
+    out: list[float] = []
+    for prev, cur in zip(points, points[1:]):
+        if prev and prev > 0 and math.isfinite(prev) and math.isfinite(cur):
+            out.append(cur / prev - 1.0)
+    return out
+
+
+def daily_returns_sharpe(returns: list[float]) -> float:
+    """Annualized Sharpe of daily returns (mean / stdev * sqrt(365), rf = 0).
+
+    0.0 when there are fewer than two returns, zero / non-finite stdev
+    (a book that never trades is flat, Sharpe 0).
+    """
+    vals = [float(r) for r in returns if r is not None and math.isfinite(float(r))]
+    if len(vals) < 2:
+        return 0.0
+    sd = statistics.stdev(vals)
+    if not math.isfinite(sd) or sd <= 1e-12:
+        return 0.0
+    return float(statistics.mean(vals) / sd * math.sqrt(DAYS_PER_YEAR))
+
+
+def daily_equity_sharpe(points: list[float]) -> float:
+    """Annualized Sharpe of a daily-sampled equity curve."""
+    return daily_returns_sharpe(equity_returns(points))
 
 
 def _qty_bought(cash: float, start_price: float, taker_fee: float, slippage: float) -> float:
@@ -96,6 +130,60 @@ def buy_and_hold_window_pnl(
             start_prices[sym] = float(closes[0])
             end_prices[sym] = float(closes[-1])
     return buy_and_hold_realized_pnl(start_cash, start_prices, end_prices, taker_fee, slippage)
+
+
+def buy_and_hold_daily_equity(
+    closes_by_symbol: dict[str, list[float]],
+    start_cash_per_symbol: float = PAPER_START_CASH,
+    bars_per_day: int = BARS_PER_DAY_5M,
+    taker_fee: float = TAKER_FEE,
+    slippage: float = SLIPPAGE,
+) -> list[float]:
+    """Daily-sampled equity of B&H on the same capital base as a backtest.
+
+    Each symbol gets ``start_cash_per_symbol`` (the discovery backtest runs
+    each symbol on its own 10k book, so the B&H book is 10k x symbols too).
+    Bought at the first close with fee + slippage, marked at every
+    ``bars_per_day``-th close, sold at the last close with fee + slippage.
+    Sample points line up with ``backtest(...).daily_equity``.
+    """
+    series = {
+        s: c for s, c in closes_by_symbol.items()
+        if c and len(c) >= 2 and c[0] > 0 and c[-1] > 0
+    }
+    if not series:
+        return []
+    n = min(len(c) for c in series.values())
+    qty = {
+        s: _qty_bought(start_cash_per_symbol, float(c[0]), taker_fee, slippage)
+        for s, c in series.items()
+    }
+    every = max(1, int(bars_per_day))
+    points = [start_cash_per_symbol * len(series)]
+    last_sample = -1
+    for i in range(every - 1, n, every):
+        points.append(sum(qty[s] * float(c[i]) for s, c in series.items()))
+        last_sample = i
+    final = 0.0
+    for s, c in series.items():
+        proceeds = qty[s] * float(c[n - 1]) * (1.0 - slippage)
+        final += proceeds - proceeds * taker_fee
+    if last_sample == n - 1 and len(points) > 1:
+        points[-1] = final
+    else:
+        points.append(final)
+    return points
+
+
+def buy_and_hold_daily_sharpe(
+    closes_by_symbol: dict[str, list[float]],
+    start_cash_per_symbol: float = PAPER_START_CASH,
+    bars_per_day: int = BARS_PER_DAY_5M,
+) -> float:
+    """Annualized daily-equity Sharpe of B&H over one span."""
+    return daily_equity_sharpe(
+        buy_and_hold_daily_equity(closes_by_symbol, start_cash_per_symbol, bars_per_day)
+    )
 
 
 def buy_and_hold_from_trades(

@@ -11,6 +11,8 @@ For each symbol, one cycle:
   5. If approved, place the paper order (fees + slippage) at the current
      price, with a mandatory stop.
   6. Re-price open positions each cycle; close on stop breach or take-profit.
+     That is the only exit (amendment 2026-10-08): the entry signal turning
+     off does not close a lot, same as the discovery backtest.
 
 Every decision and every outcome is logged to a SQLite store — that is the
 audit trail the PROTOCOL.md honesty contract requires. Outcomes are recorded
@@ -150,23 +152,8 @@ class TradingLoop:
                                            reason=f"data error: {exc}"))
                 continue
 
-            # Active signal exit: if we have open lots for this symbol and the strategy
-            # no longer says "long" (setup broke / invalidated), close them immediately!
-            if sig.direction != "long":
-                lots_to_close = [lot for lot in self.broker.lots if lot.ticker == sym]
-                if lots_to_close:
-                    cur = px.get(sym)
-                    if cur is not None:
-                        for lot in lots_to_close:
-                            fill = self.broker.close_lot(lot, cur)
-                            pnl = (fill.price - lot.entry_price) * lot.quantity - fill.fee
-                            self._record_outcome(sym, lot, fill, tp=(pnl > 0))
-                            self._close_store_lot(lot, fill, f"signal_exit_{sig.condition}")
-                            results.append(CycleResult(
-                                sym, now, sig.condition, 0.0, "flat", "CLOSE_SIGNAL",
-                                reason=f"strategy exit: {sig.condition} (cur={cur:.2f})",
-                                equity=self.broker.equity(px)
-                            ))
+            # No signal exit (amendment 2026-10-08): open lots ride until their
+            # stop or take-profit in _manage_open_positions.
 
             key = condition_key(sym, self.timeframe, sig.condition)
             proposed = self._propose_probability(sig, sig.features)
@@ -239,7 +226,12 @@ class TradingLoop:
                 (p.entry_price, p.stop_loss, p.quantity)
                 for p in self.broker.lots
             ]
-            rd = self.risk.size_position(equity, entry, stop, open_pos, confidence=conf_mult)
+            # 100% notional cap: shrink or skip so cash never goes negative.
+            rd = self.risk.size_position(
+                equity, entry, stop, open_pos, confidence=conf_mult,
+                cash=self.broker.cash(),
+                entry_cost_mult=(1 + self.broker.slippage) * (1 + self.broker.taker_fee),
+            )
             if not rd.approved:
                 results.append(CycleResult(
                     sym, now, sig.condition, prob, sig.direction, "REJECTED",

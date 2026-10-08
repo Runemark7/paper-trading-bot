@@ -1206,3 +1206,19 @@ This amendment does not rewrite original §§ 1–8 or prior amendments. OOS thr
 
 **What was added** (`hedge_fund.trading.retire`). One-shot batch `ORPHAN_LIVE_BATCH` = `orphan-live-20261008`, run once on the same server-start thread after `requalify-gate23-20261008`. Rule: an isolated `trades_*.sqlite` account that is not a pooled champion, not graduated, not already retired, and not the `PAPER_STRATEGY` (`sma_stack`) fallback. The batch only acts on the explicit 16 names found on prod (`ORPHAN_LIVE_NAMES`) and skips any account that still holds an open lot. Each one moves into `retired.json` with `role` `orphan_live`, reason `orphan live account after cull_undated 2026-09-13`, and a record of its DB name, open lots, closed trades and P&L. Trade DBs stay on disk. The names leave the live book and open-lot counts and are blocked from re-admit and re-mint like every retired name. The `sma_stack` fallback is untouched.
 
+
+### Amendment 2026-10-08 — stop/TP-only exits, 100% notional cap, beat B&H on daily-equity Sharpe
+
+This amendment does not rewrite original §§ 1–8 or prior amendments. Alexander approved exactly three changes on 2026-10-08. Everything else stays frozen: `MIN_BACKTEST_TRADES` = 30, OOS per-trade Sharpe ≥ 0.30, beat `sma_stack` on net OOS P&L, fail-once, `QUAL_N_WINDOWS` = 23, `QUAL_WARMUP_BARS` = 4032, 5m, fees (`TAKER_FEE` 0.1%, `SLIPPAGE` 2 bps), and the rest of `rm_v1` sizing (`RISK_FRAC` 1%, `MAX_OPEN_RISK_FRAC` 5%, `MAX_DRAWDOWN` 15%, confidence clamp 0.5–2×, stop 2×ATR(14) clamped 1.5–4%, TP 2R, `MAX_LOTS_PER_SYMBOL` 3, `START_CASH` 10k). Mint bans are untouched.
+
+**Why.** The sizing / B&H what-if (2026-10-08) showed holding time was the structural problem: exit-on-flip held positions ~0.2–0.3% of the time and paid ~$2–4.5k of fees per name, so no sizing or benchmark change produced a pass. Raw P&L vs B&H also compared a mostly-flat book with a fully-invested one.
+
+1. **Exits.** A lot closes only on its stop or take-profit (or at the end of a backtest window). The entry signal turning off no longer closes it. Same in the discovery backtest (`hedge_fund.backtest.strategies.backtest`) and the live loop (`TradingLoop`); the `CLOSE_SIGNAL` path is removed.
+2. **Notional cap.** Open notional per account never exceeds 100% of equity (`MAX_NOTIONAL_FRAC` = 1.0, spot, no leverage). `RiskManager.size_position(..., cash=, entry_cost_mult=)` shrinks a new lot so its cost (notional + fee + slippage) fits the free cash, or skips it when the room is under `MIN_LOT_NOTIONAL` = $10. Pyramiding stays.
+3. **Beat B&H.** The B&H leg is now: strategy daily-equity Sharpe > B&H daily-equity Sharpe, OOS, same 23 windows, after fees. Equity is sampled every 288 5m bars; daily returns are concatenated across windows; Sharpe = mean / stdev × √365. B&H uses the same capital base as the strategy (10k per symbol, 20k book; it was 10k split across the two symbols). `bh_oos_pnl` is still recorded (now on the 20k base) but is not a gate.
+
+**Records.** Every discovery row carries `daily_sharpe`, `bh_daily_sharpe`, `avg_hold_hours` and `gate_rules` = `sltp_cap100_bhdsr_20261008`. Stored rows without both daily Sharpes fail the B&H leg, so ingest's re-decide-from-stored-aggregates can never flip an old-engine row to qualified.
+
+**Stale workers.** `POST /api/discovery/claim` gives no names to a worker that does not send the current `gate_rules` (response `stale_rules: true`), and ingest rejects rows without it (no log row, no admit). A farm checkout must `git pull` and restart `discovery_worker` to keep evaluating.
+
+**Fail-once.** Names already in the tested index keep their old-engine verdict and are not re-evaluated by the farm. Re-testing them under these rules needs a separate, explicit decision.
