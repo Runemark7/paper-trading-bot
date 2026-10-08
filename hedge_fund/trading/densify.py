@@ -15,6 +15,10 @@ Rules (same as the recipe):
 - skip ``near_duplicate_key`` collisions and already-tested names
 - skip the h4×mom family (measured all-fail) and any family/spine with
   at least ``BURNED_MIN_TESTED`` evaluations and zero passes
+- skip redundant same-indicator thresholds and empty bands
+  (``mint_block_reason``)
+- cap mom/dip percents at the reachability table, and stop stepping an
+  axis once a nearer neighbor on that axis recorded trades=0
 """
 from __future__ import annotations
 
@@ -23,8 +27,10 @@ from typing import Iterable, Iterator
 
 from hedge_fund.trading.discovery_guard import (
     DEFAULT_STRUCTURE_LOOKBACK_MAX,
+    is_ops_park_record,
     lookback_too_expensive_reason,
 )
+from hedge_fund.trading.mint_quality import max_move_pct, mint_block_reason
 from hedge_fund.trading.refill import (
     RECIPE_MAX_ATOMS,
     _is_refillable_name,
@@ -115,6 +121,12 @@ def _canon_mom_lb(n: int) -> int:
 
 def _canon_mom_thr(n: int) -> int:
     return int(round(int(n) / 2.0) * 2) or 2
+
+
+def _pct_hi(lookback: int) -> int:
+    """Highest mom/dip percent densify may step to at this lookback."""
+    cap = int(max_move_pct(lookback))
+    return max(2, min(40, cap))
 
 
 def _canon_rsi_th(n: int) -> int:
@@ -257,7 +269,9 @@ def _atom_replacements(atom: str, rank: int) -> list[str]:
         thr = int(m.group(2))
         out: list[str] = []
         lbs = _neighbors(lb, step=6, lo=6, hi=360, canon=_canon_mom_lb)
-        ths = _neighbors(thr, step=2, lo=2, hi=40, canon=_canon_mom_thr)
+        ths = _neighbors(
+            thr, step=2, lo=2, hi=_pct_hi(lb), canon=_canon_mom_thr,
+        )
         if rank < len(lbs):
             out.append(f"mom_{lbs[rank]}b_gt{thr}pc")
         if rank < len(ths):
@@ -269,7 +283,9 @@ def _atom_replacements(atom: str, rank: int) -> list[str]:
         thr = int(m.group(2))
         out = []
         lbs = _neighbors(lb, step=6, lo=6, hi=360, canon=_canon_mom_lb)
-        ths = _neighbors(thr, step=2, lo=2, hi=40, canon=_canon_mom_thr)
+        ths = _neighbors(
+            thr, step=2, lo=2, hi=_pct_hi(lb), canon=_canon_mom_thr,
+        )
         if rank < len(lbs):
             out.append(f"dip_{lbs[rank]}b_lt{thr}pc")
         if rank < len(ths):
@@ -304,17 +320,6 @@ def _atom_replacements(atom: str, rank: int) -> list[str]:
     return []
 
 
-def _one_axis_names(seed: str, rank: int) -> list[str]:
-    atoms = _atoms(seed)
-    out: list[str] = []
-    for i, atom in enumerate(atoms):
-        for repl in _atom_replacements(atom, rank):
-            nxt = list(atoms)
-            nxt[i] = repl
-            out.append("&".join(nxt))
-    return out
-
-
 def _extra_name(seed: str, rank: int) -> str | None:
     atoms = _atoms(seed)
     if len(atoms) >= RECIPE_MAX_ATOMS or rank >= len(EXTRA_ATOMS):
@@ -326,7 +331,139 @@ def _extra_name(seed: str, rank: int) -> str | None:
     return "&".join(atoms + [extra])
 
 
-def iter_densify_names(passes: Iterable[str], burned: set[str]) -> Iterator[str]:
+def _atom_axes(atom: str) -> list[tuple[str, tuple, float]]:
+    """Numeric axes densify steps. Fixed tuple omits this axis's own value."""
+    m = _HTF_RE.match(atom)
+    if m:
+        return [("htf_period", (m.group(1), m.group(2)), float(m.group(3)))]
+    m = _MOM_RE.match(atom)
+    if m:
+        lb, thr = float(m.group(1)), float(m.group(2))
+        return [
+            ("mom_lb", ("mom", thr), lb),
+            ("mom_thr", ("mom", lb), thr),
+        ]
+    m = _DIP_RE.match(atom)
+    if m:
+        lb, thr = float(m.group(1)), float(m.group(2))
+        return [
+            ("dip_lb", ("dip", thr), lb),
+            ("dip_thr", ("dip", lb), thr),
+        ]
+    m = _MA_RE.match(atom)
+    if m:
+        return [("ma_period", (m.group(1),), float(m.group(2)))]
+    m = _RSI_RE.match(atom)
+    if m:
+        period, th = float(m.group(1)), float(m.group(2))
+        upper = float(m.group(3)) if m.group(3) else None
+        axes = [
+            ("rsi_period", (th, upper), period),
+            ("rsi_gt", (period, upper), th),
+        ]
+        if upper is not None:
+            axes.append(("rsi_lt", (period, th), upper))
+        return axes
+    m = _STRUCT_RE.match(atom)
+    if m:
+        return [("struct_n", (m.group(1),), float(m.group(2)))]
+    return []
+
+
+def _single_axis_change(old: str, new: str) -> tuple[str, tuple, float, float] | None:
+    """``(axis, fixed, old_value, new_value)`` when exactly one axis value moved."""
+    old_axes = {axis: (fixed, value) for axis, fixed, value in _atom_axes(old)}
+    new_axes = {axis: (fixed, value) for axis, fixed, value in _atom_axes(new)}
+    if set(old_axes) != set(new_axes) or not old_axes:
+        return None
+    changed = [axis for axis in old_axes if old_axes[axis][1] != new_axes[axis][1]]
+    if len(changed) != 1:
+        return None
+    axis = changed[0]
+    fixed, old_v = old_axes[axis]
+    _fixed_new, new_v = new_axes[axis]
+    if fixed != _fixed_new:
+        return None
+    return axis, fixed, old_v, new_v
+
+
+def _zero_axis_index(zero_names: Iterable[str]) -> dict[tuple, set[float]]:
+    """Map ``(other atoms, axis, fixed params)`` → values that printed trades=0."""
+    index: dict[tuple, set[float]] = {}
+    for name in zero_names:
+        if not name:
+            continue
+        atoms = _atoms(name)
+        for i, atom in enumerate(atoms):
+            others = tuple(sorted(atoms[:i] + atoms[i + 1 :]))
+            for axis, fixed, value in _atom_axes(atom):
+                key = (others, axis, fixed)
+                index.setdefault(key, set()).add(value)
+    return index
+
+
+def _dead_end(
+    seed_atoms: list[str],
+    index: int,
+    new_atom: str,
+    zero_index: dict[tuple, set[float]],
+) -> bool:
+    """True when a trades=0 neighbor sits on this step or between it and the seed.
+
+    Further steps in that direction are dead. The opposite direction stays
+    open. Ops-park rows are not in ``zero_index``.
+    """
+    if not zero_index:
+        return False
+    change = _single_axis_change(seed_atoms[index], new_atom)
+    if change is None:
+        return False
+    axis, fixed, old_v, new_v = change
+    if new_v == old_v:
+        return False
+    others = tuple(sorted(seed_atoms[:index] + seed_atoms[index + 1 :]))
+    values = zero_index.get((others, axis, fixed))
+    if not values:
+        return False
+    direction = 1.0 if new_v > old_v else -1.0
+    span = abs(new_v - old_v)
+    for value in values:
+        delta = (value - old_v) * direction
+        if delta > 0 and delta <= span + 1e-9:
+            return True
+    return False
+
+
+def zero_trade_names_from_rows(rows: Iterable[dict]) -> set[str]:
+    """Newest row per name with an explicit trades=0 that is not an ops park.
+
+    The display log is newest-first. A missing ``trades`` field is not zero.
+    """
+    newest: dict[str, dict] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        name = row.get("strategy")
+        if not isinstance(name, str) or not name or name in newest:
+            continue
+        newest[name] = row
+    out: set[str] = set()
+    for name, row in newest.items():
+        if is_ops_park_record(row):
+            continue
+        trades = row.get("trades")
+        if isinstance(trades, bool) or not isinstance(trades, (int, float)):
+            continue
+        if int(trades) == 0:
+            out.add(name)
+    return out
+
+
+def iter_densify_names(
+    passes: Iterable[str],
+    burned: set[str],
+    zero_names: Iterable[str] | None = None,
+) -> Iterator[str]:
     """Deterministic stream. Same seeds and burn set → same order."""
     seeds: list[str] = []
     for name in passes:
@@ -338,12 +475,20 @@ def iter_densify_names(passes: Iterable[str], burned: set[str]) -> Iterator[str]
             continue
         seeds.append(name)
     seeds.sort(key=_seed_sort_key)
+    zero_index = _zero_axis_index(zero_names or ())
     limit = max(DENSIFY_MAX_RANK, len(EXTRA_ATOMS))
     for rank in range(limit):
         for seed in seeds:
-            yield from _one_axis_names(seed, rank)
+            atoms = _atoms(seed)
+            for i, atom in enumerate(atoms):
+                for repl in _atom_replacements(atom, rank):
+                    if _dead_end(atoms, i, repl, zero_index):
+                        continue
+                    nxt = list(atoms)
+                    nxt[i] = repl
+                    yield "&".join(nxt)
             extra = _extra_name(seed, rank)
-            if extra:
+            if extra and not mint_block_reason(extra):
                 yield extra
 
 
@@ -358,6 +503,8 @@ def candidate_allowed(
     if not name or not name_is_parseable(name):
         return False
     if name_has_mom_gt_and_dip(name):
+        return False
+    if mint_block_reason(name):
         return False
     if name in taken or near_duplicate_key(name) in taken_keys:
         return False
@@ -380,12 +527,14 @@ def next_densify_batch(
     taken_names: Iterable[str],
     n: int,
     index: dict[str, bool] | None = None,
+    zero_trade_names: Iterable[str] | None = None,
 ) -> tuple[list[str], bool]:
     """First ``n`` densify names not in ``taken_names``.
 
     Returns ``(names, exhausted)``. ``exhausted`` is true when the
     iterator ended before ``n`` accepts (including when there are no
-    qualified seeds).
+    qualified seeds). ``zero_trade_names`` defaults to explicit trades=0
+    rows in the discovery log (ops parks excluded).
     """
     want = max(0, int(n))
     if want == 0:
@@ -394,12 +543,16 @@ def next_densify_batch(
         from hedge_fund.trading.tested_index import ensure_tested_index
 
         index = ensure_tested_index()
+    if zero_trade_names is None:
+        from hedge_fund.trading.discovery import load_discovery_log
+
+        zero_trade_names = zero_trade_names_from_rows(load_discovery_log())
     burned = burned_keys(index)
     passes = [name for name, qual in index.items() if qual]
     taken = {name for name in taken_names if name}
     taken_keys = {near_duplicate_key(name) for name in taken}
     out: list[str] = []
-    for cand in iter_densify_names(passes, burned):
+    for cand in iter_densify_names(passes, burned, zero_trade_names):
         if not candidate_allowed(cand, taken=taken, taken_keys=taken_keys, burned=burned):
             continue
         out.append(cand)

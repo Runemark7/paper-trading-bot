@@ -115,6 +115,11 @@ def _canon_atom(atom: str) -> str:
             ov = int(round(int(m.group(3)) / 5.0) * 5)
             return f"rsi_{p}_>{th}_<{ov}"
         return f"rsi_{p}_>{th}"
+    m = re.match(r"^rsi_(\d+)_<(\d+)$", atom)
+    if m:
+        p = _round_period(int(m.group(1)))
+        th = int(round(int(m.group(2)) / 5.0) * 5)
+        return f"rsi_{p}_<{th}"
     m = re.match(r"^(mom|dip)_(\d+)b_(gt|lt)(\d+)pc$", atom)
     if m:
         lb = int(round(int(m.group(2)) / 6.0) * 6) or 6
@@ -245,10 +250,16 @@ def untested_candidates(blocked_names: set[str], universe: list[str] | None = No
         from hedge_fund.trading.refill import discovery_universe
 
         universe = discovery_universe()
+    from hedge_fund.trading.mint_quality import mint_block_reason
+
     taken_keys = {near_duplicate_key(n) for n in blocked_names}
     out: list[str] = []
     for cand in universe:
         if cand in blocked_names:
+            continue
+        # Queued redundant / empty-band / unreachable names are not eligible.
+        # Tested history is already in blocked_names and is left alone.
+        if mint_block_reason(cand):
             continue
         key = near_duplicate_key(cand)
         if key in taken_keys:

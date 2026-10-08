@@ -271,12 +271,18 @@ def parse_strategy(expr: str | Callable | dict) -> Predicate:
         period = int(m_ema_abv.group(1))
         return _close_pred(lambda c, i=None: _eval_ema_above(c, period, i))
 
-    # 5. RSI Range: rsi_30_>57_<90 or rsi_30_57 or rsi_14_>50
+    # 5. RSI Range: rsi_30_>57_<90 or rsi_30_57 or rsi_14_>50 or rsi_14_<60
     m_rsi_full = re.match(r"^rsi_(\d+)_>_?(\d+)(?:_<_?(\d+))?$", expr_clean)
     if m_rsi_full:
         p, th = int(m_rsi_full.group(1)), int(m_rsi_full.group(2))
         ov = int(m_rsi_full.group(3)) if m_rsi_full.group(3) else 100
         return _close_pred(lambda c, i=None: _eval_rsi_range(c, p, th, ov, i))
+
+    m_rsi_lt = re.match(r"^rsi_(\d+)_<_?(\d+)$", expr_clean)
+    if m_rsi_lt:
+        p, th = int(m_rsi_lt.group(1)), int(m_rsi_lt.group(2))
+        # Upper bound only. -1 keeps RSI 0 inside the band (r > min and r <= max).
+        return _close_pred(lambda c, i=None, _p=p, _th=th: _eval_rsi_range(c, _p, -1, _th, i))
 
     m_rsi_short = re.match(r"^rsi_(\d+)_(\d+)$", expr_clean)
     if m_rsi_short:

@@ -612,6 +612,7 @@ _ALLOWED_ATOM_RES: tuple[re.Pattern[str], ...] = (
     re.compile(r"^sma_abv_\d+$"),
     re.compile(r"^ema_abv_\d+$"),
     re.compile(r"^rsi_\d+_>\d+(?:_<\d+)?$"),
+    re.compile(r"^rsi_\d+_<\d+$"),
     re.compile(r"^mom_\d+b_gt\d+pc$"),
     re.compile(r"^dip_\d+b_lt\d+pc$"),
     re.compile(r"^don_(hi|lo)_\d+$"),
@@ -1313,10 +1314,16 @@ def iter_recipe_names() -> Iterator[str]:
     follow, then legacy 2026-09-11 families, the 2026-09-12
     near-level pass, then leftover TREND / ema_stack / 3-atom
     families. Dip×support and short-horizon mom stay on the frozen
-    3×3. Central guard drops any ``mom_*_gt*`` ∧ ``dip_*`` stack.
-    No WaveTrend, no MFI.
+    3×3.     Central guard drops any ``mom_*_gt*`` ∧ ``dip_*`` stack, any
+    same-indicator redundant threshold (or empty band), and any mom/dip
+    percent above the reachability cap. No WaveTrend, no MFI.
     """
-    yield from _iter_without_mom_and_dip(_iter_recipe_families())
+    from hedge_fund.trading.mint_quality import mint_block_reason
+
+    for name in _iter_without_mom_and_dip(_iter_recipe_families()):
+        if mint_block_reason(name):
+            continue
+        yield name
 
 
 def _iter_recipe_families() -> Iterator[str]:
@@ -1339,6 +1346,8 @@ def next_refill_batch(
     n: int = DISCOVERY_REFILL_BATCH_SIZE,
 ) -> list[str]:
     """Next parseable, non-near-duplicate, never-logged names from the recipe."""
+    from hedge_fund.trading.mint_quality import mint_block_reason as _mint_block_reason
+
     want = max(0, int(n))
     if want == 0:
         return []
@@ -1351,6 +1360,8 @@ def next_refill_batch(
         if not name_is_parseable(cand):
             continue
         if name_has_mom_gt_and_dip(cand):
+            continue
+        if _mint_block_reason(cand):
             continue
         if not _is_refillable_name(cand):
             continue
