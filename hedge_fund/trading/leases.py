@@ -87,7 +87,12 @@ def refill_status_path() -> Path:
 
 def load_refill_status() -> dict[str, Any]:
     """Last claim refill. Missing file → recipe, nothing generated, not exhausted."""
-    default = {"source": "recipe", "generated_last": 0, "exhausted": False}
+    default = {
+        "source": "recipe",
+        "generated_last": 0,
+        "exhausted": False,
+        "strategy": "recipe_order",
+    }
     path = refill_status_path()
     if not path.exists():
         return dict(default)
@@ -104,10 +109,14 @@ def load_refill_status() -> dict[str, Any]:
         generated = int(data.get("generated_last") or 0)
     except (TypeError, ValueError):
         generated = 0
+    strategy = data.get("strategy")
+    if strategy not in ("lift_ucb", "recipe_order"):
+        strategy = "recipe_order"
     return {
         "source": source,
         "generated_last": generated,
         "exhausted": bool(data.get("exhausted")),
+        "strategy": strategy,
     }
 
 
@@ -118,10 +127,14 @@ def save_refill_status(status: dict) -> None:
     source = status.get("source")
     if source not in ("recipe", "densify"):
         source = "recipe"
+    strategy = status.get("strategy")
+    if strategy not in ("lift_ucb", "recipe_order"):
+        strategy = "recipe_order"
     payload = {
         "source": source,
         "generated_last": int(status.get("generated_last") or 0),
         "exhausted": bool(status.get("exhausted")),
+        "strategy": strategy,
         "paper_only": True,
         "updated_at": _iso(datetime.now(timezone.utc)),
     }
@@ -273,9 +286,18 @@ def _prune_workers(state: dict, now: datetime) -> None:
 
 
 def _mint_unlocked(taken: set[str], n: int) -> tuple[list[str], dict]:
-    """Recipe first. Densify only the shortfall. Logs if nothing can be minted."""
+    """Recipe first. Densify only the shortfall. Logs if nothing can be minted.
+
+    Recomputes atom lift when the tested metrics changed (cached otherwise)
+    and ranks the minted window with it. The OOS gate is not involved.
+    """
+    from hedge_fund.trading.atom_lift import ensure_lift_model
+    from hedge_fund.trading.tested_index import load_tested_metrics
+
+    model = ensure_lift_model()
+    metrics = load_tested_metrics()
     want = max(0, int(n))
-    recipe = next_refill_batch(taken_names=taken, n=want) if want else []
+    recipe = next_refill_batch(taken_names=taken, n=want, lift=model) if want else []
     recipe = [name for name in recipe if not mint_block_reason(name)]
     names = list(recipe)
     exhausted = False
@@ -284,6 +306,8 @@ def _mint_unlocked(taken: set[str], n: int) -> tuple[list[str], dict]:
         more, ran_out = next_densify_batch(
             taken_names=set(taken) | set(names),
             n=want - len(names),
+            lift=model,
+            metrics=metrics,
         )
         more = [name for name in more if not mint_block_reason(name)]
         names.extend(more)
@@ -300,6 +324,7 @@ def _mint_unlocked(taken: set[str], n: int) -> tuple[list[str], dict]:
         "source": source,
         "generated_last": len(names),
         "exhausted": exhausted,
+        "strategy": model.strategy,
     }
 
 

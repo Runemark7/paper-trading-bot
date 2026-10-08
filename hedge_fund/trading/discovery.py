@@ -25,6 +25,8 @@ from hedge_fund.trading.store import paper_state_lock
 from hedge_fund.trading.tested_index import (
     flags_for_skip,
     load_tested_index,
+    load_tested_metrics,
+    merge_tested_metrics,
     merge_tested_rows,
     save_tested_index,
 )
@@ -139,8 +141,11 @@ def append_discovery_evaluations(eval_records: list[dict], *, cap: int = DISCOVE
         log = load_discovery_log()
         log = list(eval_records) + log
         index = load_tested_index()
-        if merge_tested_rows(index, log):
-            save_tested_index(index)
+        metrics = load_tested_metrics()
+        flags_changed = merge_tested_rows(index, log)
+        metrics_changed = merge_tested_metrics(metrics, log)
+        if flags_changed or metrics_changed:
+            save_tested_index(index, metrics)
         log = log[:cap]
         path.write_text(json.dumps(log, separators=(",", ":")))
         return log
@@ -162,8 +167,11 @@ def save_discovery_log(log: list[dict]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(log, separators=(",", ":")))
         index = load_tested_index()
-        if merge_tested_rows(index, log):
-            save_tested_index(index)
+        metrics = load_tested_metrics()
+        flags_changed = merge_tested_rows(index, log)
+        metrics_changed = merge_tested_metrics(metrics, log)
+        if flags_changed or metrics_changed:
+            save_tested_index(index, metrics)
 
 
 def write_in_flight(

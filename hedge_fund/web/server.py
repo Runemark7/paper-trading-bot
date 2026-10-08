@@ -14,6 +14,7 @@ A small, dependency-free HTTP server (stdlib only) that exposes:
                            running_now.live_history is the same tape summary
   GET /api/discovery/summary -> tested / in-flight / leftover-untested; farm Start/Stop status
                                 (?compact=1 omits those lists; counts/farm/stuck stay)
+  GET /api/discovery/lift -> top and bottom atoms by OOS Sharpe lift (read-only)
   POST /api/discovery/ingest -> Windows worker: append evals + admit / force_admit (shared secret)
   POST /api/discovery/claim -> lease never-tested names (same ingest token)
   POST /api/discovery/release -> drop this worker's leases (same ingest token)
@@ -466,6 +467,13 @@ class Handler(BaseHTTPRequestHandler):
                 from hedge_fund.web.discovery import build_discovery_summary, compact_query
 
                 self._send_json(build_discovery_summary(lists=not compact_query(qs.get("compact"))))
+            except Exception as exc:
+                self._send_json({"error": str(exc)}, 500)
+        elif route == "/api/discovery/lift":
+            try:
+                from hedge_fund.trading.atom_lift import ensure_lift_model, lift_api_payload
+
+                self._send_json(lift_api_payload(ensure_lift_model()))
             except Exception as exc:
                 self._send_json({"error": str(exc)}, 500)
         elif route == "/api/discovery":
