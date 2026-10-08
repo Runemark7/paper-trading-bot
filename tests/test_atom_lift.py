@@ -29,6 +29,24 @@ from hedge_fund.trading.atom_lift import (
 from hedge_fund.trading.densify import next_densify_batch, order_seeds
 
 
+# 2026-10-08: literature undry #3 (``LITDIP_*``) is the recipe prefix.
+# Older amendment tests pin the pre-#3 stream, so they read the recipe
+# without that prefix and treat its names as already taken.
+from hedge_fund.trading.refill import iter_lit_trend_dip_names as _iter_lit
+
+_LIT_NAMES = frozenset(_iter_lit())
+
+
+def _legacy_recipe_names():
+    from hedge_fund.trading.refill import iter_recipe_names as _iter
+
+    return (n for n in _iter() if n not in _LIT_NAMES)
+
+
+def _with_lit(taken):
+    return set(taken) | _LIT_NAMES
+
+
 def _est(key: str, lift: float, *, support: int = 10, zero: float = 0.0) -> AtomEstimate:
     return AtomEstimate(
         key=key,
@@ -210,20 +228,20 @@ class SteerTests(unittest.TestCase):
     def test_refill_keeps_recipe_order_until_lift_is_informative(self):
         from hedge_fund.trading.refill import next_refill_batch
 
-        plain = next_refill_batch(taken_names=[], n=4)
+        plain = next_refill_batch(taken_names=_with_lit([]), n=4)
         self.assertEqual(plain[0], "h1_ema_abv_20&mom_36b_gt8pc")
         flat = _model({"mom_42b_gt6pc": _est("mom_42b_gt6pc", 5.0)}, informative=False)
-        self.assertEqual(next_refill_batch(taken_names=[], n=4, lift=flat), plain)
+        self.assertEqual(next_refill_batch(taken_names=_with_lit([]), n=4, lift=flat), plain)
         live = _model({
             "mom_42b_gt6pc": _est("mom_42b_gt6pc", 2.0),
             "mom_36b_gt8pc": _est("mom_36b_gt8pc", -1.0),
         })
-        steered = next_refill_batch(taken_names=[], n=4, lift=live, lift_seed=7063)
+        steered = next_refill_batch(taken_names=_with_lit([]), n=4, lift=live, lift_seed=7063)
         self.assertEqual(len(steered), 4)
         self.assertTrue(all("mom_42b_gt6pc" in name for name in steered[:3]))
         self.assertNotEqual(steered[0], plain[0])
         self.assertEqual(
-            next_refill_batch(taken_names=[], n=4, lift=live, lift_seed=7063),
+            next_refill_batch(taken_names=_with_lit([]), n=4, lift=live, lift_seed=7063),
             steered,
         )
 

@@ -1161,6 +1161,27 @@ This amendment does not rewrite original §§ 1–8 or prior amendments. Qual/li
 
 - Same-date claim/lease text insofar as it said prod refills only when nothing is eligible, only from the recipe, and that a name is skipped because it is in `discovery_log.json`. The display log is no longer the skip set. OOS **thresholds**, `QUAL_N_WINDOWS`, `QUAL_WARMUP_BARS`, `STRUCTURE_NS` ≤96, the mom∧dip guard, and fail-once are not superseded.
 
+### Amendment 2026-10-08 — literature undry #3: slow trend gate × capitulation dip
 
+This amendment does not rewrite original §§ 1–8 or prior amendments. Qual/live remain 5m, risk policy remains `rm_v1`. OOS **thresholds** are unchanged: `MIN_BACKTEST_TRADES` = 30, `MIN_BACKTEST_SHARPE` = 0.30, must beat buy-and-hold, must beat `sma_stack`, all-windows non-negative is diagnostic only, fail-once never-retest stays. `QUAL_N_WINDOWS` = 23, `QUAL_WARMUP_BARS` = 4032, `DISCOVERY_REFILL_BATCH_SIZE` = 16 stay. **Still paper.** Do not cull champions. Do not retest parked fails. Do not mint structure `N>96`. No mom∧dip. h4×mom stays banned.
 
+**Why.** Prod 2026-10-08 ~08:25 UTC: farm dry (refill exhausted, eligible 0) at 15,568 tested / 112 pass, all passes from the old 8-window set. On the current 23-window gate: 0 admits, and no name with ≥30 OOS trades beat buy-and-hold. The only net-positive ≥30-trade rows are banned h4×mom (`h4_{sma,ema}_abv_15&mom_24b_gt6pc`). The h1 `*_abv_50/60` × `mom_*b_gt4/6pc` densify is burned (negative Sharpe, lost to B&H). The densify burn rule leaves only h1×mom spines as seeds, so no evidence-backed densify exists. Research path instead.
 
+**Literature (peer-reviewed).**
+
+- Detzel, Liu, Strauss, Zhou & Zhu (2021), *Financial Management* 50(1), 107–137, doi:10.1111/fima.12310. Price/moving-average ratios over daily-scale MAs forecast Bitcoin returns in and out of sample; MA strategies give alpha and Sharpe gains vs buy-and-hold.
+- Brock, Lakonishok & LeBaron (1992), *Journal of Finance* 47(5), 1731–1764, doi:10.1111/j.1540-6261.1992.tb04681.x. Long moving-average rules (50–200 day) carry predictive power.
+- Wen, Bouri, Xu & Zhao (2022), *North American Journal of Economics and Finance* 62, 101733, doi:10.1016/j.najef.2022.101733. Intraday reversal in BTC/ETH tied to overreaction; timing on the predictors beats always-long / buy-and-hold.
+- Caporale & Plastun (2019), *Journal of Economic Studies* 46(5), 1137–1155, doi:10.1108/JES-09-2018-0310. Counter-moves after crypto overreactions alone do not pay after costs. That is why the dip only fires inside a slow uptrend, and why the dip is deep (rare).
+
+**What was added** (`hedge_fund.trading.refill.LITDIP_*`, `_lit_trend_dip`, `iter_lit_trend_dip_names`). Parser atoms only (`h4_{sma,ema}_abv_N`, `dip_Nb_ltXpc`). Two atoms per name, already in canonical order: `dip_{L}b_lt{T}pc&h4_{sma,ema}_abv_{P}`.
+
+- Gate `P` ∈ {300, 360, 330, 270, 240, 390, 420, 210, 180, 450, 150} h4 bars (25–75 days), SMA and EMA. ≤450 so the ~77-day prefix before each OOS cut seeds the MA. h1 twins (`h1_*_abv_1200` ≈ `h4_*_abv_300`) evaluate the same and are skipped.
+- Dip `L` = 96–720 bars (8h–60h) in 12-bar steps, `T` even 6–18%. Cells keep the unconditional dip frequency on the 5m tape in a 0.6–3.5% band (≥0.85% past 300 bars, ≥1.1% past 500) and under the 99th-percentile move, so most names land at 30–300 OOS trades instead of the ~1,400 median. 116 cells × 22 gates = 2,552 never-tested names.
+- Order: gate tiers (300/360 first) outer, cells inner; the first cells are local-screen seeds that printed net P&L > 0 with ≥30 trades (`(144,8)`, `(576,10)`, `(720,10)`, `(288,10)`, `(120,8)`, `(96,8)`), then the band by distance from ~1% frequency. Emitted **first** in `iter_recipe_names`.
+
+**Local screen (not the gate).** Same `evaluate_strategy_record` on a 5m tape ending 2026-09-12 (B&H 1,692): `h4_sma_abv_360&dip_144b_lt8pc` 56 trades / Sharpe 0.40 / +898; `h4_ema_abv_300&dip_576b_lt10pc` 116 / 0.33 / +699; `h4_sma_abv_300&dip_576b_lt10pc` 121 / 0.27 / +817. None beat B&H there. Same tape, slow gate alone (`h4_sma_abv_300`) 1,113 trades / −2,719; weekly TSMOM `mom_2016b_gt*` and trend × short dips/RSI-oversold all negative.
+
+**Workers.** Claim mode mints on prod (`POST /api/discovery/claim` → `next_refill_batch`). The farm host evaluates leased names with its local parser, which already accepts these atoms; no farm pull is needed for the names.
+
+**What did not change.** Sharpe 0.30, 30 OOS trades, beat B&H, beat `sma_stack`, 5m, `rm_v1`, fail-once, `QUAL_N_WINDOWS` = 23, `QUAL_WARMUP_BARS` = 4032. `STRUCTURE_NS` cap at 96. Mom∧dip guard. h4×mom ban. Live risk unchanged. Island #2c / #2b / older families stay in the stream after this prefix.

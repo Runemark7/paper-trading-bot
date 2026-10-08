@@ -68,6 +68,11 @@ Still no named candlesticks. OOS gates unchanged.
 mom neighbors). The burned h4×mom family stays in the stream
 after that prefix. HTF periods 15/18/36/40/48/72 are already
 minted or collapse under ``_round_period``. OOS gates unchanged.
+2026-10-08: farm dry at 15,568 tested; no >=30-trade name beat B&H on
+the 23-window gate and the h1×mom densify is burned. Literature undry
+#3 (``LITDIP_*``) leads: slow h4 trend gate (25–75 day SMA/EMA) AND an
+8h–60h capitulation dip, two atoms, no mom. ~2.5k names. OOS gates
+unchanged.
 """
 from __future__ import annotations
 
@@ -445,6 +450,67 @@ ISLAND2C_MOM_NEIGHBOR: tuple[str, ...] = (
     "mom_18b_gt6pc",
     "mom_30b_gt6pc",
     "mom_24b_gt8pc",
+)
+# 2026-10-08 literature undry #3: slow trend gate × capitulation dip.
+# Farm dry at 15,568 tested / 0 admits on the 23-window gate. No name with
+# >=30 trades beats B&H; the only net-positive >=30-trade rows are banned
+# h4×mom. The h1 ``*_abv_50/60`` × ``mom_*b_gt4/6pc`` densify is burned
+# (negative Sharpe, lost to B&H). This family is not h1×mom and has no
+# mom atom at all (no mom∧dip, no h4×mom).
+#
+# Gate (Detzel et al. 2021 Financial Management 50(1) 107–137: price/MA
+# ratios over daily-scale MAs forecast Bitcoin returns and beat B&H;
+# Brock, Lakonishok & LeBaron 1992 JF long-MA rules): completed-4h close
+# above a 25–75 day SMA/EMA (150–450 h4 bars). The OOS cut sits ~77 days
+# into each window's prefix, so 450 h4 bars are seeded. h1 twins
+# (``h1_*_abv_1200`` ≈ ``h4_*_abv_300``) evaluate the same and are skipped.
+#
+# Entry (Wen, Bouri, Xu & Zhao 2022 NAJEF 62 101733: intraday reversal in
+# BTC/ETH from overreaction; Caporale & Plastun 2019 JES 46(5): overreaction
+# counter-moves alone do not pay after costs, hence the trend gate):
+# 8h–60h drop of 6–18%. Cells keep the unconditional dip frequency in a
+# 0.6–3.5% band (≥0.85% past 300 bars, ≥1.1% past 500) so most names land
+# at 30–300 OOS trades instead of the ~1,400 median. Even thresholds and
+# 12-bar lookback steps stay distinct under ``near_duplicate_key``.
+# Thresholds sit under the 5m tape's 99th-percentile move.
+# Ordered by local-screen EV: seeds that printed net P&L > 0 with >=30
+# trades first, then the band by distance from ~1% frequency.
+LITDIP_GATE_PERIODS: tuple[int, ...] = (
+    300, 360, 330, 270, 240, 390, 420, 210, 180, 450, 150,
+)
+LITDIP_GATES: tuple[str, ...] = tuple(
+    f"h4_{kind}_abv_{period}"
+    for period in LITDIP_GATE_PERIODS
+    for kind in ("sma", "ema")
+)
+# (lookback bars, drop %). First six are measured seeds.
+LITDIP_CELLS: tuple[tuple[int, int], ...] = (
+    (144, 8), (576, 10), (720, 10), (288, 10), (120, 8), (96, 8),
+    (312, 10), (468, 12), (192, 8), (480, 12), (96, 6), (324, 10),
+    (456, 12), (492, 12), (300, 10), (180, 8), (444, 12), (204, 8),
+    (336, 10), (696, 14), (108, 6), (516, 12), (708, 14), (348, 10),
+    (720, 14), (432, 12), (528, 12), (168, 8), (276, 10), (216, 8),
+    (360, 10), (540, 12), (264, 10), (372, 10), (552, 12), (120, 6),
+    (564, 12), (228, 8), (384, 10), (156, 8), (576, 12), (252, 10),
+    (396, 10), (588, 12), (240, 8), (240, 10), (600, 12), (408, 10),
+    (612, 12), (420, 10), (132, 6), (624, 12), (252, 8), (432, 10),
+    (636, 12), (228, 10), (648, 12), (264, 8), (444, 10), (660, 12),
+    (216, 10), (456, 10), (144, 6), (672, 12), (276, 8), (468, 10),
+    (684, 12), (696, 12), (480, 10), (708, 12), (288, 8), (492, 10),
+    (156, 6), (720, 12), (300, 8), (504, 10), (516, 10), (312, 8),
+    (168, 6), (528, 10), (324, 8), (540, 10), (552, 10), (180, 6),
+    (336, 8), (564, 10), (348, 8), (360, 8), (192, 6), (588, 10),
+    (372, 8), (600, 10), (612, 10), (384, 8), (204, 6), (624, 10),
+    (396, 8), (636, 10), (216, 6), (648, 10), (408, 8), (660, 10),
+    (420, 8), (672, 10), (228, 6), (432, 8), (684, 10), (696, 10),
+    (444, 8), (240, 6), (708, 10), (456, 8), (252, 6), (468, 8),
+    (480, 8), (264, 6),
+)
+# Gate tiers: 300/360 first, then 330/270/240, then the rest.
+LITDIP_GATE_TIERS: tuple[tuple[str, ...], ...] = (
+    LITDIP_GATES[:4],
+    LITDIP_GATES[4:10],
+    LITDIP_GATES[10:],
 )
 # Skip mom_12b on the undry prefix (research + Sharpe near-miss).
 UNDRY_MOM_PRIORITY: tuple[str, ...] = (
@@ -1015,6 +1081,33 @@ def _regime_island_2c(blocked_keys: set[str]) -> Iterator[str]:
                 yield from emit(f"{regime}&{nmom}&{cont}&{rsi_paid}")
 
 
+def _lit_trend_dip(blocked_keys: set[str]) -> Iterator[str]:
+    """Literature undry #3: slow h4 trend gate × capitulation dip. Emit first.
+
+    ``dip_{L}b_lt{T}pc&h4_{sma,ema}_abv_{P}``, already in canonical (sorted)
+    atom order. Gate tiers outer, dip cells (EV order) inner, so the
+    best-measured gates walk every cell before wider periods. Two atoms:
+    no mom, no 5m MA / RSI filler, no structure. ``blocked_keys`` are
+    near-duplicate keys of the rest of the recipe.
+    """
+    seen = set(blocked_keys)
+    for tier in LITDIP_GATE_TIERS:
+        for lookback, pct in LITDIP_CELLS:
+            for gate in tier:
+                name = f"dip_{lookback}b_lt{pct}pc&{gate}"
+                if name_has_mom_gt_and_dip(name) or not name_is_parseable(name):
+                    continue
+                key = near_duplicate_key(name)
+                if key in seen:
+                    continue
+                seen.add(key)
+                yield name
+
+
+def iter_lit_trend_dip_names() -> Iterator[str]:
+    """Literature undry #3 names in emit order (the recipe prefix)."""
+    yield from _lit_trend_dip(set())
+
 def _regime_undry_winner_shaped() -> Iterator[str]:
     """Admit-island densify. Emit first on dry refill.
 
@@ -1261,7 +1354,11 @@ def _regime_ands_raw() -> Iterator[str]:
     island_2b = list(_regime_island_2b(blocked))
     blocked_2c = set(blocked)
     blocked_2c.update(near_duplicate_key(name) for name in island_2b)
-    yield from _regime_island_2c(blocked_2c)
+    island_2c = list(_regime_island_2c(blocked_2c))
+    blocked_lit = set(blocked_2c)
+    blocked_lit.update(near_duplicate_key(name) for name in island_2c)
+    yield from _lit_trend_dip(blocked_lit)
+    yield from island_2c
     yield from island_2b
     yield from drained
 
@@ -1296,7 +1393,8 @@ def _trend_participation_ands(n: int) -> Iterator[str]:
 def iter_recipe_names() -> Iterator[str]:
     """Deterministic bounded stream. Not a full cartesian of every atom.
 
-    Island #2c is first so a dry refill mints h1 densify of the paying
+    Literature undry #3 (``LITDIP_*``: slow h4 trend gate AND a
+    capitulation dip, no mom) is first. Island #2c follows so a dry refill mints h1 densify of the paying
     ``mom_18b_gt2pc`` island (``rsi_14_>45`` on ``*_abv_{30,20,50}``,
     gap MAs 35/25/15/60, one extra MA on ``…&*_abv_30&rsi_14_>50``,
     then modest mom neighbors) immediately. Island #2b (h4×mom) follows,

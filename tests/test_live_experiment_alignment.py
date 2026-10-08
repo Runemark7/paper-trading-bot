@@ -12,6 +12,25 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+
+# 2026-10-08: literature undry #3 (``LITDIP_*``) is the recipe prefix.
+# Older amendment tests pin the pre-#3 stream, so they read the recipe
+# without that prefix and treat its names as already taken.
+from hedge_fund.trading.refill import iter_lit_trend_dip_names as _iter_lit
+
+_LIT_NAMES = frozenset(_iter_lit())
+
+
+def _legacy_recipe_names():
+    from hedge_fund.trading.refill import iter_recipe_names as _iter
+
+    return (n for n in _iter() if n not in _LIT_NAMES)
+
+
+def _with_lit(taken):
+    return set(taken) | _LIT_NAMES
+
+
 REPO = Path(__file__).resolve().parents[1]
 
 
@@ -567,7 +586,7 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertIn(84, STRUCTURE_NS)
         self.assertIn(96, STRUCTURE_NS)
         self.assertIn("through 96", text)
-        self.assertLessEqual(len(list(iter_recipe_names())), 8000)
+        self.assertLessEqual(len(list(_legacy_recipe_names())), 8000)
         self.assertLessEqual(len(generate_universe()), UNIVERSE_TARGET_MAX)
         readme = (REPO / "README.md").read_text()
         self.assertIn("near-level", readme)
@@ -654,12 +673,12 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertEqual(STRUCTURE_NS, STRUCTURE_NS_THROUGH_96)
         self.assertEqual(STRUCTURE_NS[-2:], (84, 96))
         self.assertEqual(len(STRUCTURE_NS), 14)
-        names = list(iter_recipe_names())
+        names = list(_legacy_recipe_names())
         self.assertGreater(len(names), 1500)
         self.assertLessEqual(len(names), 8000)
         uni = generate_universe()
         self.assertLessEqual(len(uni), UNIVERSE_TARGET_MAX)
-        added = next_refill_batch(taken_names=uni, n=DISCOVERY_REFILL_BATCH_SIZE)
+        added = next_refill_batch(taken_names=_with_lit(uni), n=DISCOVERY_REFILL_BATCH_SIZE)
         self.assertEqual(len(added), DISCOVERY_REFILL_BATCH_SIZE)
         readme = (REPO / "README.md").read_text()
         self.assertIn("192", readme)
@@ -756,7 +775,7 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertIn("mom_36b_gt2pc", DIP_FILTERS_WIDE + MOM_FILTERS_WIDE)
         self.assertIn("dip_36b_lt2pc", DIP_FILTERS_WIDE)
         self.assertEqual(CONTINUATION_TRENDS, ("sma_abv_20", "ema_abv_20"))
-        names = list(iter_recipe_names())
+        names = list(_legacy_recipe_names())
         self.assertGreater(len(names), 1500)
         self.assertLessEqual(len(names), 8000)
         self.assertIn("mom_36b_gt2pc&don_hi_12", names)
@@ -764,7 +783,7 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertIn("sma_abv_20&don_hi_12", names)
         uni = generate_universe()
         self.assertLessEqual(len(uni), UNIVERSE_TARGET_MAX)
-        added = next_refill_batch(taken_names=uni, n=DISCOVERY_REFILL_BATCH_SIZE)
+        added = next_refill_batch(taken_names=_with_lit(uni), n=DISCOVERY_REFILL_BATCH_SIZE)
         self.assertEqual(len(added), DISCOVERY_REFILL_BATCH_SIZE)
         readme = (REPO / "README.md").read_text()
         self.assertIn("3×3 dip/mom", readme)
@@ -1056,7 +1075,7 @@ class ProtocolAmendmentTests(unittest.TestCase):
             ("mom_30b_gt1pc", "mom_42b_gt1pc", "mom_60b_gt1pc", "mom_84b_gt1pc"),
         )
         self.assertEqual(CONTINUATION_TRENDS, ("sma_abv_20", "ema_abv_20"))
-        names = list(iter_recipe_names())
+        names = list(_legacy_recipe_names())
         self.assertGreater(len(names), 1500)
         self.assertLessEqual(len(names), 8000)
         self.assertIn("mom_30b_gt1pc&don_hi_12", names)
@@ -1069,8 +1088,7 @@ class ProtocolAmendmentTests(unittest.TestCase):
         uni = generate_universe()
         self.assertLessEqual(len(uni), UNIVERSE_TARGET_MAX)
         # HTF regime family is first; grind 1% is the next mint after those.
-        added = next_refill_batch(
-            taken_names=set(uni) | set(_regime_ands()),
+        added = next_refill_batch(taken_names=_with_lit(set(uni) | set(_regime_ands())),
             n=DISCOVERY_REFILL_BATCH_SIZE,
         )
         self.assertEqual(len(added), DISCOVERY_REFILL_BATCH_SIZE)
@@ -1119,7 +1137,7 @@ class ProtocolAmendmentTests(unittest.TestCase):
             parse_strategy(atom)
             self.assertTrue(name_is_parseable(f"{atom}&sma_abv_20"))
 
-        names = list(iter_recipe_names())
+        names = list(_legacy_recipe_names())
         self.assertIn("h4_ema_abv_24&sma_abv_20", names)
         self.assertIn("h4_ema_abv_24&mom_12b_gt2pc", names)
         self.assertLess(names.index("h4_ema_abv_24&sma_abv_20"), names.index("dip_6b_lt2pc&don_lo_6"))
@@ -1127,7 +1145,7 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertLessEqual(len(names), 8000)
         uni = generate_universe()
         self.assertLessEqual(len(uni), UNIVERSE_TARGET_MAX)
-        added = next_refill_batch(taken_names=uni, n=DISCOVERY_REFILL_BATCH_SIZE)
+        added = next_refill_batch(taken_names=_with_lit(uni), n=DISCOVERY_REFILL_BATCH_SIZE)
         self.assertEqual(len(added), DISCOVERY_REFILL_BATCH_SIZE)
         self.assertTrue(all(n.startswith(("h4_", "h1_")) for n in added), added)
         self.assertTrue(
@@ -1190,7 +1208,7 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertEqual(MOM_FILTERS_HTF_DENSE, ("mom_18b_gt4pc", "mom_18b_gt6pc", "mom_12b_gt6pc"))
         for atom in (*REGIME_ATOMS, *MOM_FILTERS_HTF_DENSE):
             self.assertTrue(name_is_parseable(atom), msg=atom)
-        names = list(iter_recipe_names())
+        names = list(_legacy_recipe_names())
         self.assertLess(
             names.index("h1_ema_abv_24&mom_18b_gt4pc"),
             names.index("h1_ema_abv_24&dip_6b_lt2pc"),
@@ -1265,7 +1283,7 @@ class ProtocolAmendmentTests(unittest.TestCase):
         for atom in ("h1_ema_abv_18", "h1_ema_abv_36"):
             parse_strategy(atom)
             self.assertTrue(name_is_parseable(atom), msg=atom)
-        names = list(iter_recipe_names())
+        names = list(_legacy_recipe_names())
         self.assertIn("h1_ema_abv_18&mom_18b_gt2pc", names)
         self.assertIn("h1_ema_abv_36&mom_18b_gt2pc", names)
         self.assertEqual(names.count("h1_ema_abv_18&mom_18b_gt2pc"), 1)
@@ -1351,7 +1369,7 @@ class ProtocolAmendmentTests(unittest.TestCase):
             near_duplicate_key("dip_24b_lt5pc"),
             near_duplicate_key("dip_24b_lt6pc"),
         )
-        names = list(iter_recipe_names())
+        names = list(_legacy_recipe_names())
         self.assertIn("h1_sma_abv_20&mom_18b_gt2pc", names)
         self.assertIn("h1_sma_abv_24&mom_18b_gt2pc", names)
         self.assertIn("h1_sma_abv_30&mom_18b_gt2pc", names)
@@ -1554,7 +1572,7 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertEqual(STRUCTURE_NS, STRUCTURE_NS_THROUGH_96)
         self.assertEqual(max(STRUCTURE_NS), DEFAULT_STRUCTURE_LOOKBACK_MAX)
         self.assertEqual(REGIME_STRUCTURE_NS, (12, 24, 48))
-        names = list(iter_recipe_names())
+        names = list(_legacy_recipe_names())
         self.assertIn("don_hi_96", names)
         self.assertIn("dbl_bot_48", names)
         self.assertNotIn("don_hi_192", names)
@@ -1625,7 +1643,7 @@ class ProtocolAmendmentTests(unittest.TestCase):
             self.assertTrue(name_is_parseable(atom), msg=atom)
             parse_strategy(atom)
         self.assertNotIn("h1_sma_abv_18", REGIME_ATOMS)
-        names = list(iter_recipe_names())
+        names = list(_legacy_recipe_names())
         self.assertEqual(
             names[0],
             "h1_ema_abv_50&mom_18b_gt2pc&sma_abv_30&rsi_14_>45",
@@ -1645,8 +1663,7 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertTrue(name_is_parseable(combo))
         parse_strategy(combo)
         self.assertTrue(name_is_parseable("h1_ema_abv_20&mom_18b_gt2pc&dip_24b_lt5pc"))
-        added = next_refill_batch(
-            taken_names=set(generate_universe()),
+        added = next_refill_batch(taken_names=_with_lit(set(generate_universe())),
             n=DISCOVERY_REFILL_BATCH_SIZE,
         )
         self.assertEqual(len(added), DISCOVERY_REFILL_BATCH_SIZE)
@@ -1716,7 +1733,7 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertEqual(max(STRUCTURE_NS), DEFAULT_STRUCTURE_LOOKBACK_MAX)
         self.assertEqual(RECIPE_MAX_ATOMS, 7)
         self.assertIn("h1_ema_abv_50", DEEP_STACK_REGIME)
-        names = list(iter_recipe_names())
+        names = list(_legacy_recipe_names())
         self.assertEqual(
             names[0],
             "h1_ema_abv_50&mom_18b_gt2pc&sma_abv_30&rsi_14_>45",
@@ -1740,8 +1757,7 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertTrue(name_is_parseable(seven))
         parse_strategy(seven)
         self.assertFalse(name_is_parseable(seven + "&sma_abv_100"))
-        added = next_refill_batch(
-            taken_names=set(generate_universe()),
+        added = next_refill_batch(taken_names=_with_lit(set(generate_universe())),
             n=DISCOVERY_REFILL_BATCH_SIZE,
         )
         self.assertEqual(len(added), DISCOVERY_REFILL_BATCH_SIZE)
@@ -1807,7 +1823,7 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertEqual(FRESH_RSI, "rsi_14_>55")
         self.assertIn("h1_ema_abv_60", REGIME_ATOMS_FRESH)
         self.assertIn("mom_18b_gt8pc", MOM_FILTERS_HTF_FRESH)
-        names = list(iter_recipe_names())
+        names = list(_legacy_recipe_names())
         self.assertEqual(
             names[0],
             "h1_ema_abv_50&mom_18b_gt2pc&sma_abv_30&rsi_14_>45",
@@ -1840,8 +1856,7 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertTrue(name_is_parseable(combo))
         parse_strategy(combo)
         self.assertTrue(name_is_parseable("h1_ema_abv_20&mom_18b_gt2pc&sma_abv_30"))
-        added = next_refill_batch(
-            taken_names=set(generate_universe()),
+        added = next_refill_batch(taken_names=_with_lit(set(generate_universe())),
             n=DISCOVERY_REFILL_BATCH_SIZE,
         )
         self.assertEqual(len(added), DISCOVERY_REFILL_BATCH_SIZE)
@@ -1917,7 +1932,7 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertEqual(DISCOVERY_REFILL_BATCH_SIZE, 16)
         self.assertEqual(STRUCTURE_NS, STRUCTURE_NS_THROUGH_96)
         self.assertEqual(max(STRUCTURE_NS), DEFAULT_STRUCTURE_LOOKBACK_MAX)
-        names = list(iter_recipe_names())
+        names = list(_legacy_recipe_names())
         self.assertFalse(any(name_has_mom_gt_and_dip(n) for n in names))
         self.assertNotIn("h1_ema_abv_20&mom_18b_gt2pc&dip_24b_lt5pc", names)
         self.assertNotIn("h1_ema_abv_20&mom_18b_gt2pc&sma_abv_30&dip_24b_lt5pc", names)
@@ -1933,8 +1948,7 @@ class ProtocolAmendmentTests(unittest.TestCase):
         for name in names:
             for _atom, n in structure_lookbacks(name):
                 self.assertLessEqual(n, 96, msg=name)
-        added = next_refill_batch(
-            taken_names=set(generate_universe()),
+        added = next_refill_batch(taken_names=_with_lit(set(generate_universe())),
             n=DISCOVERY_REFILL_BATCH_SIZE,
         )
         self.assertEqual(len(added), DISCOVERY_REFILL_BATCH_SIZE)
@@ -2000,7 +2014,7 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertIn("h1_ema_abv_60", DEEP_STACK_REGIME)
         self.assertIn("h1_sma_abv_50", DEEP_STACK_REGIME)
         self.assertIn("h1_sma_abv_60", DEEP_STACK_REGIME)
-        names = list(iter_recipe_names())
+        names = list(_legacy_recipe_names())
         self.assertEqual(
             names[0],
             "h1_ema_abv_50&mom_18b_gt2pc&sma_abv_30&rsi_14_>45",
@@ -2040,7 +2054,7 @@ class ProtocolAmendmentTests(unittest.TestCase):
         while len(taken) < 8726:
             taken.add(f"parked_dummy_{i}")
             i += 1
-        added = next_refill_batch(taken_names=taken, n=20)
+        added = next_refill_batch(taken_names=_with_lit(taken), n=20)
         self.assertGreaterEqual(len(added), 20)
         self.assertEqual(added[0], "h1_ema_abv_20&mom_36b_gt8pc")
         from hedge_fund.trading.mint_quality import REASON_FILLER, mint_block_reason
@@ -2116,7 +2130,7 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertEqual(ISLAND2B_MOM, ("mom_18b_gt2pc", "mom_24b_gt2pc"))
         self.assertNotIn("mom_12b_gt2pc", ISLAND2B_MOM)
         self.assertEqual(ISLAND2B_H4_CORE[0], "h4_ema_abv_20")
-        names = list(iter_recipe_names())
+        names = list(_legacy_recipe_names())
         first = "h4_ema_abv_20&mom_18b_gt2pc&sma_abv_30&rsi_14_>50"
         self.assertTrue(names[0].startswith("h1_"))
         self.assertLess(names.index(names[0]), names.index(first))
@@ -2136,8 +2150,7 @@ class ProtocolAmendmentTests(unittest.TestCase):
             near_duplicate_key(first),
             near_duplicate_key("h1_ema_abv_20&mom_18b_gt2pc&sma_abv_30&rsi_14_>50"),
         )
-        added = next_refill_batch(
-            taken_names=set(generate_universe()),
+        added = next_refill_batch(taken_names=_with_lit(set(generate_universe())),
             n=DISCOVERY_REFILL_BATCH_SIZE,
         )
         self.assertEqual(len(added), DISCOVERY_REFILL_BATCH_SIZE)
@@ -2204,7 +2217,7 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertNotIn("mom_12b_gt2pc", ISLAND2C_MOM_NEIGHBOR)
         self.assertTrue(all(a.startswith("h1_") for a in ISLAND2C_H1_SPINE))
         self.assertEqual(ISLAND2C_CONT_GAP[0], "sma_abv_35")
-        names = list(iter_recipe_names())
+        names = list(_legacy_recipe_names())
         lead = "h1_ema_abv_50&mom_18b_gt2pc&sma_abv_30&rsi_14_>45"
         h4_lead = "h4_ema_abv_20&mom_18b_gt2pc&sma_abv_30&rsi_14_>50"
         self.assertEqual(names[0], lead)
@@ -2232,8 +2245,7 @@ class ProtocolAmendmentTests(unittest.TestCase):
             near_duplicate_key("sma_abv_40"),
         )
         parse_strategy(lead)
-        added = next_refill_batch(
-            taken_names=set(generate_universe()),
+        added = next_refill_batch(taken_names=_with_lit(set(generate_universe())),
             n=DISCOVERY_REFILL_BATCH_SIZE,
         )
         self.assertEqual(added[0], "h1_ema_abv_20&mom_36b_gt8pc")
