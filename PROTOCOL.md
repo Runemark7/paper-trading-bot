@@ -1198,3 +1198,11 @@ This amendment does not rewrite original §§ 1–8 or prior amendments. OOS **t
 
 **Empty pool.** With no champions the live cycle runs the existing `PAPER_STRATEGY` (`sma_stack`) fallback account, as before. `/api/champions` and `/api/live` return empty lists.
 
+### Amendment 2026-10-08 — archive orphan live accounts left by cull_undated
+
+This amendment does not rewrite original §§ 1–8 or prior amendments. OOS thresholds are unchanged.
+
+**Why.** After the 127 retirements, `/api/live` still listed 16 `dip_*` accounts with 0 open lots. They were dropped from `champions.json` by the 2026-09-13 `cull_undated`, so they had no champion, graduated or retired record and stayed on the live book. Alexander decided to archive them.
+
+**What was added** (`hedge_fund.trading.retire`). One-shot batch `ORPHAN_LIVE_BATCH` = `orphan-live-20261008`, run once on the same server-start thread after `requalify-gate23-20261008`. Rule: an isolated `trades_*.sqlite` account that is not a pooled champion, not graduated, not already retired, and not the `PAPER_STRATEGY` (`sma_stack`) fallback. The batch only acts on the explicit 16 names found on prod (`ORPHAN_LIVE_NAMES`) and skips any account that still holds an open lot. Each one moves into `retired.json` with `role` `orphan_live`, reason `orphan live account after cull_undated 2026-09-13`, and a record of its DB name, open lots, closed trades and P&L. Trade DBs stay on disk. The names leave the live book and open-lot counts and are blocked from re-admit and re-mint like every retired name. The `sma_stack` fallback is untouched.
+
