@@ -101,6 +101,28 @@ class StaleCache:
         with self._guard:
             self._slots.clear()
 
+    def peek(self, key: str) -> object | None:
+        """Last payload, or None when this key has never been stored.
+
+        Does not build and does not wait on a refresh.
+        """
+        with self._guard:
+            slot = self._slots.get(key)
+            if slot is None or not slot.has:
+                return None
+            return copy.deepcopy(slot.value)
+
+    def put(self, key: str, value: object) -> None:
+        """Store a payload built off the request path."""
+        with self._guard:
+            slot = self._slots.get(key)
+            if slot is None:
+                slot = _Slot()
+                self._slots[key] = slot
+            slot.value = value
+            slot.has = True
+            slot.built_at = time.time()
+
     def age_seconds(self, key: str) -> float | None:
         with self._guard:
             slot = self._slots.get(key)

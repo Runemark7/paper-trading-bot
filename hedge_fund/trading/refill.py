@@ -1425,12 +1425,12 @@ def maybe_refill_discovery(
     """
     if int(eligible_count) >= int(cap):
         return []
-    from hedge_fund.trading.atom_lift import ensure_lift_model
+    from hedge_fund.trading.atom_lift import lift_model_for_mint
 
     taken = set(taken_names)
     taken.update(load_extended_names())
     taken.update(generate_universe())
-    added = next_refill_batch(taken_names=taken, n=batch_size, lift=ensure_lift_model())
+    added = next_refill_batch(taken_names=taken, n=batch_size, lift=lift_model_for_mint())
     if added:
         append_extended_batch(added)
     return added

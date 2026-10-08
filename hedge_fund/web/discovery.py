@@ -36,6 +36,7 @@ from hedge_fund.trading.refill import load_extended_names
 from hedge_fund.trading.tested_index import ensure_tested_index, load_tested_index
 from hedge_fund.trading.universe import generate_universe, untested_candidates
 from hedge_fund.web.status import _iso, _pipeline_block
+from hedge_fund.web.ttl_cache import StaleCache
 
 
 def compact_query(value: str | None) -> bool:
@@ -66,6 +67,47 @@ def _sort_tested_newest_first(rows: list[dict]) -> list[dict]:
         return ts or datetime.min.replace(tzinfo=timezone.utc)
 
     return sorted(rows, key=key, reverse=True)
+
+
+_DISCOVERY_SUMMARY = StaleCache()
+
+
+def _summary_cache_key(lists: bool) -> str:
+    from hedge_fund.paths import state_root
+
+    return f"{state_root().resolve()}|{1 if lists else 0}"
+
+
+def cached_discovery_summary(*, lists: bool = True) -> dict:
+    """Last summary. A cold key builds once; later polls do not refit lift."""
+    key = _summary_cache_key(lists)
+    hit = _DISCOVERY_SUMMARY.peek(key)
+    if not isinstance(hit, dict):
+        from hedge_fund.trading.atom_lift import schedule_lift_refresh
+
+        schedule_lift_refresh()
+        hit = _DISCOVERY_SUMMARY.get(key, lambda: build_discovery_summary(lists=lists))
+    return _with_live_strategy(hit)
+
+
+def refresh_discovery_summaries() -> None:
+    """Background rebuild of the full and compact discovery summaries."""
+    for lists in (True, False):
+        key = _summary_cache_key(lists)
+        _DISCOVERY_SUMMARY.refresh(
+            key,
+            lambda lists=lists: build_discovery_summary(lists=lists),
+        )
+
+
+def _with_live_strategy(summary: dict) -> dict:
+    from hedge_fund.trading.atom_lift import peek_refill_strategy
+
+    out = dict(summary)
+    refill = dict(out.get("refill") or {})
+    refill["strategy"] = peek_refill_strategy()
+    out["refill"] = refill
+    return out
 
 
 def build_discovery_summary(*, lists: bool = True) -> dict:
@@ -101,6 +143,7 @@ def build_discovery_summary(*, lists: bool = True) -> dict:
     eligible = prioritize_leftovers(leftovers, log, now=now)
     tested_index = load_tested_index()
     refill_state = load_refill_status()
+    from hedge_fund.trading.atom_lift import peek_refill_strategy
 
     newest = newest_eval(log) or (newest_eval(tested) if tested else None)
     last_tested_at = newest.get("tested_at") if newest else None
@@ -312,7 +355,7 @@ def build_discovery_summary(*, lists: bool = True) -> dict:
             "eligible": len(eligible),
             "generated_last": refill_state["generated_last"],
             "exhausted": refill_state["exhausted"],
-            "strategy": refill_state.get("strategy") or "recipe_order",
+            "strategy": peek_refill_strategy(),
         },
         "last_tested_at": last_tested_at,
         "last_strategy": last_strategy,
@@ -328,8 +371,9 @@ def build_discovery_summary(*, lists: bool = True) -> dict:
             "discovery_log.json stays a capped display. "
             "Claim refills discovery_extended.json from the structure-AND recipe "
             "and, when that runs short, densifies around qualified passes. "
-            "refill.strategy is lift_ucb when cached atom lift is informative, "
-            "otherwise recipe_order. "
+            "refill.strategy is pending until a background lift snapshot exists, "
+            "then lift_ucb or recipe_order. Summary and GET /api/discovery/lift "
+            "do not fit that model on the request. "
             "refill.eligible matches counts.eligible. "
             "A stamp is not process liveness. "
             + (

@@ -24,8 +24,8 @@ from hedge_fund.trading.constants import (
 from hedge_fund.trading.store import paper_state_lock
 from hedge_fund.trading.tested_index import (
     flags_for_skip,
+    load_index_and_metrics,
     load_tested_index,
-    load_tested_metrics,
     merge_tested_metrics,
     merge_tested_rows,
     save_tested_index,
@@ -140,8 +140,7 @@ def append_discovery_evaluations(eval_records: list[dict], *, cap: int = DISCOVE
         path.parent.mkdir(parents=True, exist_ok=True)
         log = load_discovery_log()
         log = list(eval_records) + log
-        index = load_tested_index()
-        metrics = load_tested_metrics()
+        index, metrics = load_index_and_metrics()
         flags_changed = merge_tested_rows(index, log)
         metrics_changed = merge_tested_metrics(metrics, log)
         if flags_changed or metrics_changed:
@@ -166,8 +165,7 @@ def save_discovery_log(log: list[dict]) -> None:
         path = discovery_log_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(log, separators=(",", ":")))
-        index = load_tested_index()
-        metrics = load_tested_metrics()
+        index, metrics = load_index_and_metrics()
         flags_changed = merge_tested_rows(index, log)
         metrics_changed = merge_tested_metrics(metrics, log)
         if flags_changed or metrics_changed:

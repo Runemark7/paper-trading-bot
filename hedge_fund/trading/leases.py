@@ -288,13 +288,14 @@ def _prune_workers(state: dict, now: datetime) -> None:
 def _mint_unlocked(taken: set[str], n: int) -> tuple[list[str], dict]:
     """Recipe first. Densify only the shortfall. Logs if nothing can be minted.
 
-    Recomputes atom lift when the tested metrics changed (cached otherwise)
-    and ranks the minted window with it. The OOS gate is not involved.
+    Uses the published lift snapshot. Does not fit and does not schedule a
+    fit; that runs on a background thread at most once every five minutes.
+    The OOS gate is not involved.
     """
-    from hedge_fund.trading.atom_lift import ensure_lift_model
+    from hedge_fund.trading.atom_lift import lift_model_for_mint
     from hedge_fund.trading.tested_index import load_tested_metrics
 
-    model = ensure_lift_model()
+    model = lift_model_for_mint()
     metrics = load_tested_metrics()
     want = max(0, int(n))
     recipe = next_refill_batch(taken_names=taken, n=want, lift=model) if want else []

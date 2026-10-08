@@ -5,6 +5,7 @@ import json
 import os
 import tempfile
 import threading
+import time
 import unittest
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -14,6 +15,7 @@ from urllib.request import urlopen
 from hedge_fund.trading.atom_lift import (
     EXPLORE_SHARE,
     STRATEGY_LIFT,
+    STRATEGY_PENDING,
     STRATEGY_PLAIN,
     AtomEstimate,
     LiftModel,
@@ -21,6 +23,7 @@ from hedge_fund.trading.atom_lift import (
     estimate_lifts,
     explore_count,
     lift_api_payload,
+    lift_payload_for_request,
     steer_candidates,
 )
 from hedge_fund.trading.densify import next_densify_batch, order_seeds
@@ -62,7 +65,31 @@ def _paired_rows() -> list[dict]:
     return rows
 
 
+def _fifteen_k_seconds() -> float:
+    rows = []
+    for i in range(7500):
+        parent = f"h1_ema_abv_{i % 80}&mom_{(6 + (i % 12) * 6)}b_gt2pc&id_{i}"
+        rows.append({"strategy": parent, "sharpe": 0.10, "trades": 40})
+        if i % 2 == 0:
+            rows.append({"strategy": parent + "&sma_abv_30", "sharpe": 0.60, "trades": 55})
+        else:
+            rows.append({"strategy": parent + "&rsi_14_>60", "sharpe": -0.30, "trades": 0})
+    started = time.perf_counter()
+    model = estimate_lifts(rows)
+    elapsed = time.perf_counter() - started
+    if model.atoms["sma_abv_30"].sharpe_lift <= 0:
+        raise AssertionError("sma lift was not positive on the 15k set")
+    if model.atoms["rsi_14_>60"].sharpe_lift >= 0:
+        raise AssertionError("rsi lift was not negative on the 15k set")
+    if model.atoms["sma_abv_30"].support < 5:
+        raise AssertionError("sma pair support collapsed")
+    return elapsed
+
+
 class EstimateTests(unittest.TestCase):
+    def test_fifteen_k_names_fit_in_two_seconds(self):
+        self.assertLess(_fifteen_k_seconds(), 2.0)
+
     def test_known_good_atom_ranks_first(self):
         model = estimate_lifts(_paired_rows())
         sma = model.atoms["sma_abv_30"]
@@ -295,32 +322,24 @@ class IndexAndApiTests(unittest.TestCase):
                 self.assertNotEqual(updated.fingerprint, model.fingerprint)
                 self.assertEqual(updated.names_used, 3)
 
-    def test_summary_refill_strategy_and_lift_route(self):
-        from hedge_fund.trading.leases import load_refill_status, save_refill_status
+    def test_summary_does_not_fit_lift_and_route_serves_cache(self):
+        from hedge_fund.trading.leases import claim_discovery_batch
         from hedge_fund.web.discovery import build_discovery_summary
         from hedge_fund.web.server import Handler
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with patch.dict(os.environ, {"PAPER_STATE": str(root)}):
-                summary = build_discovery_summary(lists=False)
-                self.assertEqual(summary["refill"]["strategy"], STRATEGY_PLAIN)
-                save_refill_status({
-                    "source": "recipe",
-                    "generated_last": 4,
-                    "exhausted": False,
-                    "strategy": STRATEGY_LIFT,
-                })
-                self.assertEqual(load_refill_status()["strategy"], STRATEGY_LIFT)
-                summary = build_discovery_summary(lists=False)
-                self.assertEqual(summary["refill"]["strategy"], STRATEGY_LIFT)
-                (root / "discovery_refill.json").write_text(json.dumps({
-                    "source": "recipe",
-                    "generated_last": 1,
-                    "exhausted": False,
-                }))
-                self.assertEqual(load_refill_status()["strategy"], STRATEGY_PLAIN)
+                with patch("hedge_fund.trading.atom_lift.estimate_lifts", side_effect=AssertionError("fit")):
+                    summary = build_discovery_summary(lists=False)
+                self.assertEqual(summary["refill"]["strategy"], STRATEGY_PENDING)
                 (root / "discovery_log.json").write_text(json.dumps(_paired_rows()))
+                with patch("hedge_fund.trading.atom_lift.estimate_lifts", side_effect=AssertionError("fit")):
+                    pending = lift_payload_for_request()
+                self.assertEqual(pending["strategy"], STRATEGY_PENDING)
+                self.assertEqual(pending["top"], [])
+                ensure_lift_model()
+                self.assertEqual(build_discovery_summary(lists=False)["refill"]["strategy"], STRATEGY_LIFT)
                 httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
                 port = httpd.server_address[1]
                 thread = threading.Thread(target=httpd.serve_forever, daemon=True)
@@ -330,6 +349,12 @@ class IndexAndApiTests(unittest.TestCase):
                         f"http://127.0.0.1:{port}/api/discovery/lift",
                         timeout=10,
                     ).read().decode())
+                    with patch(
+                        "hedge_fund.trading.leases.discovery_universe",
+                        return_value=["don_hi_12"],
+                    ):
+                        with patch("hedge_fund.trading.atom_lift.estimate_lifts", side_effect=AssertionError("fit")):
+                            claim_discovery_batch("linux-1", 1, parallel=1)
                 finally:
                     httpd.shutdown()
                     thread.join(timeout=3)
@@ -342,6 +367,61 @@ class IndexAndApiTests(unittest.TestCase):
         self.assertGreaterEqual(body["names_used"], 36)
         src = Path(__file__).resolve().parents[1].joinpath("hedge_fund/web/server.py").read_text()
         self.assertIn('route == "/api/discovery/lift"', src)
+        self.assertIn("lift_payload_for_request", src)
+        self.assertIn("cached_discovery_summary", src)
+
+    def test_claim_path_does_not_fit_and_refresh_is_rate_limited(self):
+        import hedge_fund.trading.atom_lift as lift
+
+        root = Path(__file__).resolve().parents[1]
+        for rel in (
+            "hedge_fund/trading/leases.py",
+            "hedge_fund/trading/ingest.py",
+            "hedge_fund/trading/refill.py",
+        ):
+            text = (root / rel).read_text()
+            self.assertNotIn("ensure_lift_model", text)
+            self.assertNotIn("schedule_lift_refresh", text)
+            self.assertNotIn("estimate_lifts", text)
+        self.assertGreaterEqual(lift.LIFT_REFRESH_SECONDS, 300.0)
+
+        class _InlineThread:
+            def __init__(self, target, name=None, daemon=None):
+                self._target = target
+
+            def start(self):
+                self._target()
+
+        prev_at = lift._last_refresh_at
+        prev_running = lift._refresh_running
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                with patch.dict(os.environ, {"PAPER_STATE": tmp}):
+                    with patch.object(lift, "schedule_lift_refresh", side_effect=AssertionError("sched")):
+                        with patch.object(lift, "estimate_lifts", side_effect=AssertionError("fit")):
+                            model = lift.lift_model_for_mint()
+                    self.assertEqual(model.strategy, STRATEGY_PLAIN)
+                    self.assertEqual(model.names_used, 0)
+                    calls = {"n": 0}
+
+                    def _fake_fit():
+                        calls["n"] += 1
+                        return LiftModel()
+
+                    lift._refresh_running = False
+                    lift._last_refresh_at = time.monotonic()
+                    with patch.object(lift.threading, "Thread", _InlineThread):
+                        with patch.object(lift, "ensure_lift_model", side_effect=_fake_fit):
+                            lift.refresh_lift_cache()
+                            self.assertEqual(calls["n"], 0)
+                            lift._last_refresh_at = 0.0
+                            lift.refresh_lift_cache()
+                            lift.refresh_lift_cache()
+                            lift.schedule_lift_refresh()
+                    self.assertEqual(calls["n"], 1)
+        finally:
+            lift._last_refresh_at = prev_at
+            lift._refresh_running = prev_running
 
 
 if __name__ == "__main__":

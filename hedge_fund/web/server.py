@@ -284,6 +284,18 @@ def start_read_refresh(interval: float = READ_REBUILD_SECONDS) -> None:
                 refresh_summary()
             except Exception as exc:
                 print(f"[summary] rebuild failed: {exc}", file=sys.stderr, flush=True)
+            try:
+                from hedge_fund.web.discovery import refresh_discovery_summaries
+
+                refresh_discovery_summaries()
+            except Exception as exc:
+                print(f"[discovery-summary] rebuild failed: {exc}", file=sys.stderr, flush=True)
+            try:
+                from hedge_fund.trading.atom_lift import refresh_lift_cache
+
+                refresh_lift_cache()
+            except Exception as exc:
+                print(f"[discovery-lift] rebuild failed: {exc}", file=sys.stderr, flush=True)
             time.sleep(interval)
 
     threading.Thread(target=_loop, name="status-summary-refresh", daemon=True).start()
@@ -463,17 +475,18 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self._send_json({"error": str(exc)}, 500)
         elif route == "/api/discovery/summary":
+            # Cached build_discovery_summary. The lift fit is not on this request.
             try:
-                from hedge_fund.web.discovery import build_discovery_summary, compact_query
+                from hedge_fund.web.discovery import cached_discovery_summary, compact_query
 
-                self._send_json(build_discovery_summary(lists=not compact_query(qs.get("compact"))))
+                self._send_json(cached_discovery_summary(lists=not compact_query(qs.get("compact"))))
             except Exception as exc:
                 self._send_json({"error": str(exc)}, 500)
         elif route == "/api/discovery/lift":
             try:
-                from hedge_fund.trading.atom_lift import ensure_lift_model, lift_api_payload
+                from hedge_fund.trading.atom_lift import lift_payload_for_request
 
-                self._send_json(lift_api_payload(ensure_lift_model()))
+                self._send_json(lift_payload_for_request())
             except Exception as exc:
                 self._send_json({"error": str(exc)}, 500)
         elif route == "/api/discovery":

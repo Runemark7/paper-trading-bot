@@ -12,6 +12,9 @@ import json
 import math
 import os
 import random
+import sys
+import threading
+import time
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -30,11 +33,15 @@ STEER_WINDOW = 8
 UCB_C = 0.02
 ZERO_WEIGHT = 0.35
 LIFT_SEED = 7063
+# Claim and ingest never fit. The background thread refits at most this often,
+# even when every eval changes the tested-metrics fingerprint.
+LIFT_REFRESH_SECONDS = 300.0
 INFORMATIVE_EPS = 1e-4
 _CACHE_V = 1
 
 STRATEGY_LIFT = "lift_ucb"
 STRATEGY_PLAIN = "recipe_order"
+STRATEGY_PENDING = "pending"
 
 
 @dataclass
@@ -79,9 +86,9 @@ def _finite(value: object) -> float | None:
     return number
 
 
-def _split(name: str) -> tuple[str, ...]:
-    parts = [part.strip() for part in str(name).split("&") if part.strip()]
-    return tuple(sorted(parts))
+def _split(name: str) -> frozenset[str]:
+    """Atom set for parent lookup. Order does not matter."""
+    return frozenset(part.strip() for part in str(name).split("&") if part.strip())
 
 
 def _shrunk(values: list[float], prior: float = PRIOR_STRENGTH) -> float:
@@ -93,10 +100,14 @@ def _shrunk(values: list[float], prior: float = PRIOR_STRENGTH) -> float:
 
 
 def _ridge_coefs(
-    records: list[tuple[tuple[str, ...], float, int | None]],
+    records: list[tuple[frozenset[str], float, int | None]],
     name_count: dict[str, int],
 ) -> dict[str, float]:
-    """Binary atom indicators. Penalty on every coefficient except the intercept."""
+    """Binary atom indicators. Penalty on every coefficient except the intercept.
+
+    The normal equations are filled from per-row co-occurrence. That matches
+    a dense design matrix without allocating one row per tested name.
+    """
     if len(records) < 2 or not name_count:
         return {}
     ranked = sorted(name_count.items(), key=lambda item: (-item[1], item[0]))
@@ -105,19 +116,29 @@ def _ridge_coefs(
         return {}
     index = {atom: pos + 1 for pos, atom in enumerate(columns)}
     width = len(columns) + 1
-    design = np.zeros((len(records), width), dtype=np.float64)
-    design[:, 0] = 1.0
-    target = np.empty(len(records), dtype=np.float64)
-    for row, (atoms, sharpe, _trades) in enumerate(records):
-        target[row] = sharpe
+    gram = np.zeros((width, width), dtype=np.float64)
+    rhs = np.zeros(width, dtype=np.float64)
+    gram[0, 0] = float(len(records))
+    for atoms, sharpe, _trades in records:
+        rhs[0] += sharpe
+        cols: list[int] = []
         for atom in atoms:
             column = index.get(atom)
             if column is not None:
-                design[row, column] = 1.0
-    gram = design.T @ design
+                cols.append(column)
+        for column in cols:
+            gram[0, column] += 1.0
+            gram[column, 0] += 1.0
+            gram[column, column] += 1.0
+            rhs[column] += sharpe
+        for left in range(len(cols)):
+            for right in range(left + 1, len(cols)):
+                a = cols[left]
+                b = cols[right]
+                gram[a, b] += 1.0
+                gram[b, a] += 1.0
     penalty = np.eye(width, dtype=np.float64) * RIDGE_LAMBDA
     penalty[0, 0] = 0.0
-    rhs = design.T @ target
     try:
         beta = np.linalg.solve(gram + penalty, rhs)
     except np.linalg.LinAlgError:
@@ -127,7 +148,7 @@ def _ridge_coefs(
 
 def estimate_lifts(rows: list) -> LiftModel:
     """Fit atom and family+param lifts. Ops-park rows are ignored."""
-    by_atoms: dict[tuple[str, ...], tuple[float, int | None]] = {}
+    by_atoms: dict[frozenset[str], tuple[float, int | None]] = {}
     for row in rows:
         if not isinstance(row, dict) or is_ops_park_record(row):
             continue
@@ -156,7 +177,6 @@ def estimate_lifts(rows: list) -> LiftModel:
     members: dict[str, set[str]] = {}
 
     for atoms, sharpe, trades in records:
-        present = set(atoms)
         families_here: set[str] = set()
         for atom in atoms:
             name_count[atom] = name_count.get(atom, 0) + 1
@@ -168,7 +188,7 @@ def estimate_lifts(rows: list) -> LiftModel:
             if fkey is not None:
                 families_here.add(fkey)
                 members.setdefault(fkey, set()).add(atom)
-            parent = tuple(sorted(present - {atom}))
+            parent = atoms - {atom}
             parent_row = by_atoms.get(parent)
             if parent_row is None:
                 continue
@@ -487,7 +507,12 @@ def save_lift_cache(model: LiftModel) -> None:
 
 
 def training_rows() -> list[dict]:
-    """Newest metrics per name, ops parks left out. Merges the display log first."""
+    """Newest metrics per name, ops parks left out.
+
+    ``ensure_tested_index`` merges the display log first (log parse is
+    outside the discovery lock). Callers that serve HTTP use the published
+    snapshot instead of this.
+    """
     from hedge_fund.trading.tested_index import ensure_tested_index, load_tested_metrics
 
     ensure_tested_index()
@@ -508,26 +533,162 @@ def training_rows() -> list[dict]:
     return rows
 
 
-def ensure_lift_model() -> LiftModel:
-    """Recompute when the tested metrics change. Otherwise return the cache.
+_model_guard = threading.Lock()
+_models: dict[str, LiftModel] = {}
+_payload_cache = None  # StaleCache, created lazily so import stays light
+_compute_guard = threading.Lock()
+_refresh_guard = threading.Lock()
+_refresh_running = False
+_last_refresh_at = 0.0
 
-    Holds the discovery paper-state lock. Claim refill and ``GET /api/discovery/lift``
-    both come through here; the summary poll does not.
+
+def _state_key() -> str:
+    from hedge_fund.paths import state_root
+
+    return str(state_root().resolve())
+
+
+def _payload_store():
+    global _payload_cache
+    if _payload_cache is None:
+        from hedge_fund.web.ttl_cache import StaleCache
+
+        _payload_cache = StaleCache()
+    return _payload_cache
+
+
+def _publish(model: LiftModel) -> None:
+    key = _state_key()
+    with _model_guard:
+        _models[key] = model
+    _payload_store().put(key, lift_api_payload(model))
+
+
+def peek_lift_model() -> LiftModel | None:
+    """In-memory model for this PAPER_STATE. Does not read disk and does not fit."""
+    with _model_guard:
+        return _models.get(_state_key())
+
+
+def peek_refill_strategy() -> str:
+    """``lift_ucb`` / ``recipe_order`` once a snapshot exists, else ``pending``."""
+    model = peek_lift_model()
+    if model is None:
+        return STRATEGY_PENDING
+    return model.strategy or STRATEGY_PENDING
+
+
+def pending_lift_payload() -> dict:
+    return {
+        "paper_only": True,
+        "strategy": STRATEGY_PENDING,
+        "explore_share": EXPLORE_SHARE,
+        "names_used": 0,
+        "support_min": MIN_SUPPORT,
+        "top": [],
+        "bottom": [],
+        "ready": False,
+    }
+
+
+def lift_payload_for_request() -> dict:
+    """Cached top/bottom atoms. A cold cache returns ``pending`` and refreshes later."""
+    cached = _payload_store().peek(_state_key())
+    if isinstance(cached, dict):
+        return cached
+    disk = load_lift_cache()
+    if disk is not None:
+        _publish(disk)
+        served = _payload_store().peek(_state_key())
+        if isinstance(served, dict):
+            return served
+    schedule_lift_refresh()
+    return pending_lift_payload()
+
+
+def lift_model_for_mint() -> LiftModel:
+    """Published snapshot for refill/densify.
+
+    Claim and ingest call this under the discovery lock. It does not fit,
+    does not read the lift cache, and does not schedule a refresh. A missing
+    snapshot is a flat model (recipe order) until the background thread
+    publishes one.
+    """
+    model = peek_lift_model()
+    if model is None:
+        return LiftModel()
+    return model
+
+
+def ensure_lift_model() -> LiftModel:
+    """Fit when the metrics fingerprint changed. Does not hold the discovery lock.
+
+    The lock is taken only to write ``discovery_lift.json`` after the fit.
+    Request handlers use ``lift_payload_for_request`` / ``lift_model_for_mint``.
     """
     from hedge_fund.trading.store import paper_state_lock
 
-    with paper_state_lock("discovery"):
+    with _compute_guard:
         rows = training_rows()
         fingerprint = fingerprint_rows(rows)
-        cached = load_lift_cache()
+        cached = peek_lift_model()
+        if cached is None:
+            cached = load_lift_cache()
         if (
             cached is not None
             and cached.fingerprint == fingerprint
             and cached.support_min == MIN_SUPPORT
             and cached.explore_share == EXPLORE_SHARE
         ):
+            _publish(cached)
             return cached
         model = estimate_lifts(rows)
         model.fingerprint = fingerprint
-        save_lift_cache(model)
+        with paper_state_lock("discovery"):
+            save_lift_cache(model)
+        _publish(model)
         return model
+
+
+def _claim_refresh_slot() -> bool:
+    """True when this caller may start a fit. At most once per five minutes."""
+    global _refresh_running, _last_refresh_at
+    with _refresh_guard:
+        if _refresh_running:
+            return False
+        now = time.monotonic()
+        if _last_refresh_at and (now - _last_refresh_at) < LIFT_REFRESH_SECONDS:
+            return False
+        _refresh_running = True
+        _last_refresh_at = now
+        return True
+
+
+def _release_refresh_slot() -> None:
+    global _refresh_running
+    with _refresh_guard:
+        _refresh_running = False
+
+
+def schedule_lift_refresh() -> None:
+    """Fit on a daemon thread, at most once per ``LIFT_REFRESH_SECONDS``.
+
+    A second call while one is running, or inside the window, does nothing.
+    """
+    if not _claim_refresh_slot():
+        return
+
+    def _run() -> None:
+        try:
+            ensure_lift_model()
+        except Exception as exc:
+            print(f"[discovery-lift] rebuild failed: {exc}", file=sys.stderr, flush=True)
+        finally:
+            _release_refresh_slot()
+
+    threading.Thread(target=_run, name="discovery-lift", daemon=True).start()
+
+
+def refresh_lift_cache() -> None:
+    """Background-loop entry. Schedules a fit; does not fit on the caller."""
+    schedule_lift_refresh()
