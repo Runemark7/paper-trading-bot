@@ -33,15 +33,18 @@ def tested_index_path() -> Path:
     return state_root() / DISCOVERY_TESTED_INDEX
 
 
-def load_tested_index() -> dict[str, bool]:
-    """Read the index. Missing or corrupt → empty. Does not migrate."""
+def _read_document() -> dict | None:
     path = tested_index_path()
     if not path.exists():
-        return {}
+        return None
     try:
         data = json.loads(path.read_text())
     except (OSError, ValueError):
-        return {}
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _flags_from_document(data: dict | None) -> dict[str, bool]:
     raw = data.get("names") if isinstance(data, dict) else None
     if not isinstance(raw, dict):
         return {}
@@ -50,6 +53,24 @@ def load_tested_index() -> dict[str, bool]:
         if isinstance(name, str) and name:
             out[name] = bool(flag)
     return out
+
+
+def _metrics_from_document(data: dict | None) -> dict[str, TestedMetric]:
+    raw = data.get("metrics") if isinstance(data, dict) else None
+    if not isinstance(raw, dict):
+        return {}
+    return _clean_metrics(raw)
+
+
+def load_tested_index() -> dict[str, bool]:
+    """Read the bool ``names`` map. Missing or corrupt → empty. Does not migrate."""
+    return _flags_from_document(_read_document())
+
+
+def load_index_and_metrics() -> tuple[dict[str, bool], dict[str, TestedMetric]]:
+    """One read of the file: fail-once flags and the slim metrics map."""
+    data = _read_document()
+    return _flags_from_document(data), _metrics_from_document(data)
 
 
 def _finite_number(value: object) -> float | None:
@@ -114,17 +135,7 @@ def load_tested_metrics() -> dict[str, TestedMetric]:
     ``load_tested_index``. This returns the slim sharpe/trades/ops_park
     map, not a full evaluation record.
     """
-    path = tested_index_path()
-    if not path.exists():
-        return {}
-    try:
-        data = json.loads(path.read_text())
-    except (OSError, ValueError):
-        return {}
-    raw = data.get("metrics") if isinstance(data, dict) else None
-    if not isinstance(raw, dict):
-        return {}
-    return _clean_metrics(raw)
+    return _metrics_from_document(_read_document())
 
 
 def save_tested_index(index: dict[str, bool], metrics: dict | None = None) -> None:
@@ -194,19 +205,20 @@ def merge_tested_metrics(metrics: dict[str, dict], rows: list) -> bool:
 
 
 def ensure_tested_index() -> dict[str, bool]:
-    """Merge the on-disk display log into the index. Holds the paper-state lock.
+    """Merge the on-disk display log into the index.
 
-    No-ops without creating the state dir when neither file exists, so an
-    in-memory log passed to skip helpers does not touch disk.
+    The log is read before the lock. The lock covers only the index
+    read-modify-write, so a slow log parse does not block claim, ingest,
+    or champions. No-ops without creating the state dir when neither file
+    exists.
     """
     from hedge_fund.trading.discovery import discovery_log_path, load_discovery_log
 
     if not tested_index_path().exists() and not discovery_log_path().exists():
         return {}
+    rows = load_discovery_log()
     with paper_state_lock("discovery"):
-        index = load_tested_index()
-        metrics = load_tested_metrics()
-        rows = load_discovery_log()
+        index, metrics = load_index_and_metrics()
         flags_changed = merge_tested_rows(index, rows)
         metrics_changed = merge_tested_metrics(metrics, rows)
         if flags_changed or metrics_changed:
