@@ -23,6 +23,8 @@ A small, dependency-free HTTP server (stdlib only) that exposes:
   POST /api/discovery/ingest -> Windows worker: append evals + admit / force_admit (shared secret)
   POST /api/discovery/claim -> lease never-tested names (same ingest token)
   POST /api/discovery/release -> drop this worker's leases (same ingest token)
+  POST /api/discovery/requalify -> queue a re-qualification batch (same ingest token)
+  GET /api/discovery/requalify -> requalify results (separate from fail-once; never culls)
   POST /api/discovery/farm -> Start/Stop Windows farm (same ingest token)
   POST /api/champions/retain -> keep-list filter of champions.json (same ingest token)
   POST /api/champions/cull_undated -> drop missing champion_since (same ingest token)
@@ -503,6 +505,13 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"error": str(exc)}, 400)
             except Exception as exc:
                 self._send_json({"error": str(exc)}, 500)
+        elif route == "/api/discovery/requalify":
+            try:
+                from hedge_fund.trading.requalify import requalify_payload
+
+                self._send_json(requalify_payload(qs.get("batch_id") or None))
+            except Exception as exc:
+                self._send_json({"error": str(exc), "paper_only": True}, 500)
         elif route == "/api/discovery/lift":
             try:
                 from hedge_fund.trading.atom_lift import lift_payload_for_request
@@ -656,6 +665,26 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"ok": False, "error": str(exc), "paper_only": True}, 400)
             except Exception as exc:
                 self._send_json({"ok": False, "error": str(exc), "paper_only": True}, 500)
+        elif route == "/api/discovery/requalify":
+            ok, err, code = self._discovery_ingest_authorized()
+            if not ok:
+                self._send_json({"ok": False, "error": err, "paper_only": True}, code)
+                return
+            payload, err = self._read_json_body()
+            if err:
+                self._send_json({"ok": False, "error": err, "paper_only": True}, 400)
+                return
+            try:
+                from hedge_fund.trading.requalify import enqueue_requalify_batch
+
+                self._send_json(enqueue_requalify_batch(
+                    payload.get("batch_id"),
+                    payload.get("names") if "names" in payload else None,
+                ))
+            except ValueError as exc:
+                self._send_json({"ok": False, "error": str(exc), "paper_only": True}, 400)
+            except Exception as exc:
+                self._send_json({"ok": False, "error": str(exc), "paper_only": True}, 500)
         elif route == "/api/discovery/farm":
             ok, err, code = self._discovery_ingest_authorized()
             if not ok:
@@ -728,6 +757,9 @@ def main():
     from hedge_fund.trading.discovery_results import start_results_backfill
 
     start_results_backfill()
+    from hedge_fund.trading.requalify import start_requalify_autoseed
+
+    start_requalify_autoseed()
     httpd = ThreadingHTTPServer((args.host, args.port), Handler)
     print(f"paperbot dashboard service on http://{args.host}:{args.port}")
     try:

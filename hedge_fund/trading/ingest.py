@@ -27,6 +27,12 @@ from hedge_fund.trading.farm import apply_heartbeat_unlocked
 from hedge_fund.trading.leases import clear_leases_unlocked, touch_worker_unlocked
 from hedge_fund.trading.qualify import requalify_parked_log
 from hedge_fund.trading.refill import append_extended_batch, load_extended_names
+from hedge_fund.trading.requalify import (
+    load_requalify_state,
+    record_requalify_unlocked,
+    requalify_path,
+    save_requalify_state,
+)
 from hedge_fund.trading.store import paper_state_lock
 
 _EVAL_REQUIRED = ("strategy", "qualified", "tested_at")
@@ -153,8 +159,10 @@ def ingest_discovery_payload(payload: dict) -> dict:
     requalified: list[str] = []
     force_admitted: list[str] = []
     added_extended: list[str] = []
+    requalify_recorded: list[str] = []
 
     with paper_state_lock("discovery"):
+        requal_state = load_requalify_state() if requalify_path().exists() else None
         log = load_discovery_log()
         already = tested_discovery_names(log)
         st = load_pool()
@@ -170,6 +178,12 @@ def ingest_discovery_payload(payload: dict) -> dict:
                 )
                 continue
             name = rec["strategy"]
+            # Requalify lane: record separately. No log row, no admit, no cull.
+            if requal_state is not None and record_requalify_unlocked(
+                requal_state, rec, datetime.now(timezone.utc)
+            ):
+                requalify_recorded.append(name)
+                continue
             if name in existing:
                 skipped.append({"strategy": name, "reason": "already_pooled_or_graduated"})
                 continue
@@ -181,6 +195,9 @@ def ingest_discovery_payload(payload: dict) -> dict:
             ingested.append(name)
             if rec["qualified"] and _admit_qualified(st, rec, existing):
                 admitted.append(name)
+
+        if requalify_recorded:
+            save_requalify_state(requal_state)
 
         log = load_discovery_log()
         requal_rows, requal_names = requalify_parked_log(log, existing_names=existing)
@@ -267,6 +284,7 @@ def ingest_discovery_payload(payload: dict) -> dict:
         "skipped": skipped,
         "admitted": admitted,
         "requalified": requalified,
+        "requalify_recorded": requalify_recorded,
         "force_admitted": force_admitted,
         "rejected_invalid": rejected_invalid,
         "extended_added": added_extended,
