@@ -312,6 +312,7 @@ def build_discovery_summary(*, lists: bool = True) -> dict:
             "eligible": len(eligible),
             "generated_last": refill_state["generated_last"],
             "exhausted": refill_state["exhausted"],
+            "strategy": refill_state.get("strategy") or "recipe_order",
         },
         "last_tested_at": last_tested_at,
         "last_strategy": last_strategy,
@@ -327,6 +328,8 @@ def build_discovery_summary(*, lists: bool = True) -> dict:
             "discovery_log.json stays a capped display. "
             "Claim refills discovery_extended.json from the structure-AND recipe "
             "and, when that runs short, densifies around qualified passes. "
+            "refill.strategy is lift_ucb when cached atom lift is informative, "
+            "otherwise recipe_order. "
             "refill.eligible matches counts.eligible. "
             "A stamp is not process liveness. "
             + (

@@ -1344,18 +1344,27 @@ def next_refill_batch(
     *,
     taken_names: Iterable[str],
     n: int = DISCOVERY_REFILL_BATCH_SIZE,
+    lift=None,
+    lift_seed: int | None = None,
 ) -> list[str]:
-    """Next parseable, non-near-duplicate, never-logged names from the recipe."""
+    """Next parseable, non-near-duplicate, never-logged names from the recipe.
+
+    An informative lift model reranks a window of those names. A missing
+    or flat model returns the recipe order unchanged.
+    """
+    from hedge_fund.trading.atom_lift import LIFT_SEED, STEER_WINDOW, steer_candidates
     from hedge_fund.trading.mint_quality import mint_block_reason as _mint_block_reason
 
     want = max(0, int(n))
     if want == 0:
         return []
+    informative = lift is not None and bool(getattr(lift, "informative", False))
+    target = want * STEER_WINDOW if informative else want
     taken = {name for name in taken_names if name}
     taken_keys = {near_duplicate_key(name) for name in taken}
     out: list[str] = []
     for cand in iter_recipe_names():
-        if len(out) >= want:
+        if len(out) >= target:
             break
         if not name_is_parseable(cand):
             continue
@@ -1373,7 +1382,14 @@ def next_refill_batch(
         out.append(cand)
         taken.add(cand)
         taken_keys.add(key)
-    return out
+    if not informative:
+        return out
+    return steer_candidates(
+        out,
+        lift,
+        want,
+        seed=LIFT_SEED if lift_seed is None else int(lift_seed),
+    )
 
 
 def append_extended_batch(added: list[str]) -> list[str]:
@@ -1409,10 +1425,12 @@ def maybe_refill_discovery(
     """
     if int(eligible_count) >= int(cap):
         return []
+    from hedge_fund.trading.atom_lift import ensure_lift_model
+
     taken = set(taken_names)
     taken.update(load_extended_names())
     taken.update(generate_universe())
-    added = next_refill_batch(taken_names=taken, n=batch_size)
+    added = next_refill_batch(taken_names=taken, n=batch_size, lift=ensure_lift_model())
     if added:
         append_extended_batch(added)
     return added

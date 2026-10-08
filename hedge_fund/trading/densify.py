@@ -1,12 +1,16 @@
 """Ordered densify iterator for when ``iter_recipe_names`` runs short.
 
 Seeds are qualified names in the tested-name index (the admit island).
-Each yielded name changes one axis of a seed (HTF period, momentum
+When OOS metrics are passed in, seeds also include non-passes with a
+positive full-history Sharpe and at least one trade, ordered by that
+Sharpe. Each yielded name changes one axis of a seed (HTF period, momentum
 lookback, momentum percent, MA period, RSI threshold) or ANDs one extra
 parser-allowed atom, up to ``RECIPE_MAX_ATOMS``. Rank 0 is the nearest
 step; later ranks walk outward. A call takes the first ``n`` names that
 still pass the mint rules, so the stream is unbounded across calls and
-bounded per call.
+bounded per call. An informative atom-lift model reorders a window of
+those names (most slots by lift, the rest explored) and leaves the mint
+rules in front of that ranking.
 
 Rules (same as the recipe):
 - parser-allowed atoms only
@@ -43,6 +47,8 @@ BURNED_MIN_TESTED = 30
 # Nearest-first steps. 64 ranks of period/lookback is far past the island;
 # each claim only consumes ``n`` accepted names.
 DENSIFY_MAX_RANK = 64
+# Cap measured seeds so a 12k index does not explode the neighbor walk.
+SEED_CAP = 64
 
 _HTF_RE = re.compile(r"^(h[14])_(ema|sma)_abv_(\d+)$")
 _MOM_RE = re.compile(r"^mom_(\d+)b_gt(\d+)pc$")
@@ -255,6 +261,57 @@ def _seed_sort_key(name: str) -> tuple:
     return (bucket, name)
 
 
+def _metric_numbers(metric: dict | None) -> tuple[float | None, int | None]:
+    if not isinstance(metric, dict):
+        return None, None
+    sharpe = metric.get("sharpe")
+    trades = metric.get("trades")
+    if isinstance(sharpe, bool) or not isinstance(sharpe, (int, float)):
+        sharpe_n = None
+    else:
+        sharpe_n = float(sharpe)
+    if isinstance(trades, bool) or not isinstance(trades, (int, float)):
+        trades_n = None
+    else:
+        trades_n = int(trades)
+    return sharpe_n, trades_n
+
+
+def order_seeds(index: dict[str, bool], metrics: dict | None = None) -> list[str]:
+    """Seed names for densify.
+
+    No metrics → qualified names in the historical heuristic order.
+    With metrics → highest measured OOS Sharpe first (passes and
+    non-passes that still have Sharpe > 0 and trades > 0), then
+    unmeasured passes. Capped at ``SEED_CAP`` once metrics exist.
+    """
+    if not metrics:
+        names = [name for name, qual in index.items() if qual and isinstance(name, str) and name]
+        names.sort(key=_seed_sort_key)
+        return names
+    measured: list[tuple[float, str]] = []
+    heuristic: list[str] = []
+    for name, qual in index.items():
+        if not isinstance(name, str) or not name:
+            continue
+        sharpe, trades = _metric_numbers(metrics.get(name))
+        measured_ok = (
+            sharpe is not None
+            and trades is not None
+            and trades > 0
+            and (bool(qual) or sharpe > 0)
+        )
+        if measured_ok:
+            measured.append((sharpe, name))
+            continue
+        if qual:
+            heuristic.append(name)
+    measured.sort(key=lambda item: (-item[0], item[1]))
+    heuristic.sort(key=_seed_sort_key)
+    ordered = [name for _sharpe, name in measured] + heuristic
+    return ordered[:SEED_CAP]
+
+
 def _atom_replacements(atom: str, rank: int) -> list[str]:
     """One-axis neighbors at ``rank`` (possibly several sub-axes)."""
     m = _HTF_RE.match(atom)
@@ -463,8 +520,14 @@ def iter_densify_names(
     passes: Iterable[str],
     burned: set[str],
     zero_names: Iterable[str] | None = None,
+    *,
+    keep_order: bool = False,
 ) -> Iterator[str]:
-    """Deterministic stream. Same seeds and burn set → same order."""
+    """Deterministic stream. Same seeds and burn set → same order.
+
+    ``keep_order`` preserves the caller's seed ranking (Sharpe order).
+    Otherwise seeds sort by the historical heuristic.
+    """
     seeds: list[str] = []
     for name in passes:
         if not isinstance(name, str) or not name:
@@ -474,7 +537,8 @@ def iter_densify_names(
         if any(key in burned for key in keys_for(name)):
             continue
         seeds.append(name)
-    seeds.sort(key=_seed_sort_key)
+    if not keep_order:
+        seeds.sort(key=_seed_sort_key)
     zero_index = _zero_axis_index(zero_names or ())
     limit = max(DENSIFY_MAX_RANK, len(EXTRA_ATOMS))
     for rank in range(limit):
@@ -528,6 +592,9 @@ def next_densify_batch(
     n: int,
     index: dict[str, bool] | None = None,
     zero_trade_names: Iterable[str] | None = None,
+    lift=None,
+    metrics: dict | None = None,
+    lift_seed: int | None = None,
 ) -> tuple[list[str], bool]:
     """First ``n`` densify names not in ``taken_names``.
 
@@ -535,7 +602,15 @@ def next_densify_batch(
     iterator ended before ``n`` accepts (including when there are no
     qualified seeds). ``zero_trade_names`` defaults to explicit trades=0
     rows in the discovery log (ops parks excluded).
+
+    ``lift`` is ignored unless it is informative. Then a window of legal
+    names is ranked by expected lift and about a quarter of the slots are
+    an explore draw. ``metrics`` reorders seeds by measured OOS Sharpe.
+    Both default to off so a caller that only has the bool index keeps
+    the historical stream.
     """
+    from hedge_fund.trading.atom_lift import LIFT_SEED, STEER_WINDOW, steer_candidates
+
     want = max(0, int(n))
     if want == 0:
         return [], False
@@ -548,16 +623,36 @@ def next_densify_batch(
 
         zero_trade_names = zero_trade_names_from_rows(load_discovery_log())
     burned = burned_keys(index)
-    passes = [name for name, qual in index.items() if qual]
+    passes = order_seeds(index, metrics)
     taken = {name for name in taken_names if name}
     taken_keys = {near_duplicate_key(name) for name in taken}
+    informative = lift is not None and bool(getattr(lift, "informative", False))
+    target = want * STEER_WINDOW if informative else want
     out: list[str] = []
-    for cand in iter_densify_names(passes, burned, zero_trade_names):
+    for cand in iter_densify_names(passes, burned, zero_trade_names, keep_order=True):
         if not candidate_allowed(cand, taken=taken, taken_keys=taken_keys, burned=burned):
             continue
         out.append(cand)
         taken.add(cand)
         taken_keys.add(near_duplicate_key(cand))
-        if len(out) >= want:
-            return out, False
-    return out, True
+        if len(out) >= target:
+            if not informative:
+                return out, False
+            break
+    else:
+        if not informative:
+            return out, True
+        picked = steer_candidates(
+            out,
+            lift,
+            want,
+            seed=LIFT_SEED if lift_seed is None else int(lift_seed),
+        )
+        return picked, len(picked) < want
+    picked = steer_candidates(
+        out,
+        lift,
+        want,
+        seed=LIFT_SEED if lift_seed is None else int(lift_seed),
+    )
+    return picked, False
