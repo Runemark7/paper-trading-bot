@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
-from hedge_fund.trading.constants import QUAL_N_WINDOWS
+from hedge_fund.trading.constants import GATE_RULES, QUAL_N_WINDOWS
 
 
 def _eval(name, *, qualified=False, regimes=QUAL_N_WINDOWS, pnl=100.0, bh=500.0):
@@ -26,6 +26,7 @@ def _eval(name, *, qualified=False, regimes=QUAL_N_WINDOWS, pnl=100.0, bh=500.0)
         "fail_reasons": [] if qualified else [f"oos_pnl {pnl:.2f} <= bh {bh:.2f}"],
         "timeframe": "5m",
         "risk_policy": "rm_v1",
+        "gate_rules": GATE_RULES,
     }
 
 

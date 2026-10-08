@@ -49,6 +49,12 @@ QUAL_N_WINDOWS = qual_n_windows_for_bars(QUAL_TAPE_BARS_MEASURED)  # 23
 QUAL_COVERAGE_DAYS = QUAL_N_WINDOWS * QUAL_WINDOW_DAYS  # 2070
 QUAL_STRIDE = 1  # native 5m; do not downsample
 RISK_POLICY = "rm_v1"
+# Amendment 2026-10-08 (Alexander): exits are stop/TP only, open notional is
+# capped at 100% of equity, and beat-B&H compares daily-equity Sharpe (OOS,
+# same windows, after fees) instead of raw net P&L. Every discovery record
+# carries this stamp; prod ingest rejects rows from a worker on older rules
+# so a stale checkout cannot park names under the old engine.
+GATE_RULES = "sltp_cap100_bhdsr_20261008"
 # Prior bars fed into each window so EMA/SMA/HTF/ATR are warm when scored
 # bars begin. Binding HTF: parser-allowed ``h4_ema_abv_N`` with N=70 needs
 # 70 completed 4h closes = 70×48=3360 five-minute bars, plus up to 47 for

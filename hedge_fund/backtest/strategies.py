@@ -245,6 +245,21 @@ class BacktestResult:
     max_drawdown: float = 0.0
     fees_paid: float = 0.0
     error: str | None = None
+    # Exit mix by reason ("stop" / "tp" / "eod"). Signal flips never exit.
+    exits: dict = field(default_factory=dict)
+    # Bars held, summed over closed lots (avg hold = hold_bars / trades).
+    hold_bars: int = 0
+    # Lowest free cash right after an entry; 100% notional cap keeps it >= 0.
+    min_cash: float = 0.0
+    # Highest open notional / equity right after an entry (<= 1.0).
+    max_notional_frac: float = 0.0
+    # Account equity sampled every ``bars_per_day`` scored bars. First point
+    # is start_cash, last point is the final equity after the window close.
+    daily_equity: list = field(default_factory=list)
+
+
+# 5m bars per calendar day (daily-equity sampling for the beat-B&H gate).
+BARS_PER_DAY = 288
 
 
 # Trade-count Sharpe (mean/stdev * sqrt(n)). Real OOS windows stay well
@@ -283,7 +298,7 @@ def backtest(closes, highs, lows, strategy, start_cash=10_000.0,
              risk_frac=None, taker_fee=None, slippage=None,
              rr=None, atr_mult=None, momentum_lookback=12, momentum_thr=0.03,
              long_stack=(7, 25, 50), score_from: int | None = None,
-             score_to: int | None = None):
+             score_to: int | None = None, bars_per_day: int = BARS_PER_DAY):
     """Backtest one strategy on OHLC bars using frozen ``rm_v1`` stop/size.
 
     Same fee model as PaperBroker (0.1% taker + 2 bps) and the same ATR stop
@@ -294,6 +309,12 @@ def backtest(closes, highs, lows, strategy, start_cash=10_000.0,
     ``score_from`` / ``score_to`` (exclusive end) bound the bars that may
     open or close counted trades. Prefix bars still seed ATR / EMA / SMA /
     HTF. Default is the full series (engine still skips a tiny seed).
+
+    Amendment 2026-10-08: a lot exits only on its stop or take-profit (or
+    the window end, "eod"). The entry signal turning off does not close it.
+    New lots are shrunk or skipped so cash never goes negative (open
+    notional <= equity). Equity is sampled every ``bars_per_day`` bars into
+    ``daily_equity`` for the daily-Sharpe beat-B&H gate.
     """
     taker_fee = FEE_TAKER if taker_fee is None else taker_fee
     slippage = FEE_SLIPPAGE if slippage is None else slippage
@@ -308,7 +329,13 @@ def backtest(closes, highs, lows, strategy, start_cash=10_000.0,
     wins = trades = 0
     fees = 0.0
     pnl_pcts = []
-    lots: list[dict] = []  # {qty, entry, stop}
+    exits: dict[str, int] = {}
+    hold_bars = 0
+    min_cash = float(start_cash)
+    max_notional_frac = 0.0
+    daily_equity: list[float] = []
+    last_sample_i = -1
+    lots: list[dict] = []  # {qty, entry, stop, opened}
     pred = strategy if callable(strategy) and not isinstance(strategy, str) else parse_strategy(strategy)
     risk = RiskManager(risk_frac=risk_frac, initial_equity=start_cash)
     atr_vals = _cached_atr_series(highs, lows, closes, ATR_PERIOD)
@@ -321,8 +348,10 @@ def backtest(closes, highs, lows, strategy, start_cash=10_000.0,
     def mark_equity(px: float) -> float:
         return cash + sum(lot["qty"] * px for lot in lots)
 
-    def close_lot(lot, exit_px, hit):
-        nonlocal cash, wins, trades, fees, peak, max_dd
+    def close_lot(lot, exit_px, hit, bar_i):
+        nonlocal cash, wins, trades, fees, peak, max_dd, hold_bars
+        exits[hit] = exits.get(hit, 0) + 1
+        hold_bars += max(0, int(bar_i) - int(lot.get("opened", bar_i)))
         proceeds = exit_px * lot["qty"]
         fee = proceeds * taker_fee
         cash += proceeds - fee
@@ -346,6 +375,9 @@ def backtest(closes, highs, lows, strategy, start_cash=10_000.0,
             sharpe=0.0, max_drawdown=0.0, fees_paid=0.0,
         )
 
+    daily_equity.append(float(start_cash))
+    every = max(1, int(bars_per_day))
+
     for i in range(trade_start, end):
         cur = closes[i]
         take = eval_predicate(pred, closes, i, highs=highs, lows=lows)
@@ -368,11 +400,9 @@ def backtest(closes, highs, lows, strategy, start_cash=10_000.0,
             elif high_i >= tp:
                 exit_px = tp * (1 - slippage)
                 hit = "tp"
-            elif not take:
-                exit_px = cur * (1 - slippage)
-                hit = "signal_exit"
+            # No signal exit: a lot rides until its stop or take-profit.
             if exit_px is not None:
-                close_lot(lot, exit_px, hit)
+                close_lot(lot, exit_px, hit, i)
                 exited_this_bar = True
             else:
                 still_open.append(lot)
@@ -384,6 +414,10 @@ def backtest(closes, highs, lows, strategy, start_cash=10_000.0,
             peak = eq
         dd = (peak - eq) / peak if peak > 0 else 0.0
         max_dd = max(max_dd, dd)
+
+        if (i - trade_start + 1) % every == 0:
+            daily_equity.append(mark_equity(cur))
+            last_sample_i = i
 
         if exited_this_bar and not lots:
             continue  # just flattened; no re-entry this bar (same as prior engine)
@@ -400,7 +434,11 @@ def backtest(closes, highs, lows, strategy, start_cash=10_000.0,
         if cur <= stop:
             continue
         open_pos = [(lot["entry"], lot["stop"], lot["qty"]) for lot in lots]
-        rd = risk.size_position(eq, cur, stop, open_pos, confidence=1.0)
+        cost_mult = (1 + slippage) * (1 + taker_fee)
+        rd = risk.size_position(
+            eq, cur, stop, open_pos, confidence=1.0,
+            cash=cash, entry_cost_mult=cost_mult,
+        )
         if not rd.approved or rd.size <= 0:
             continue
         qty = rd.size
@@ -408,14 +446,25 @@ def backtest(closes, highs, lows, strategy, start_cash=10_000.0,
         fee = entry_px * qty * taker_fee
         cash -= entry_px * qty + fee
         fees += fee
-        lots.append({"qty": qty, "entry": entry_px, "stop": stop})
+        lots.append({"qty": qty, "entry": entry_px, "stop": stop, "opened": i})
+        min_cash = min(min_cash, cash)
+        notional = sum(lot["qty"] * cur for lot in lots)
+        eq_after = cash + notional
+        if eq_after > 0:
+            max_notional_frac = max(max_notional_frac, notional / eq_after)
 
     if lots:
         last_i = end - 1 if end else n - 1
         exit_px = closes[last_i] * (1 - slippage)
         for lot in list(lots):
-            close_lot(lot, exit_px, "eod")
+            close_lot(lot, exit_px, "eod", last_i)
         lots = []
+
+    # Final daily point is the settled equity after the window close.
+    if last_sample_i == end - 1 and len(daily_equity) > 1:
+        daily_equity[-1] = cash
+    else:
+        daily_equity.append(cash)
 
     return BacktestResult(
         strategy=strategy if isinstance(strategy, str) else getattr(strategy, "__name__", ""),
@@ -423,6 +472,8 @@ def backtest(closes, highs, lows, strategy, start_cash=10_000.0,
         win_rate=(wins / trades) if trades else 0.0,
         total_pnl=cash - start_cash, final_equity=cash,
         sharpe=_sharpe(pnl_pcts), max_drawdown=max_dd, fees_paid=fees,
+        exits=exits, hold_bars=hold_bars, min_cash=min_cash,
+        max_notional_frac=max_notional_frac, daily_equity=daily_equity,
     )
 
 

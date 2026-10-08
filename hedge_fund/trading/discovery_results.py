@@ -258,6 +258,13 @@ def _record_from_row(row: dict, *, gate: str) -> dict:
         record["windows"] = windows
     if "all_windows_nonneg" in row and isinstance(row.get("all_windows_nonneg"), bool):
         record["all_windows_nonneg"] = row["all_windows_nonneg"]
+    # Amendment 2026-10-08 fields; absent on rows from the old engine.
+    for key in ("daily_sharpe", "bh_daily_sharpe", "avg_hold_hours"):
+        val = _finite_number(row.get(key))
+        if val is not None:
+            record[key] = val
+    if isinstance(row.get("gate_rules"), str):
+        record["gate_rules"] = row["gate_rules"]
     return record
 
 

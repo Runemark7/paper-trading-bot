@@ -13,7 +13,7 @@ from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-from hedge_fund.trading.constants import DISCOVERY_REFILL_BATCH_SIZE
+from hedge_fund.trading.constants import DISCOVERY_REFILL_BATCH_SIZE, GATE_RULES
 from hedge_fund.trading.universe import near_duplicate_key
 
 
@@ -30,6 +30,7 @@ def _eval(name, *, qualified=False, tested_at="2026-10-07T12:00:00+00:00"):
         "fail_reasons": [] if qualified else ["oos_sharpe 0.10 < 0.30"],
         "timeframe": "5m",
         "risk_policy": "rm_v1",
+        "gate_rules": GATE_RULES,
     }
 
 
@@ -339,7 +340,12 @@ class LeaseHttpTests(unittest.TestCase):
                                 status, body = self._post(
                                     port,
                                     "/api/discovery/claim",
-                                    {"worker_id": worker_id, "n": 4, "parallel": 4},
+                                    {
+                                        "worker_id": worker_id,
+                                        "n": 4,
+                                        "parallel": 4,
+                                        "gate_rules": GATE_RULES,
+                                    },
                                     "paper-secret-token",
                                 )
                                 self.assertEqual(status, 200)

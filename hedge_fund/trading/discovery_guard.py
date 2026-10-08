@@ -10,7 +10,7 @@ import os
 import re
 from datetime import datetime, timezone
 
-from hedge_fund.trading.constants import QUAL_TIMEFRAME, RISK_POLICY
+from hedge_fund.trading.constants import GATE_RULES, QUAL_TIMEFRAME, RISK_POLICY
 
 # don_hi / don_lo / near_swing_* / dbl_bot_* (and parsed dbl_top).
 # 168-bar leftover structure names are O(n·k) and stalled jensa ~2h.
@@ -110,4 +110,5 @@ def ops_fail_record(name: str, reason: str) -> dict:
         "fail_reasons": [reason],
         "all_windows_nonneg": False,
         "ops_park": True,
+        "gate_rules": GATE_RULES,
     }

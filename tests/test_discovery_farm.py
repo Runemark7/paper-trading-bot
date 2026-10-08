@@ -12,7 +12,7 @@ from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-from hedge_fund.trading.constants import QUAL_N_WINDOWS
+from hedge_fund.trading.constants import GATE_RULES, QUAL_N_WINDOWS
 from hedge_fund.trading.discovery_mode import discovery_on_cycle, tokens_match
 from hedge_fund.trading.ingest import ingest_discovery_payload
 
@@ -30,6 +30,7 @@ def _eval(name, *, qualified, tested_at="2026-09-12T10:00:00+00:00", **extra):
         "fail_reasons": [] if qualified else ["oos_sharpe 0.10 < 0.30"],
         "timeframe": "5m",
         "risk_policy": "rm_v1",
+        "gate_rules": GATE_RULES,
     }
     row.update(extra)
     return row
@@ -183,6 +184,8 @@ class IngestMergeTests(unittest.TestCase):
             test_pnl=946.0,
             bh_oos_pnl=100.0,
             sma_stack_oos_pnl=50.0,
+            daily_sharpe=0.9,
+            bh_daily_sharpe=0.4,
             regimes_tested=QUAL_N_WINDOWS,
             fail_reasons=[
                 "window[1] failed/skipped/neg/empty",
@@ -198,11 +201,13 @@ class IngestMergeTests(unittest.TestCase):
             test_pnl=946.0,
             bh_oos_pnl=2000.0,
             sma_stack_oos_pnl=50.0,
+            daily_sharpe=0.9,
+            bh_daily_sharpe=1.5,
             regimes_tested=QUAL_N_WINDOWS,
             fail_reasons=[
                 "window[1] failed/skipped/neg/empty",
                 "not all windows non-negative",
-                "oos_pnl 946.00 <= bh 2000.00",
+                "daily_sharpe 0.90 <= bh_daily_sharpe 1.50",
             ],
         )
         with tempfile.TemporaryDirectory() as tmp:

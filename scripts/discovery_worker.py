@@ -56,6 +56,7 @@ from hedge_fund.trading.champions import load_graduated, load_pool, retired_name
 from hedge_fund.trading.constants import (
     DISCOVER_CYCLE_MAX_NAMES,
     DISCOVERY_REFILL_BATCH_SIZE,
+    GATE_RULES,
     QUAL_N_WINDOWS,
     QUAL_STRIDE,
     QUAL_WINDOW_BARS,
@@ -89,6 +90,7 @@ from hedge_fund.trading.refill import (
 )
 from hedge_fund.trading.universe import untested_candidates
 from scripts.tournament_engine import (
+    _benchmark_bh_daily_sharpe,
     _benchmark_oos,
     _load_qual_history,
     _window_slices,
@@ -104,15 +106,17 @@ PAUSE_SLEEP_MAX = 30
 _SLICES = None
 _BH = None
 _SMA = None
+_BH_DSR = None
 _N_WINDOWS = QUAL_N_WINDOWS
 
 
-def _init_pool(slices, bh, sma, n_windows: int) -> None:
-    global _SLICES, _BH, _SMA, _N_WINDOWS
+def _init_pool(slices, bh, sma, n_windows: int, bh_dsr: float | None = None) -> None:
+    global _SLICES, _BH, _SMA, _N_WINDOWS, _BH_DSR
     _SLICES = slices
     _BH = bh
     _SMA = sma
     _N_WINDOWS = n_windows
+    _BH_DSR = bh_dsr
 
 
 def _eval_name(name: str) -> dict | None:
@@ -122,14 +126,15 @@ def _eval_name(name: str) -> dict | None:
         n_windows=_N_WINDOWS,
         bh_oos_pnl=_BH,
         sma_stack_oos_pnl=_SMA,
+        bh_daily_sharpe=_BH_DSR,
     )
 
 
-def _new_eval_pool(n_workers: int, slices, bh, sma, n_windows: int):
+def _new_eval_pool(n_workers: int, slices, bh, sma, n_windows: int, bh_dsr: float | None = None):
     return multiprocessing.Pool(
         processes=n_workers,
         initializer=_init_pool,
-        initargs=(slices, bh, sma, n_windows),
+        initargs=(slices, bh, sma, n_windows, bh_dsr),
     )
 
 
@@ -427,7 +432,12 @@ def _claim_remote(base_url: str, token: str, worker_id: str, n: int, parallel: i
     return _http_json(
         f"{base_url.rstrip('/')}/api/discovery/claim",
         token=token,
-        data={"worker_id": worker_id, "n": int(n), "parallel": int(parallel)},
+        data={
+            "worker_id": worker_id,
+            "n": int(n),
+            "parallel": int(parallel),
+            "gate_rules": GATE_RULES,
+        },
         timeout=120,
     )
 
@@ -642,6 +652,7 @@ def run_batch(
         return {"evaluated": 0, "qualified": 0, "planned": [], "refilled": added}
 
     bh, sma = _benchmark_oos(slices)
+    bh_dsr = _benchmark_bh_daily_sharpe(slices)
     if not claim_mode:
         write_in_flight(
             planned,
@@ -727,11 +738,11 @@ def run_batch(
         if not cheap:
             pass
         elif n_workers == 1 and timeout_s <= 0:
-            _init_pool(slices, bh, sma, n_windows)
+            _init_pool(slices, bh, sma, n_windows, bh_dsr)
             for name in cheap:
                 finish(name, _eval_name(name))
         else:
-            pool = _new_eval_pool(n_workers, slices, bh, sma, n_windows)
+            pool = _new_eval_pool(n_workers, slices, bh, sma, n_windows, bh_dsr)
             try:
                 i = 0
                 while i < len(cheap):
@@ -748,7 +759,7 @@ def run_batch(
                         pool.join()
                         if i + len(wave) < len(cheap):
                             pool = _new_eval_pool(
-                                n_workers, slices, bh, sma, n_windows
+                                n_workers, slices, bh, sma, n_windows, bh_dsr
                             )
                     i += len(wave)
             finally:

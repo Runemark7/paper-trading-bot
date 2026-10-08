@@ -467,17 +467,48 @@ def _claim_unlocked(
     }
 
 
+def stale_rules_response(worker_id: str, n: int, gate_rules: object) -> dict:
+    """Claim answer for a worker whose checkout predates ``GATE_RULES``."""
+    from hedge_fund.trading.constants import GATE_RULES
+
+    return {
+        "ok": True,
+        "paper_only": True,
+        "worker_id": worker_id,
+        "names": [],
+        "n": n,
+        "paused": True,
+        "stale_rules": True,
+        "worker_gate_rules": gate_rules if isinstance(gate_rules, str) else None,
+        "gate_rules": GATE_RULES,
+        "message": "worker is on old gate rules; git pull and restart discovery_worker",
+        "refilled": [],
+        "expires_at": None,
+    }
+
+
 def claim_discovery_batch(
     worker_id: object,
     n: object,
     *,
     parallel: object = None,
     now: datetime | None = None,
+    gate_rules: object = None,
+    require_gate_rules: bool = False,
 ) -> dict:
-    """Lease up to ``n`` names for ``worker_id``. Holds the paper-state lock."""
+    """Lease up to ``n`` names for ``worker_id``. Holds the paper-state lock.
+
+    With ``require_gate_rules`` (the HTTP route), a worker that does not send
+    the current ``GATE_RULES`` gets no names: its results would be computed
+    on the old engine and ingest would reject them anyway.
+    """
+    from hedge_fund.trading.constants import GATE_RULES
+
     wid = require_worker_id(worker_id)
     count = require_n(n)
     par = require_parallel(parallel)
+    if require_gate_rules and gate_rules != GATE_RULES:
+        return stale_rules_response(wid, count, gate_rules)
     clock = now or datetime.now(timezone.utc)
     with paper_state_lock("discovery"):
         return _claim_unlocked(wid, count, parallel=par, now=clock)

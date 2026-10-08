@@ -647,6 +647,8 @@ class Handler(BaseHTTPRequestHandler):
                     payload.get("worker_id"),
                     payload.get("n"),
                     parallel=payload.get("parallel") if "parallel" in payload else None,
+                    gate_rules=payload.get("gate_rules"),
+                    require_gate_rules=True,
                 ))
             except ValueError as exc:
                 self._send_json({"ok": False, "error": str(exc), "paper_only": True}, 400)

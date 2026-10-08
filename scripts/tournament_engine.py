@@ -20,6 +20,9 @@
 
 Qualification uses hedge_fund.backtest.strategies with rm_v1 stops/fees,
 not fast_quant or fee-free SimBroker.
+
+Amendment 2026-10-08: lots exit on stop/TP only, open notional is capped at
+equity, and beat-B&H compares daily-equity Sharpe (``GATE_RULES``).
 """
 from __future__ import annotations
 
@@ -31,7 +34,12 @@ import hedge_fund.backtest.strategies as bs
 from hedge_fund.backtest.stride import downsample
 from hedge_fund.paths import state_root
 from hedge_fund.signals.dynamic import parse_strategy
-from hedge_fund.trading.buy_and_hold import buy_and_hold_window_pnl
+from hedge_fund.trading.buy_and_hold import (
+    buy_and_hold_daily_equity,
+    buy_and_hold_window_pnl,
+    daily_returns_sharpe,
+    equity_returns,
+)
 from hedge_fund.trading.champions import load_graduated, load_pool, retired_names, save_pool
 from hedge_fund.trading.discovery import (
     append_discovery_evaluation,
@@ -47,6 +55,7 @@ from hedge_fund.trading.discovery import (
 from hedge_fund.trading.constants import (
     DISCOVER_CYCLE_MAX_NAMES,
     DISCOVER_CYCLE_TIME_BUDGET_SECONDS,
+    GATE_RULES,
     PAPER_START_CASH,
     QUAL_N_WINDOWS,
     QUAL_STRIDE,
@@ -281,6 +290,16 @@ def _test_closes_by_symbol(sample: dict) -> dict[str, list[float]]:
     return out
 
 
+def _book_daily_returns(results: list) -> list[float]:
+    """Daily returns of the summed per-symbol books (each symbol on its own 10k)."""
+    curves = [r.daily_equity for r in results if getattr(r, "daily_equity", None)]
+    if not curves:
+        return []
+    n = min(len(c) for c in curves)
+    book = [sum(c[k] for c in curves) for k in range(n)]
+    return equity_returns(book)
+
+
 def evaluate_windows(pred, window_slices: list[dict]) -> list[dict]:
     """Run train/test backtests per window. Empty/failed windows are marked skipped."""
     scores = []
@@ -297,6 +316,8 @@ def evaluate_windows(pred, window_slices: list[dict]) -> list[dict]:
                 "sharpe": 0.0,
                 "skipped": True,
                 "failed": True,
+                "daily_returns": [],
+                "hold_bars": 0,
             })
             continue
         w_train_pnl = sum(r.total_pnl for r in train_results)
@@ -315,6 +336,8 @@ def evaluate_windows(pred, window_slices: list[dict]) -> list[dict]:
             "sharpe": w_sharpe,
             "skipped": skipped,
             "failed": skipped,
+            "daily_returns": _book_daily_returns(test_results),
+            "hold_bars": sum(int(getattr(r, "hold_bars", 0) or 0) for r in test_results),
         })
     return scores
 
@@ -326,6 +349,7 @@ def evaluate_strategy_record(
     n_windows: int,
     bh_oos_pnl: float | None,
     sma_stack_oos_pnl: float | None,
+    bh_daily_sharpe: float | None = None,
 ) -> dict | None:
     """One name through evaluate_windows + qualification_decision.
 
@@ -345,10 +369,14 @@ def evaluate_strategy_record(
         expected_windows=n_windows,
         bh_oos_pnl=bh_oos_pnl,
         sma_stack_oos_pnl=sma_stack_oos_pnl,
+        bh_daily_sharpe=bh_daily_sharpe,
     )
     tot_wins = sum(int(ws.get("wins") or 0) for ws in window_scores)
     oos_trades = decision["tot_oos_trades"]
     overall_win_rate = (tot_wins / oos_trades) if oos_trades > 0 else 0.0
+    tot_hold_bars = sum(int(ws.get("hold_bars") or 0) for ws in window_scores)
+    avg_hold_hours = (tot_hold_bars / oos_trades * 5.0 / 60.0) if oos_trades > 0 else None
+    dsr = decision.get("daily_sharpe")
     record = {
         "strategy": name,
         "tested_at": datetime.now(timezone.utc).isoformat(),
@@ -363,6 +391,10 @@ def evaluate_strategy_record(
         "qualified": decision["passed"],
         "bh_oos_pnl": None if bh_oos_pnl is None else round(bh_oos_pnl, 2),
         "sma_stack_oos_pnl": None if sma_stack_oos_pnl is None else round(sma_stack_oos_pnl, 2),
+        "daily_sharpe": None if dsr is None else round(dsr, 3),
+        "bh_daily_sharpe": None if bh_daily_sharpe is None else round(bh_daily_sharpe, 3),
+        "avg_hold_hours": None if avg_hold_hours is None else round(avg_hold_hours, 2),
+        "gate_rules": GATE_RULES,
         "fail_reasons": decision["reasons"],
         "all_windows_nonneg": decision["all_windows_nonneg"],
     }
@@ -371,7 +403,25 @@ def evaluate_strategy_record(
     return record
 
 
+def _benchmark_bh_daily_sharpe(window_slices: list[dict]) -> float | None:
+    """B&H daily-equity Sharpe over every window's OOS span (same capital base).
+
+    Each symbol starts with ``PAPER_START_CASH`` (like the strategy backtest),
+    sampled on the same daily points; returns are concatenated across windows.
+    """
+    rets: list[float] = []
+    seen = False
+    for w_sample in window_slices:
+        closes_test = _test_closes_by_symbol(w_sample)
+        points = buy_and_hold_daily_equity(closes_test, PAPER_START_CASH)
+        if len(points) >= 2:
+            seen = True
+            rets.extend(equity_returns(points))
+    return daily_returns_sharpe(rets) if seen else None
+
+
 def _benchmark_oos(window_slices: list[dict]) -> tuple[float | None, float | None]:
+    """OOS B&H P&L and sma_stack P&L. B&H uses 10k per symbol (strategy base)."""
     bh_total = 0.0
     bh_ok = False
     sma_total = 0.0
@@ -379,7 +429,9 @@ def _benchmark_oos(window_slices: list[dict]) -> tuple[float | None, float | Non
     sma_pred = parse_strategy(FALLBACK_BENCHMARK)
     for w_sample in window_slices:
         closes_test = _test_closes_by_symbol(w_sample)
-        bh = buy_and_hold_window_pnl(closes_test, PAPER_START_CASH)
+        bh = buy_and_hold_window_pnl(
+            closes_test, PAPER_START_CASH * max(1, len(closes_test))
+        )
         if bh is not None:
             bh_total += bh
             bh_ok = True
@@ -506,6 +558,7 @@ def discover_and_qualify(
         )
     try:
         bh_oos, sma_oos = _benchmark_oos(window_slices) if planned else (None, None)
+        bh_dsr = _benchmark_bh_daily_sharpe(window_slices) if planned else None
 
         for i, name in enumerate(planned):
             if i > 0 and (time.monotonic() - started_mono) >= budget:
@@ -524,6 +577,7 @@ def discover_and_qualify(
                 n_windows=n_windows,
                 bh_oos_pnl=bh_oos,
                 sma_stack_oos_pnl=sma_oos,
+                bh_daily_sharpe=bh_dsr,
             )
             if record is None:
                 completed.append(name)

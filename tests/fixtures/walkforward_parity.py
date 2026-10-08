@@ -4,7 +4,8 @@ CI must not load jensa's full ``crypto_history_5m.json`` (~600k bars).
 This module builds a fixed synthetic tape and runs the **same** qualify
 path as ``scripts/discovery_worker.py``:
 
-    _window_slices → _benchmark_oos → evaluate_strategy_record
+    _window_slices → _benchmark_oos (+ _benchmark_bh_daily_sharpe)
+        → evaluate_strategy_record
         → evaluate_windows → hedge_fund.backtest.strategies.backtest
         → qualification_decision
 
@@ -18,7 +19,9 @@ Reduced size (documented, topology only — not a live-gate change):
 Train/test cut stays 70/30 inside each window (``_prepare_sample``).
 Prior bars (``QUAL_WARMUP_BARS``) seed indicators; OOS trades/PnL/Sharpe
 exclude the pad. Admit semantics stay the frozen OOS gates (trades ≥ 30,
-Sharpe ≥ 0.30, beat B&H, beat sma_stack, fail-once, 5m, rm_v1).
+Sharpe ≥ 0.30, beat B&H daily-equity Sharpe, beat sma_stack, fail-once,
+5m, rm_v1 with stop/TP-only exits and the 100% notional cap — amendment
+2026-10-08).
 """
 from __future__ import annotations
 
@@ -38,6 +41,7 @@ from hedge_fund.trading.constants import (
     RISK_POLICY,
 )
 from scripts.tournament_engine import (
+    _benchmark_bh_daily_sharpe,
     _benchmark_oos,
     _window_slices,
     evaluate_strategy_record,
@@ -74,6 +78,10 @@ RECORD_COMPARE_KEYS: tuple[str, ...] = (
     "qualified",
     "bh_oos_pnl",
     "sma_stack_oos_pnl",
+    "daily_sharpe",
+    "bh_daily_sharpe",
+    "avg_hold_hours",
+    "gate_rules",
     "fail_reasons",
     "all_windows_nonneg",
     "score",
@@ -165,6 +173,7 @@ def run_parity_eval(
     n_windows: int,
     bh_oos_pnl: float | None,
     sma_stack_oos_pnl: float | None,
+    bh_daily_sharpe: float | None = None,
 ) -> dict[str, Any]:
     """One name through the live qualify path. Returns record + window rows."""
     pred = parse_strategy(name)
@@ -175,6 +184,7 @@ def run_parity_eval(
         n_windows=n_windows,
         bh_oos_pnl=bh_oos_pnl,
         sma_stack_oos_pnl=sma_stack_oos_pnl,
+        bh_daily_sharpe=bh_daily_sharpe,
     )
     return {
         "name": name,
@@ -192,8 +202,12 @@ def build_golden_payload(
 ) -> dict[str, Any]:
     slices = make_parity_slices(window_bars=window_bars, n_windows=n_windows, stride=stride)
     bh, sma = _benchmark_oos(slices)
+    bh_dsr = _benchmark_bh_daily_sharpe(slices)
     strategies = [
-        run_parity_eval(name, slices, n_windows=n_windows, bh_oos_pnl=bh, sma_stack_oos_pnl=sma)
+        run_parity_eval(
+            name, slices, n_windows=n_windows, bh_oos_pnl=bh, sma_stack_oos_pnl=sma,
+            bh_daily_sharpe=bh_dsr,
+        )
         for name in names
     ]
     return {
@@ -216,6 +230,7 @@ def build_golden_payload(
         },
         "bh_oos_pnl": None if bh is None else round(bh, 2),
         "sma_stack_oos_pnl": None if sma is None else round(sma, 2),
+        "bh_daily_sharpe": None if bh_dsr is None else round(bh_dsr, 3),
         "bh_oos_pnl_raw": bh,
         "sma_stack_oos_pnl_raw": sma,
         "strategies": strategies,

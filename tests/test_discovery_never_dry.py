@@ -8,6 +8,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from hedge_fund.trading.constants import GATE_RULES
 from hedge_fund.trading.densify import (
     BURNED_MIN_TESTED,
     candidate_allowed,
@@ -31,6 +32,7 @@ def _eval(name, *, qualified=False, tested_at="2026-10-07T12:00:00+00:00"):
         "fail_reasons": [] if qualified else ["oos_sharpe 0.10 < 0.30"],
         "timeframe": "5m",
         "risk_policy": "rm_v1",
+        "gate_rules": GATE_RULES,
     }
 
 

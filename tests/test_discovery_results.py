@@ -13,7 +13,7 @@ from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import urlopen
 
-from hedge_fund.trading.constants import DISCOVERY_LOG_CAP
+from hedge_fund.trading.constants import DISCOVERY_LOG_CAP, GATE_RULES
 from hedge_fund.trading.densify import next_densify_batch, order_seeds
 from hedge_fund.trading.discovery import (
     append_discovery_evaluations,
@@ -60,6 +60,7 @@ def _eval(name, *, qualified, tested_at, **extra):
         "fail_reasons": [] if qualified else ["oos_sharpe 0.10 < 0.30"],
         "timeframe": "5m",
         "risk_policy": "rm_v1",
+        "gate_rules": GATE_RULES,
     }
     row.update(extra)
     return row
