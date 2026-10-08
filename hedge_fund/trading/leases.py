@@ -425,10 +425,20 @@ def _claim_unlocked(
             "expires_at": None,
             "claimed_at": _iso(now),
         }
-    claimable, refilled, refill_meta = _claimable_names(state, n)
+    # Requalify lane first: re-checks of champions / old passes on the
+    # current gate. Kept in discovery_requalify.json, not in these leases.
+    from hedge_fund.trading.requalify import lease_requalify_unlocked
+
+    requal = lease_requalify_unlocked(worker_id, n, ttl, now)
+    rest = n - len(requal)
+    if rest > 0:
+        claimable, refilled, refill_meta = _claimable_names(state, rest)
+    else:
+        claimable, refilled, refill_meta = [], [], load_refill_status()
     expires = now + timedelta(seconds=ttl)
-    chosen = claimable[:n]
-    for name in chosen:
+    fresh = claimable[:max(0, rest)]
+    chosen = list(requal) + fresh
+    for name in fresh:
         state["leases"][name] = {
             "worker_id": worker_id,
             "claimed_at": _iso(now),
@@ -452,6 +462,7 @@ def _claim_unlocked(
         "expires_at": _iso(expires) if chosen else None,
         "claimed_at": _iso(now),
         "leases_active": len(state["leases"]),
+        "requalify": list(requal),
     }
 
 
@@ -490,6 +501,9 @@ def _release_unlocked(
             continue
         del leases[name]
         released.append(name)
+    from hedge_fund.trading.requalify import release_requalify_unlocked
+
+    released.extend(release_requalify_unlocked(worker_id, names))
     _touch(state, worker_id, status, now)
     _prune_workers(state, now)
     save_lease_state(state)
