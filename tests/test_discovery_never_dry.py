@@ -34,8 +34,8 @@ def _eval(name, *, qualified=False, tested_at="2026-10-07T12:00:00+00:00"):
     }
 
 
-PASS = "h1_ema_abv_50&mom_18b_gt2pc&sma_abv_30&rsi_14_>50"
-PASS_2 = "h1_sma_abv_30&mom_18b_gt2pc&ema_abv_20"
+PASS = "h1_ema_abv_50&mom_18b_gt2pc"
+PASS_2 = "h1_sma_abv_30&mom_18b_gt2pc"
 
 
 def _empty_taken():
@@ -114,7 +114,7 @@ class DensifyRuleTests(unittest.TestCase):
         return names
 
     def test_same_state_same_order(self):
-        index = {PASS: True, PASS_2: True, "h1_ema_abv_24&dip_24b_lt5pc": True}
+        index = {PASS: True, PASS_2: True, "h1_ema_abv_24&dip_12b_lt2pc": True}
         first, exhausted = next_densify_batch(taken_names=set(index), n=12, index=index)
         flipped = dict(reversed(list(index.items())))
         second, _ = next_densify_batch(taken_names=set(flipped), n=12, index=flipped)

@@ -28,6 +28,17 @@ REASON_REDUNDANT = "redundant_threshold"
 REASON_EMPTY_BAND = "empty_band"
 REASON_UNSUPPORTED_BAND = "unsupported_band"
 REASON_UNREACHABLE = "unreachable_threshold"
+REASON_DEAD_MOM = "dead_mom_threshold"
+REASON_DEAD_DIP = "dead_dip"
+REASON_DEAD_DEPTH = "dead_depth"
+REASON_FILLER = "filler_atom"
+REASON_CANONICAL = "canonical_tested"
+
+# Measured zero-trade zones (2026-10-08 retro). Not OOS gate constants.
+DEAD_MOM_PCT = 14
+DEAD_DIP_LOOKBACKS = (18, 24)
+DEAD_DIP_PCT = 5
+DEAD_DEPTH = 5
 
 DISCOVERY_MINT_SKIPS = "discovery_mint_skips.json"
 
@@ -365,9 +376,188 @@ def unreachable_threshold_reason(name: str) -> str | None:
     return None
 
 
-def mint_block_reason(name: str) -> str | None:
-    """Why this name must not be minted or leased. None when it is eligible."""
-    return redundant_bound_reason(name) or unreachable_threshold_reason(name)
+def _fmt_threshold(thr: float) -> str:
+    if float(thr).is_integer():
+        return str(int(thr))
+    return str(thr)
+
+
+def _strict_raw(group: Sequence[AtomParts]) -> list[str]:
+    """One atom per bound, keeping the strictest threshold already present."""
+    if not group:
+        return []
+    if not any(atom.bounds for atom in group):
+        return [group[0].raw]
+    best_gt: float | None = None
+    best_lt: float | None = None
+    for atom in group:
+        for op, thr in atom.bounds:
+            if op == "gt":
+                best_gt = thr if best_gt is None else max(best_gt, thr)
+            elif op == "lt":
+                best_lt = thr if best_lt is None else min(best_lt, thr)
+    wanted: list[tuple[str, float]] = []
+    if best_gt is not None:
+        wanted.append(("gt", best_gt))
+    if best_lt is not None:
+        wanted.append(("lt", best_lt))
+    wanted_set = set(wanted)
+    for atom in group:
+        if set(atom.bounds) == wanted_set:
+            return [atom.raw]
+    chosen: list[str] = []
+    for op, thr in wanted:
+        match = next(
+            (
+                atom.raw
+                for atom in group
+                if atom.bounds == ((op, thr),)
+            ),
+            None,
+        )
+        if match is not None:
+            chosen.append(match)
+            continue
+        sample = group[0]
+        if sample.family == "rsi" and sample.params:
+            period = int(sample.params[0])
+            word = ">" if op == "gt" else "<"
+            chosen.append(f"rsi_{period}_{word}{_fmt_threshold(thr)}")
+        elif sample.family in ("mom", "dip") and sample.params:
+            lookback = int(sample.params[0])
+            word = "gt" if sample.family == "mom" else "lt"
+            chosen.append(
+                f"{sample.family}_{lookback}b_{word}{_fmt_threshold(thr)}pc"
+            )
+        else:
+            chosen.append(sample.raw)
+    return chosen
+
+
+def canonical_atoms(name: str) -> tuple[str, ...]:
+    """Sorted atoms with same-indicator bounds collapsed to the strictest.
+
+    ``mom_18b_gt2pc&mom_18b_gt4pc`` becomes ``mom_18b_gt4pc``. Atom order
+    does not matter: ``b&a`` and ``a&b`` share one key. Unparsed tokens
+    are kept and sorted with the rest.
+    """
+    if not name or not isinstance(name, str):
+        return ()
+    grouped: dict[tuple, list[AtomParts]] = {}
+    order: list[tuple] = []
+    unknown: list[str] = []
+    for tok in name.split("&"):
+        tok = tok.strip()
+        if not tok:
+            continue
+        atom = inspect_atom(tok)
+        if atom is None:
+            unknown.append(tok)
+            continue
+        key = (atom.family, atom.params)
+        if key not in grouped:
+            order.append(key)
+            grouped[key] = []
+        grouped[key].append(atom)
+    kept: list[str] = []
+    for key in order:
+        kept.extend(_strict_raw(grouped[key]))
+    kept.extend(unknown)
+    return tuple(sorted(kept))
+
+
+def canonical_name(name: str) -> str:
+    """Canonical stack string. Empty when ``name`` has no atoms."""
+    return "&".join(canonical_atoms(name))
+
+
+def canonical_key_set(names: Iterable[str] | None) -> set[str]:
+    """Canonical forms of ``names``. Built once per claim, not per candidate."""
+    out: set[str] = set()
+    for name in names or ():
+        if isinstance(name, str) and name:
+            key = canonical_name(name)
+            if key:
+                out.add(key)
+    return out
+
+
+def _has_htf_ma(atoms: Sequence[AtomParts]) -> bool:
+    for atom in atoms:
+        if atom.family.startswith(("h1_", "h4_")) and atom.family.endswith("_abv"):
+            return True
+    return False
+
+
+def _is_filler(atom: AtomParts) -> bool:
+    if atom.family in ("sma_abv", "ema_abv"):
+        return True
+    if atom.family == "rsi" and any(op == "gt" for op, _thr in atom.bounds):
+        return True
+    return False
+
+
+def dead_zone_reason(name: str) -> str | None:
+    """Zero-trade zones measured on the current 23-window gate.
+
+    Mom percent ≥14, dip lookback 18 or 24 at ≥5%, stacks of 5 or more
+    atoms, and 5m MA / RSI-above fillers on a spine that already has an
+    h1 or h4 moving-average atom.
+    """
+    if not name or not isinstance(name, str):
+        return None
+    raw = [tok.strip() for tok in name.split("&") if tok.strip()]
+    if len(raw) >= DEAD_DEPTH:
+        return REASON_DEAD_DEPTH
+    parsed: list[AtomParts] = []
+    for tok in raw:
+        mom = _MOM_DIP_RE.match(tok)
+        if mom:
+            kind = mom.group(1)
+            lookback = int(mom.group(2))
+            pct = int(mom.group(4))
+            if kind == "mom" and pct >= DEAD_MOM_PCT:
+                return REASON_DEAD_MOM
+            if (
+                kind == "dip"
+                and lookback in DEAD_DIP_LOOKBACKS
+                and pct >= DEAD_DIP_PCT
+            ):
+                return REASON_DEAD_DIP
+        atom = inspect_atom(tok)
+        if atom is not None:
+            parsed.append(atom)
+    if _has_htf_ma(parsed) and any(_is_filler(atom) for atom in parsed):
+        return REASON_FILLER
+    return None
+
+
+def canonical_tested_reason(name: str, tested_keys: Iterable[str] | None) -> str | None:
+    """``canonical_tested`` when this stack's sorted form was already tested."""
+    if not tested_keys:
+        return None
+    key = canonical_name(name)
+    if key and key in set(tested_keys):
+        return REASON_CANONICAL
+    return None
+
+
+def mint_block_reason(
+    name: str,
+    tested_keys: Iterable[str] | None = None,
+) -> str | None:
+    """Why this name must not be minted or leased. None when it is eligible.
+
+    Dead zones and redundant bounds are properties of the name. Pass
+    ``tested_keys`` (canonical forms) to also skip a permutation of a
+    stack that was already tested.
+    """
+    return (
+        dead_zone_reason(name)
+        or redundant_bound_reason(name)
+        or unreachable_threshold_reason(name)
+        or canonical_tested_reason(name, tested_keys)
+    )
 
 
 def _atoms(name: str) -> list[str]:
@@ -379,15 +569,20 @@ def count_mint_blocks(
     *,
     tested: Iterable[str] | None = None,
 ) -> dict[str, int]:
-    """Count untested names each rule would drop. Tested history is ignored."""
+    """Count untested names each rule would drop. Tested history is ignored.
+
+    ``tested`` names are not counted. Their canonical forms still mark a
+    different spelling of the same stack as ``canonical_tested``.
+    """
     parked = {n for n in (tested or ()) if n}
+    tested_keys = canonical_key_set(parked)
     counts: dict[str, int] = {}
     seen: set[str] = set()
     for name in names:
         if not name or name in parked or name in seen:
             continue
         seen.add(name)
-        reason = mint_block_reason(name)
+        reason = mint_block_reason(name, tested_keys)
         if reason:
             counts[reason] = counts.get(reason, 0) + 1
     return counts
@@ -441,6 +636,7 @@ def record_untested_mint_skips(
     Returns counts by reason for names that violate (including ones already skipped).
     """
     parked = {n for n in already if n}
+    tested_keys = canonical_key_set(parked)
     counts: dict[str, int] = {}
     skips = load_mint_skips()
     changed = False
@@ -449,7 +645,7 @@ def record_untested_mint_skips(
         if not isinstance(name, str) or not name or name in parked or name in seen:
             continue
         seen.add(name)
-        reason = mint_block_reason(name)
+        reason = mint_block_reason(name, tested_keys)
         if not reason:
             continue
         counts[reason] = counts.get(reason, 0) + 1

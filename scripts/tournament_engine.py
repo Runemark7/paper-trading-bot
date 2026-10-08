@@ -90,12 +90,31 @@ def log_discovery_evaluations(eval_records: list[dict]):
 def _load_qual_history(keep_bars: int | None = None) -> dict | None:
     """5m tape only. A 4h-only state dir must not admit anyone.
 
+    The shared live-tape npy wins over ``crypto_history_5m.json`` so a
+    worker that just refreshed from prod does not keep evaluating the
+    stale JSON copy.
+
     Qualification windows need the last ``window_size * n_windows`` scored
     bars plus ``QUAL_WARMUP_BARS`` of prior tape (default 23×25920 + 4032
     ≈ 2070 calendar days of hold-outs plus ~14d of indicator seed). Extra
     history and unused symbols (SOL/XRP) are dropped immediately after parse
     so peak RSS is not the full fetch file.
     """
+    from hedge_fund.trading.price_history import load_canonical_history
+
+    shared = load_canonical_history()
+    if shared:
+        keep = (
+            QUAL_WINDOW_BARS * QUAL_N_WINDOWS + QUAL_WARMUP_BARS
+            if keep_bars is None
+            else keep_bars
+        )
+        if keep > 0:
+            for sym in list(shared):
+                rows = shared[sym]
+                if len(rows) > keep:
+                    shared[sym] = rows[-keep:]
+        return shared
     path = _hist_qual()
     if not path.exists():
         return None

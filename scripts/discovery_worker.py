@@ -173,12 +173,12 @@ def _http_json(url: str, *, token: str | None = None, data: dict | None = None, 
     headers = {"Accept": "application/json"}
     body = None
     method = "GET"
+    if token:
+        headers["X-Discovery-Token"] = token
     if data is not None:
         method = "POST"
         body = json.dumps(data).encode("utf-8")
         headers["Content-Type"] = "application/json"
-        if token:
-            headers["X-Discovery-Token"] = token
     req = Request(url, data=body, headers=headers, method=method)
     try:
         with urlopen(req, timeout=timeout) as resp:
@@ -189,6 +189,96 @@ def _http_json(url: str, *, token: str | None = None, data: dict | None = None, 
         raise RuntimeError(f"{method} {url} -> {exc.code}: {detail}") from exc
     except URLError as exc:
         raise RuntimeError(f"{method} {url} failed: {exc.reason}") from exc
+
+
+def _http_bytes(url: str, *, token: str | None = None, timeout: int = 120) -> bytes:
+    headers = {"Accept": "application/octet-stream"}
+    if token:
+        headers["X-Discovery-Token"] = token
+    req = Request(url, headers=headers, method="GET")
+    try:
+        with urlopen(req, timeout=timeout) as resp:
+            return resp.read()
+    except HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")[:400]
+        raise RuntimeError(f"GET {url} -> {exc.code}: {detail}") from exc
+    except URLError as exc:
+        raise RuntimeError(f"GET {url} failed: {exc.reason}") from exc
+
+
+# Shared-tape problems skip this batch. They must not kill the farm loop.
+HISTORY_BACKOFF_SECONDS = 60
+
+
+class HistoryUnavailable(Exception):
+    """Prod tape is missing or still mismatched. Back off and do not eval."""
+
+
+def ensure_shared_history(base_url: str, token: str) -> dict:
+    """Fetch prod's canonical tape when the local hash differs.
+
+    A mismatch after refresh, or a failed fetch (including HTTP 502),
+    raises ``HistoryUnavailable``. The farm loop sleeps and retries.
+    It does not exit.
+    """
+    from hedge_fund.trading.price_history import install_tape_blob, manifest_for
+
+    try:
+        remote = _http_json(
+            f"{base_url.rstrip('/')}/api/discovery/history",
+            token=token,
+            timeout=60,
+        )
+        local = manifest_for()
+        remote_hash = remote.get("sha256") if isinstance(remote, dict) else None
+        if remote_hash and local.get("sha256") == remote_hash:
+            local["provenance"] = "shared"
+            return local
+        blob = _http_bytes(
+            f"{base_url.rstrip('/')}/api/discovery/history/tape",
+            token=token,
+            timeout=180,
+        )
+        installed = install_tape_blob(blob)
+    except HistoryUnavailable:
+        raise
+    except Exception as exc:
+        print(
+            f"discovery_worker: shared tape fetch failed ({exc}); skipping eval",
+            flush=True,
+        )
+        raise HistoryUnavailable(str(exc)) from exc
+    if not remote_hash or installed.get("sha256") != remote_hash:
+        print(
+            "discovery_worker: price history hash still differs after refresh "
+            f"(local={str(installed.get('sha256'))[:12]} remote={str(remote_hash)[:12]}); "
+            "skipping eval",
+            flush=True,
+        )
+        raise HistoryUnavailable("price history hash mismatch after refresh")
+    installed["provenance"] = "shared"
+    print(
+        f"discovery_worker: refreshed shared tape hash={installed['sha256'][:12]} "
+        f"data_end={installed.get('data_end')}",
+        flush=True,
+    )
+    return installed
+
+
+def _stamp_provenance(record: dict | None, history: dict | None, worker_id: str | None) -> dict | None:
+    if not isinstance(record, dict):
+        return record
+    if not history or not history.get("sha256"):
+        record["provenance"] = "unknown"
+        record["worker_id"] = worker_id or record.get("worker_id") or "unknown"
+        record.setdefault("data_end", None)
+        record.setdefault("data_hash", None)
+        return record
+    record["worker_id"] = worker_id or "unknown"
+    record["data_end"] = history.get("data_end")
+    record["data_hash"] = history.get("sha256")
+    record["provenance"] = history.get("provenance") or "unverified"
+    return record
 
 
 def _base_url(ingest_url: str, override: str | None) -> str:
@@ -491,7 +581,20 @@ def run_batch(
     names: list[str] | None = None,
     claim_mode: bool = False,
     worker_id: str | None = None,
+    sync_base: str | None = None,
+    sync_token: str | None = None,
 ) -> dict:
+    history_stamp: dict | None = None
+    if sync_base and sync_token:
+        history_stamp = ensure_shared_history(sync_base, sync_token)
+    else:
+        try:
+            from hedge_fund.trading.price_history import manifest_for
+
+            history_stamp = manifest_for()
+            history_stamp["provenance"] = "unverified"
+        except Exception:
+            history_stamp = None
     data = _load_qual_history(keep_bars=qual_keep_bars(n_windows=n_windows))
     if not data:
         raise SystemExit(
@@ -573,6 +676,7 @@ def run_batch(
         completed.append(name)
         remaining = [n for n in planned if n not in completed]
         if record is not None:
+            _stamp_provenance(record, history_stamp, worker_id)
             append_discovery_evaluation(record)
             records.append(record)
             reasons = record.get("fail_reasons") or []
@@ -835,7 +939,19 @@ def _run_loop(
                     token=token,
                     claim_mode=False,
                     worker_id=worker_id,
+                    sync_base=None if args.no_ingest else base,
+                    sync_token=None if args.no_ingest else token,
                 )
+            except HistoryUnavailable as exc:
+                print(
+                    f"discovery_worker: shared tape not ready ({exc}); "
+                    f"backing off {HISTORY_BACKOFF_SECONDS}s",
+                    flush=True,
+                )
+                if args.once:
+                    return 1
+                time.sleep(HISTORY_BACKOFF_SECONDS)
+                continue
             except SystemExit:
                 raise
             except Exception as exc:
@@ -899,7 +1015,20 @@ def _run_loop(
                     names=names,
                     claim_mode=True,
                     worker_id=worker_id,
+                    sync_base=base,
+                    sync_token=token,
                 )
+            except HistoryUnavailable as exc:
+                print(
+                    f"discovery_worker: shared tape not ready ({exc}); "
+                    f"backing off {HISTORY_BACKOFF_SECONDS}s",
+                    flush=True,
+                )
+                _release_remote_safe(base, token, worker_id, names=names, status="idle")
+                if args.once:
+                    return 1
+                time.sleep(HISTORY_BACKOFF_SECONDS)
+                continue
             except SystemExit:
                 raise
             except Exception as exc:

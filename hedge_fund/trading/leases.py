@@ -54,7 +54,12 @@ from hedge_fund.trading.farm import (
     farm_enabled_unlocked,
 )
 from hedge_fund.trading.densify import next_densify_batch
-from hedge_fund.trading.mint_quality import mint_block_reason, record_untested_mint_skips
+from hedge_fund.trading.mint_quality import (
+    canonical_key_set,
+    canonical_name,
+    mint_block_reason,
+    record_untested_mint_skips,
+)
 from hedge_fund.trading.refill import (
     append_extended_batch,
     discovery_universe,
@@ -293,10 +298,15 @@ def _mint_unlocked(taken: set[str], n: int) -> tuple[list[str], dict]:
     The OOS gate is not involved.
     """
     from hedge_fund.trading.atom_lift import lift_model_for_mint
+    from hedge_fund.trading.discovery_results import load_seed_view
     from hedge_fund.trading.tested_index import load_tested_metrics
 
     model = lift_model_for_mint()
     metrics = load_tested_metrics()
+    # Slim rows published by ingest/backfill. Empty still counts as
+    # "results were consulted", so old 8-window passes are not seeds
+    # just because they are qualified. Does not scan the jsonl.
+    results = load_seed_view()
     want = max(0, int(n))
     recipe = next_refill_batch(taken_names=taken, n=want, lift=model) if want else []
     recipe = [name for name in recipe if not mint_block_reason(name)]
@@ -309,6 +319,7 @@ def _mint_unlocked(taken: set[str], n: int) -> tuple[list[str], dict]:
             n=want - len(names),
             lift=model,
             metrics=metrics,
+            results=results,
         )
         more = [name for name in more if not mint_block_reason(name)]
         names.extend(more)
@@ -345,10 +356,17 @@ def _claimable_names(state: dict, n: int) -> tuple[list[str], list[str], dict]:
     record_untested_mint_skips(universe, blocked)
     leftovers = untested_candidates(blocked, universe)
     eligible = prioritize_leftovers(leftovers, log)
-    claimable = [
-        name for name in eligible
-        if name not in active and not mint_block_reason(name)
-    ]
+    # Canonical form of an already-tested stack is not leased again.
+    # A later permutation in this same queue is skipped the same way.
+    seen_canon = canonical_key_set(blocked)
+    claimable: list[str] = []
+    for name in eligible:
+        if name in active or mint_block_reason(name, seen_canon):
+            continue
+        claimable.append(name)
+        key = canonical_name(name)
+        if key:
+            seen_canon.add(key)
     pool = len(claimable) + len(active)
     capacity = max(len(active), int(n), 1)
     watermark = LEASE_WATERMARK_FACTOR * capacity
@@ -363,10 +381,13 @@ def _claimable_names(state: dict, n: int) -> tuple[list[str], list[str], dict]:
         if added:
             append_extended_batch(added)
             refilled = list(added)
-            claimable.extend(
-                name for name in added
-                if name not in active and name not in blocked and not mint_block_reason(name)
-            )
+            for name in added:
+                if name in active or name in blocked or mint_block_reason(name, seen_canon):
+                    continue
+                claimable.append(name)
+                key = canonical_name(name)
+                if key:
+                    seen_canon.add(key)
         save_refill_status(meta)
     return claimable, refilled, meta
 

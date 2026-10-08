@@ -14,11 +14,17 @@ from hedge_fund.trading.densify import (
     zero_trade_names_from_rows,
 )
 from hedge_fund.trading.mint_quality import (
+    REASON_CANONICAL,
+    REASON_DEAD_DEPTH,
+    REASON_DEAD_DIP,
+    REASON_DEAD_MOM,
     REASON_EMPTY_BAND,
+    REASON_FILLER,
     REASON_REDUNDANT,
     REASON_UNREACHABLE,
     REASON_UNSUPPORTED_BAND,
     AtomParts,
+    canonical_name,
     clear_move_cap_cache,
     count_mint_blocks,
     group_bound_reason,
@@ -31,7 +37,7 @@ from hedge_fund.trading.mint_quality import (
 )
 
 
-PASS = "h1_ema_abv_50&mom_18b_gt2pc&sma_abv_30&rsi_14_>50"
+PASS = "h1_ema_abv_50&mom_18b_gt2pc"
 
 
 def _mom(name: str, lookback: int, pct: int) -> str:
@@ -53,7 +59,13 @@ class ParseAtomTests(unittest.TestCase):
     def test_duplicate_threshold_rejected(self):
         stacked = "h1_ema_abv_50&mom_18b_gt2pc&rsi_14_>50&rsi_14_>45"
         self.assertEqual(redundant_bound_reason(stacked), REASON_REDUNDANT)
-        self.assertEqual(mint_block_reason(stacked), REASON_REDUNDANT)
+        # h1 spine plus an RSI-above atom is a measured zero-trade filler,
+        # so the mint reason is the dead zone rather than the duplicate bound.
+        self.assertEqual(mint_block_reason(stacked), REASON_FILLER)
+        self.assertEqual(
+            mint_block_reason("mom_18b_gt2pc&mom_18b_gt4pc"),
+            REASON_REDUNDANT,
+        )
         self.assertEqual(
             redundant_bound_reason("mom_18b_gt2pc&mom_18b_gt4pc"),
             REASON_REDUNDANT,
@@ -109,6 +121,63 @@ class ParseAtomTests(unittest.TestCase):
         band = parse_strategy("rsi_14_>45&rsi_14_<60")
         self.assertFalse(band(rise))
         self.assertFalse(band(fall))
+
+
+class DeadZoneTests(unittest.TestCase):
+    def test_dead_zones_and_filler_are_rejected(self):
+        self.assertEqual(mint_block_reason("mom_96b_gt14pc"), REASON_DEAD_MOM)
+        self.assertEqual(mint_block_reason("h1_ema_abv_50&mom_18b_gt14pc"), REASON_DEAD_MOM)
+        self.assertIsNone(mint_block_reason("mom_18b_gt8pc"))
+        self.assertEqual(mint_block_reason("dip_18b_lt5pc"), REASON_DEAD_DIP)
+        self.assertEqual(mint_block_reason("dip_24b_lt6pc"), REASON_DEAD_DIP)
+        self.assertIsNone(mint_block_reason("dip_24b_lt4pc"))
+        self.assertIsNone(mint_block_reason("dip_12b_lt5pc"))
+        deep = "h1_ema_abv_20&mom_18b_gt2pc&don_hi_12&near_swing_hi_12&vol_lowsm_20_20"
+        self.assertEqual(mint_block_reason(deep), REASON_DEAD_DEPTH)
+        filler = "h1_ema_abv_50&mom_18b_gt2pc&sma_abv_30&rsi_14_>45"
+        self.assertEqual(mint_block_reason(filler), REASON_FILLER)
+        self.assertEqual(mint_block_reason("h4_sma_abv_20&ema_abv_20"), REASON_FILLER)
+        self.assertIsNone(mint_block_reason("sma_abv_30&rsi_14_>50"))
+        self.assertIsNone(mint_block_reason("h1_ema_abv_50&mom_18b_gt2pc"))
+        self.assertIsNone(mint_block_reason("h1_ema_abv_50&rsi_14_<40"))
+
+    def test_canonical_form_collapses_thresholds_and_order(self):
+        self.assertEqual(
+            canonical_name("mom_18b_gt2pc&h1_ema_abv_50&mom_18b_gt4pc"),
+            "h1_ema_abv_50&mom_18b_gt4pc",
+        )
+        self.assertEqual(
+            canonical_name("rsi_14_>50&h1_ema_abv_20"),
+            canonical_name("h1_ema_abv_20&rsi_14_>50"),
+        )
+        loose = "h1_ema_abv_50&mom_18b_gt2pc"
+        strict = "mom_18b_gt4pc&h1_ema_abv_50"
+        self.assertEqual(
+            mint_block_reason(strict, {canonical_name(loose)}),
+            None,
+        )
+        self.assertEqual(
+            mint_block_reason("mom_18b_gt2pc&h1_ema_abv_50", {canonical_name(loose)}),
+            REASON_CANONICAL,
+        )
+
+    def test_canonical_duplicate_is_counted_in_mint_skips(self):
+        from hedge_fund.trading.mint_quality import record_untested_mint_skips
+
+        tested = "h1_ema_abv_50&mom_18b_gt2pc"
+        perm = "mom_18b_gt2pc&h1_ema_abv_50"
+        fresh = "h1_ema_abv_40&mom_18b_gt2pc"
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.dict(os.environ, {"PAPER_STATE": tmp}):
+                counts = record_untested_mint_skips([perm, fresh], [tested])
+                skips = load_mint_skips()
+        self.assertEqual(counts.get(REASON_CANONICAL), 1)
+        self.assertEqual(skips.get(perm), REASON_CANONICAL)
+        self.assertNotIn(fresh, skips)
+        self.assertEqual(
+            count_mint_blocks([perm, fresh], tested=[tested]),
+            {REASON_CANONICAL: 1},
+        )
 
 
 class ReachabilityTests(unittest.TestCase):
@@ -243,30 +312,44 @@ class ClaimSkipTests(unittest.TestCase):
         from hedge_fund.trading.leases import claim_discovery_batch
         from hedge_fund.trading.tested_index import load_tested_index
 
-        tested_bad = "h1_ema_abv_50&mom_18b_gt2pc&rsi_14_>50&rsi_14_>45"
-        queued_dup = "h1_ema_abv_30&mom_18b_gt2pc&rsi_14_>50&rsi_14_>45"
-        queued_far = "h1_ema_abv_30&mom_18b_gt16pc"
-        queued_empty = "h1_ema_abv_24&rsi_14_>60&rsi_14_<40"
+        tested_bad = "mom_18b_gt2pc&mom_18b_gt4pc"
+        tested_stack = "h1_ema_abv_40&mom_18b_gt2pc"
+        queued_dup = "mom_18b_gt4pc&mom_18b_gt2pc"
+        queued_perm = "mom_18b_gt2pc&h1_ema_abv_40"
+        queued_far = "mom_6b_gt8pc"
+        queued_empty = "rsi_14_>60&rsi_14_<40"
         band = "h1_ema_abv_50&rsi_14_>45&rsi_14_<60"
         good = "don_hi_12"
-        universe = [tested_bad, queued_dup, queued_far, queued_empty, band, good]
+        also = "h1_ema_abv_50&mom_18b_gt2pc"
+        universe = [
+            tested_bad,
+            tested_stack,
+            queued_dup,
+            queued_perm,
+            queued_far,
+            queued_empty,
+            band,
+            good,
+            also,
+        ]
         with tempfile.TemporaryDirectory() as tmp:
             with patch.dict(os.environ, {
                 "PAPER_STATE": tmp,
                 "DISCOVERY_EVAL_TIMEOUT_SECONDS": "600",
             }):
-                append_discovery_evaluation({
-                    "strategy": tested_bad,
-                    "tested_at": "2026-10-08T00:00:00+00:00",
-                    "qualified": False,
-                    "trades": 0,
-                    "sharpe": 0.0,
-                    "test_pnl": 0.0,
-                    "train_pnl": 0.0,
-                    "fail_reasons": ["redundant fixture"],
-                    "timeframe": "5m",
-                    "risk_policy": "rm_v1",
-                })
+                for name in (tested_bad, tested_stack):
+                    append_discovery_evaluation({
+                        "strategy": name,
+                        "tested_at": "2026-10-08T00:00:00+00:00",
+                        "qualified": False,
+                        "trades": 0,
+                        "sharpe": 0.0,
+                        "test_pnl": 0.0,
+                        "train_pnl": 0.0,
+                        "fail_reasons": ["fixture"],
+                        "timeframe": "5m",
+                        "risk_policy": "rm_v1",
+                    })
                 before = load_discovery_log()
                 with patch(
                     "hedge_fund.trading.leases.discovery_universe",
@@ -274,28 +357,43 @@ class ClaimSkipTests(unittest.TestCase):
                 ):
                     body = claim_discovery_batch("linux-1", 2, parallel=1)
                 handed = list(body["names"]) + list(body["refilled"])
-                for blocked in (tested_bad, queued_dup, queued_far, queued_empty):
+                for blocked in (
+                    tested_bad,
+                    tested_stack,
+                    queued_dup,
+                    queued_perm,
+                    queued_far,
+                    queued_empty,
+                    band,
+                ):
                     self.assertNotIn(blocked, handed)
                 for name in handed:
                     self.assertIsNone(mint_block_reason(name), name)
-                self.assertIn(band, body["names"])
-                self.assertIn(good, body["names"])
+                self.assertEqual(body["names"], [good, also])
                 skips = load_mint_skips()
                 self.assertEqual(skips.get(queued_dup), REASON_REDUNDANT)
+                self.assertEqual(skips.get(queued_perm), REASON_CANONICAL)
                 self.assertEqual(skips.get(queued_far), REASON_UNREACHABLE)
                 self.assertEqual(skips.get(queued_empty), REASON_EMPTY_BAND)
+                self.assertEqual(skips.get(band), REASON_FILLER)
                 self.assertNotIn(tested_bad, skips)
-                self.assertNotIn(band, skips)
+                self.assertNotIn(tested_stack, skips)
                 self.assertNotIn(good, skips)
+                self.assertNotIn(also, skips)
                 self.assertIn(tested_bad, load_tested_index())
                 self.assertFalse(load_tested_index()[tested_bad])
                 self.assertEqual(load_discovery_log(), before)
                 self.assertEqual(
-                    count_mint_blocks(universe, tested={tested_bad}),
+                    count_mint_blocks(
+                        universe,
+                        tested={tested_bad, tested_stack},
+                    ),
                     {
                         REASON_REDUNDANT: 1,
+                        REASON_CANONICAL: 1,
                         REASON_UNREACHABLE: 1,
                         REASON_EMPTY_BAND: 1,
+                        REASON_FILLER: 1,
                     },
                 )
 

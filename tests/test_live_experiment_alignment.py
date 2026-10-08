@@ -1133,7 +1133,10 @@ class ProtocolAmendmentTests(unittest.TestCase):
         self.assertTrue(
             any(
                 n.startswith(("h4_", "h1_"))
-                and ("gt2pc" in n or "lt2pc" in n or "lt5pc" in n or "sma_abv_20" in n or "lt1pc" in n)
+                and (
+                    "gt2pc" in n or "gt4pc" in n or "gt6pc" in n or "gt8pc" in n
+                    or "lt2pc" in n or "lt5pc" in n or "sma_abv_20" in n or "lt1pc" in n
+                )
                 for n in added
             )
         )
@@ -1647,9 +1650,12 @@ class ProtocolAmendmentTests(unittest.TestCase):
             n=DISCOVERY_REFILL_BATCH_SIZE,
         )
         self.assertEqual(len(added), DISCOVERY_REFILL_BATCH_SIZE)
+        self.assertEqual(added[0], "h1_ema_abv_20&mom_36b_gt8pc")
+        from hedge_fund.trading.mint_quality import REASON_FILLER, mint_block_reason
+
         self.assertEqual(
-            added[0],
-            "h1_ema_abv_50&mom_18b_gt2pc&sma_abv_30&rsi_14_>45",
+            mint_block_reason("h1_ema_abv_50&mom_18b_gt2pc&sma_abv_30&rsi_14_>45"),
+            REASON_FILLER,
         )
         self.assertNotEqual(
             near_duplicate_key("h1_ema_abv_40"),
@@ -1839,9 +1845,12 @@ class ProtocolAmendmentTests(unittest.TestCase):
             n=DISCOVERY_REFILL_BATCH_SIZE,
         )
         self.assertEqual(len(added), DISCOVERY_REFILL_BATCH_SIZE)
+        self.assertEqual(added[0], "h1_ema_abv_20&mom_36b_gt8pc")
+        from hedge_fund.trading.mint_quality import REASON_FILLER, mint_block_reason
+
         self.assertEqual(
-            added[0],
-            "h1_ema_abv_50&mom_18b_gt2pc&sma_abv_30&rsi_14_>45",
+            mint_block_reason("h1_ema_abv_50&mom_18b_gt2pc&sma_abv_30&rsi_14_>45"),
+            REASON_FILLER,
         )
         self.assertIn(combo, names)
         self.assertNotEqual(
@@ -2033,7 +2042,14 @@ class ProtocolAmendmentTests(unittest.TestCase):
             i += 1
         added = next_refill_batch(taken_names=taken, n=20)
         self.assertGreaterEqual(len(added), 20)
-        self.assertEqual(added[0], "h1_ema_abv_20&mom_18b_gt2pc&sma_abv_40")
+        self.assertEqual(added[0], "h1_ema_abv_20&mom_36b_gt8pc")
+        from hedge_fund.trading.mint_quality import REASON_FILLER, mint_block_reason
+
+        self.assertEqual(
+            mint_block_reason("h1_ema_abv_20&mom_18b_gt2pc&sma_abv_40"),
+            REASON_FILLER,
+        )
+        self.assertNotIn("h1_ema_abv_20&mom_18b_gt2pc&sma_abv_40", added)
         self.assertFalse(any(name_has_mom_gt_and_dip(n) for n in added))
         self.assertFalse(any("mom_12b_gt2pc" in n.split("&") for n in added))
         self.assertEqual(MIN_BACKTEST_TRADES, 30)
@@ -2220,7 +2236,11 @@ class ProtocolAmendmentTests(unittest.TestCase):
             taken_names=set(generate_universe()),
             n=DISCOVERY_REFILL_BATCH_SIZE,
         )
-        self.assertEqual(added[0], lead)
+        self.assertEqual(added[0], "h1_ema_abv_20&mom_36b_gt8pc")
+        from hedge_fund.trading.mint_quality import REASON_FILLER, mint_block_reason
+
+        self.assertEqual(mint_block_reason(lead), REASON_FILLER)
+        self.assertNotIn(lead, added)
         self.assertTrue(all(n.startswith("h1_") for n in added))
         self.assertNotIn(h4_lead, added)
 

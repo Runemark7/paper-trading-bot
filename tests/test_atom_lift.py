@@ -211,16 +211,16 @@ class SteerTests(unittest.TestCase):
         from hedge_fund.trading.refill import next_refill_batch
 
         plain = next_refill_batch(taken_names=[], n=4)
-        self.assertEqual(plain[0], "h1_ema_abv_50&mom_18b_gt2pc&sma_abv_30&rsi_14_>45")
-        flat = _model({"sma_abv_20": _est("sma_abv_20", 5.0)}, informative=False)
+        self.assertEqual(plain[0], "h1_ema_abv_20&mom_36b_gt8pc")
+        flat = _model({"mom_42b_gt6pc": _est("mom_42b_gt6pc", 5.0)}, informative=False)
         self.assertEqual(next_refill_batch(taken_names=[], n=4, lift=flat), plain)
         live = _model({
-            "sma_abv_20": _est("sma_abv_20", 2.0),
-            "sma_abv_30": _est("sma_abv_30", -1.0),
+            "mom_42b_gt6pc": _est("mom_42b_gt6pc", 2.0),
+            "mom_36b_gt8pc": _est("mom_36b_gt8pc", -1.0),
         })
         steered = next_refill_batch(taken_names=[], n=4, lift=live, lift_seed=7063)
         self.assertEqual(len(steered), 4)
-        self.assertTrue(all("sma_abv_20" in name for name in steered[:3]))
+        self.assertTrue(all("mom_42b_gt6pc" in name for name in steered[:3]))
         self.assertNotEqual(steered[0], plain[0])
         self.assertEqual(
             next_refill_batch(taken_names=[], n=4, lift=live, lift_seed=7063),
@@ -229,31 +229,63 @@ class SteerTests(unittest.TestCase):
 
 
 class SeedAndDensifyTests(unittest.TestCase):
-    def test_seeds_prefer_recent_sharpe_over_historical_passes(self):
-        high = "h1_ema_abv_50&mom_18b_gt4pc"
-        low = "h1_ema_abv_50&mom_18b_gt2pc&sma_abv_30&rsi_14_>50"
-        dead = "h1_ema_abv_40&mom_18b_gt2pc"
-        index = {high: False, low: True, dead: False}
-        metrics = {
-            high: {"sharpe": 1.1, "trades": 80},
-            low: {"sharpe": 0.05, "trades": 40},
-            dead: {"sharpe": -0.2, "trades": 10},
+    def test_seeds_prefer_net_pnl_over_sharpe_on_the_current_window(self):
+        from hedge_fund.trading.constants import QUAL_N_WINDOWS
+
+        high_pnl = "h1_ema_abv_50&mom_18b_gt4pc"
+        high_sharpe = "h1_ema_abv_40&mom_18b_gt2pc"
+        old = "h1_ema_abv_30&mom_18b_gt2pc"
+        thin = "h1_ema_abv_20&mom_18b_gt2pc"
+        index = {high_pnl: False, high_sharpe: True, old: True, thin: False}
+        results = {
+            high_pnl: {
+                "sharpe": 0.1,
+                "trades": 40,
+                "test_pnl": 80.0,
+                "bh_oos_pnl": 10.0,
+                "regimes_tested": QUAL_N_WINDOWS,
+            },
+            high_sharpe: {
+                "sharpe": 2.0,
+                "trades": 40,
+                "test_pnl": 12.0,
+                "bh_oos_pnl": 10.0,
+                "regimes_tested": QUAL_N_WINDOWS,
+            },
+            old: {
+                "sharpe": 3.0,
+                "trades": 80,
+                "test_pnl": 500.0,
+                "bh_oos_pnl": 1.0,
+                "regimes_tested": 8,
+            },
+            thin: {
+                "sharpe": 1.0,
+                "trades": 10,
+                "test_pnl": 40.0,
+                "bh_oos_pnl": 1.0,
+                "regimes_tested": QUAL_N_WINDOWS,
+            },
         }
-        seeds = order_seeds(index, metrics)
-        self.assertEqual(seeds[0], high)
-        self.assertIn(low, seeds)
-        self.assertNotIn(dead, seeds)
+        seeds = order_seeds(index, None, results)
+        self.assertEqual(seeds[0], high_pnl)
+        self.assertIn(high_sharpe, seeds)
+        self.assertLess(seeds.index(high_pnl), seeds.index(high_sharpe))
+        self.assertNotIn(old, seeds)
+        self.assertNotIn(thin, seeds)
+        self.assertTrue(index[old])
         plain = order_seeds(index, None)
-        self.assertEqual(plain, [low])
+        self.assertIn(high_sharpe, plain)
+        self.assertIn(old, plain)
 
     def test_densify_without_lift_matches_heuristic_and_with_lift_prefers_it(self):
-        seed = "h1_ema_abv_50&mom_18b_gt2pc&sma_abv_30"
+        seed = "h1_ema_abv_50&mom_18b_gt2pc"
         index = {seed: True}
         plain, plain_done = next_densify_batch(taken_names=[], n=4, index=index)
         self.assertFalse(plain_done)
-        self.assertEqual(plain[0], "h1_ema_abv_40&mom_18b_gt2pc&sma_abv_30")
+        self.assertEqual(plain[0], "h1_ema_abv_40&mom_18b_gt2pc")
         live = _model({
-            "sma_abv_25": _est("sma_abv_25", 1.0),
+            "mom_18b_gt4pc": _est("mom_18b_gt4pc", 1.0),
             "h1_ema_abv_40": _est("h1_ema_abv_40", -1.0),
         })
         steered, done = next_densify_batch(
@@ -264,7 +296,7 @@ class SeedAndDensifyTests(unittest.TestCase):
             lift_seed=7063,
         )
         self.assertFalse(done)
-        self.assertIn("sma_abv_25", steered[0])
+        self.assertIn("mom_18b_gt4pc", steered[0])
         self.assertTrue(all("h1_ema_abv_40" not in name for name in steered[:3]))
         self.assertNotEqual(steered[0], plain[0])
         again, _ = next_densify_batch(
@@ -276,19 +308,34 @@ class SeedAndDensifyTests(unittest.TestCase):
         )
         self.assertEqual(again, steered)
 
-    def test_metrics_put_the_higher_sharpe_seed_first(self):
+    def test_results_put_the_higher_net_pnl_seed_first(self):
+        from hedge_fund.trading.constants import QUAL_N_WINDOWS
+
         high = "h1_ema_abv_60&mom_18b_gt2pc"
-        low = "h1_ema_abv_50&mom_18b_gt2pc&sma_abv_30&rsi_14_>50"
+        low = "h1_ema_abv_50&mom_18b_gt2pc"
         index = {low: True, high: False}
-        metrics = {
-            high: {"sharpe": 2.0, "trades": 100},
-            low: {"sharpe": 0.01, "trades": 40},
+        results = {
+            high: {
+                "sharpe": 0.05,
+                "trades": 40,
+                "test_pnl": 90.0,
+                "bh_oos_pnl": 10.0,
+                "regimes_tested": QUAL_N_WINDOWS,
+            },
+            low: {
+                "sharpe": 2.0,
+                "trades": 40,
+                "test_pnl": 11.0,
+                "bh_oos_pnl": 10.0,
+                "regimes_tested": QUAL_N_WINDOWS,
+            },
         }
-        steered, _ = next_densify_batch(taken_names=[], n=1, index=index, metrics=metrics)
+        steered, _ = next_densify_batch(
+            taken_names=[], n=1, index=index, results=results,
+        )
         plain, _ = next_densify_batch(taken_names=[], n=1, index=index)
         self.assertEqual(steered[0], "h1_ema_abv_50&mom_18b_gt2pc")
         self.assertTrue(plain[0].startswith("h1_ema_abv_40&"))
-        self.assertIn("rsi_14_>50", plain[0])
 
 
 class IndexAndApiTests(unittest.TestCase):
@@ -362,6 +409,7 @@ class IndexAndApiTests(unittest.TestCase):
         self.assertEqual(body["top"][0]["atom"], "sma_abv_30")
         self.assertEqual(body["bottom"][0]["atom"], "rsi_14_>60")
         self.assertEqual(body["strategy"], STRATEGY_LIFT)
+        self.assertEqual(body["metric"], "sharpe")
         self.assertEqual(body["explore_share"], EXPLORE_SHARE)
         self.assertTrue(body["paper_only"])
         self.assertGreaterEqual(body["names_used"], 36)
@@ -422,6 +470,108 @@ class IndexAndApiTests(unittest.TestCase):
         finally:
             lift._last_refresh_at = prev_at
             lift._refresh_running = prev_running
+
+
+class NetPnlLiftTests(unittest.TestCase):
+    def test_pnl_minus_bh_outranks_a_higher_sharpe(self):
+        rows = []
+        for i in range(8):
+            parent = f"h1_ema_abv_{20 + i}&mom_18b_gt2pc"
+            rows.append({
+                "strategy": parent,
+                "sharpe": 0.9,
+                "trades": 40,
+                "test_pnl": 5.0,
+                "bh_oos_pnl": 4.0,
+            })
+            rows.append({
+                "strategy": parent + "&sma_abv_30",
+                "sharpe": 0.2,
+                "trades": 40,
+                "test_pnl": 30.0,
+                "bh_oos_pnl": 4.0,
+            })
+            rows.append({
+                "strategy": parent + "&rsi_14_>60",
+                "sharpe": 1.4,
+                "trades": 40,
+                "test_pnl": -20.0,
+                "bh_oos_pnl": 4.0,
+            })
+        model = estimate_lifts(rows)
+        self.assertEqual(model.metric, "pnl_minus_bh")
+        sma = model.atoms["sma_abv_30"]
+        rsi = model.atoms["rsi_14_>60"]
+        self.assertEqual(sma.metric, "pnl_minus_bh")
+        self.assertGreater(sma.pnl_lift, 0)
+        self.assertLess(rsi.pnl_lift, 0)
+        self.assertGreater(sma.score_lift, rsi.score_lift)
+        payload = lift_api_payload(model)
+        self.assertEqual(payload["metric"], "pnl_minus_bh")
+        self.assertEqual(payload["top"][0]["atom"], "sma_abv_30")
+        self.assertEqual(payload["bottom"][0]["atom"], "rsi_14_>60")
+        self.assertIn("pnl_lift", payload["top"][0])
+
+    def test_equal_pnl_uses_sharpe_as_tiebreak(self):
+        rows = []
+        for i in range(6):
+            parent = f"h1_ema_abv_{20 + i}&mom_18b_gt2pc"
+            rows.append({
+                "strategy": parent,
+                "sharpe": 0.0,
+                "trades": 40,
+                "test_pnl": 10.0,
+                "bh_oos_pnl": 8.0,
+            })
+            rows.append({
+                "strategy": parent + "&sma_abv_30",
+                "sharpe": 0.8,
+                "trades": 40,
+                "test_pnl": 12.0,
+                "bh_oos_pnl": 8.0,
+            })
+            rows.append({
+                "strategy": parent + "&ema_abv_30",
+                "sharpe": -0.4,
+                "trades": 40,
+                "test_pnl": 12.0,
+                "bh_oos_pnl": 8.0,
+            })
+        model = estimate_lifts(rows)
+        self.assertAlmostEqual(model.atoms["sma_abv_30"].score_lift, model.atoms["ema_abv_30"].score_lift)
+        picked = steer_candidates(
+            ["h1_ema_abv_50&ema_abv_30", "h1_ema_abv_50&sma_abv_30"],
+            model,
+            1,
+            seed=1,
+        )
+        self.assertEqual(picked, ["h1_ema_abv_50&sma_abv_30"])
+
+    def test_missing_pnl_falls_back_to_sharpe(self):
+        model = estimate_lifts(_paired_rows())
+        self.assertEqual(model.metric, "sharpe")
+        self.assertGreater(model.atoms["sma_abv_30"].sharpe_lift, 0)
+        self.assertIsNone(model.atoms["sma_abv_30"].pnl_lift)
+        self.assertEqual(lift_api_payload(model)["metric"], "sharpe")
+
+    def test_fifteen_thousand_names_build_under_two_seconds(self):
+        import time
+
+        rows = []
+        for i in range(15000):
+            rows.append({
+                "strategy": f"h1_ema_abv_50&mom_18b_gt2pc&tag_{i}",
+                "sharpe": (i % 11) / 10.0,
+                "trades": 30 + (i % 20),
+                "test_pnl": float((i % 17) - 8),
+                "bh_oos_pnl": 1.0,
+            })
+        started = time.perf_counter()
+        model = estimate_lifts(rows)
+        elapsed = time.perf_counter() - started
+        self.assertLess(elapsed, 2.0, f"lift build took {elapsed:.3f}s")
+        self.assertEqual(model.metric, "pnl_minus_bh")
+        self.assertGreater(model.names_used, 100)
 
 
 if __name__ == "__main__":
