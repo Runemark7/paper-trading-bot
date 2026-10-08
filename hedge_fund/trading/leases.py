@@ -54,6 +54,7 @@ from hedge_fund.trading.farm import (
     farm_enabled_unlocked,
 )
 from hedge_fund.trading.densify import next_densify_batch
+from hedge_fund.trading.mint_quality import mint_block_reason, record_untested_mint_skips
 from hedge_fund.trading.refill import (
     append_extended_batch,
     discovery_universe,
@@ -275,6 +276,7 @@ def _mint_unlocked(taken: set[str], n: int) -> tuple[list[str], dict]:
     """Recipe first. Densify only the shortfall. Logs if nothing can be minted."""
     want = max(0, int(n))
     recipe = next_refill_batch(taken_names=taken, n=want) if want else []
+    recipe = [name for name in recipe if not mint_block_reason(name)]
     names = list(recipe)
     exhausted = False
     source = "recipe"
@@ -283,6 +285,7 @@ def _mint_unlocked(taken: set[str], n: int) -> tuple[list[str], dict]:
             taken_names=set(taken) | set(names),
             n=want - len(names),
         )
+        more = [name for name in more if not mint_block_reason(name)]
         names.extend(more)
         source = "densify"
         exhausted = bool(ran_out) and len(names) < want
@@ -312,9 +315,14 @@ def _claimable_names(state: dict, n: int) -> tuple[list[str], list[str], dict]:
     blocked = _blocked_names(log)
     active = set(state["leases"])
     universe = discovery_universe()
+    # Queued violators become skipped, not tested and not failed.
+    record_untested_mint_skips(universe, blocked)
     leftovers = untested_candidates(blocked, universe)
     eligible = prioritize_leftovers(leftovers, log)
-    claimable = [name for name in eligible if name not in active]
+    claimable = [
+        name for name in eligible
+        if name not in active and not mint_block_reason(name)
+    ]
     pool = len(claimable) + len(active)
     capacity = max(len(active), int(n), 1)
     watermark = LEASE_WATERMARK_FACTOR * capacity
@@ -330,7 +338,8 @@ def _claimable_names(state: dict, n: int) -> tuple[list[str], list[str], dict]:
             append_extended_batch(added)
             refilled = list(added)
             claimable.extend(
-                name for name in added if name not in active and name not in blocked
+                name for name in added
+                if name not in active and name not in blocked and not mint_block_reason(name)
             )
         save_refill_status(meta)
     return claimable, refilled, meta
