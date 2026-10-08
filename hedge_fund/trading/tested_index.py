@@ -10,15 +10,18 @@ Startup migration copies whatever rows are still in the log. Names dropped
 before the index existed are not recoverable from the cap. Later appends
 record the name here before the log is trimmed.
 
-``metrics`` sits beside the bool map (sharpe, trades, ops_park). Fail-once
-still reads only ``names``. A flag-only save keeps metrics already on disk
-so a trim of the display log does not forget the OOS numbers.
+``metrics`` sits beside the bool map. Fail-once still reads only ``names``.
+A flag-only save keeps metrics already on disk so a trim of the display
+log does not forget the OOS numbers. The metrics read is
+``load_tested_metrics``: ``{strategy: {sharpe, trades, ops_park}}``.
+That map is not the full eval record.
 """
 from __future__ import annotations
 
 import json
 import os
 from pathlib import Path
+from typing import TypedDict
 
 from hedge_fund.paths import state_root
 from hedge_fund.trading.store import paper_state_lock
@@ -73,7 +76,7 @@ def _metric_from_row(row: dict) -> dict | None:
     return item or None
 
 
-def _clean_metrics(metrics: dict) -> dict[str, dict]:
+def _clean_metrics(metrics: dict) -> dict[str, TestedMetric]:
     out: dict[str, dict] = {}
     for name in sorted(metrics):
         raw = metrics.get(name)
@@ -93,8 +96,24 @@ def _clean_metrics(metrics: dict) -> dict[str, dict]:
     return out
 
 
-def load_tested_metrics() -> dict[str, dict]:
-    """Sharpe / trades / ops_park keyed by strategy. Missing file → empty."""
+class TestedMetric(TypedDict, total=False):
+    """One name in the ``metrics`` map. Only keys that were measured are set.
+
+    ``ops_park`` is present only when the newest row was an ops park.
+    """
+
+    sharpe: float
+    trades: int
+    ops_park: bool
+
+
+def load_tested_metrics() -> dict[str, TestedMetric]:
+    """Read ``discovery_tested.json`` ``metrics``. Missing or corrupt → {}.
+
+    Does not take the lock and does not migrate. Fail-once stays on
+    ``load_tested_index``. This returns the slim sharpe/trades/ops_park
+    map, not a full evaluation record.
+    """
     path = tested_index_path()
     if not path.exists():
         return {}
