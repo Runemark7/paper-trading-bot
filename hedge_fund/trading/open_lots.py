@@ -6,9 +6,12 @@ Overview, Positions, Champions, StatusBar, /api/status, /api/live, and
 * Unit is an open **lot** (BTC + ETH on the same account = 2).
 * Source is the same PAPER_STATE DBs /api/live already reads
   (isolated ``trades_*.sqlite``, else legacy ``trades.sqlite``).
+* Accounts of retired names (``retired.json``) are archived: their DBs stay
+  on disk but are left off the live book.
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from hedge_fund.paths import state_root
@@ -29,12 +32,36 @@ def account_slug(name: str) -> str:
     return name.replace("/", "_").replace(":", "_")
 
 
+def _retired_slugs(root: Path) -> set[str]:
+    """Account slugs of retired names. Read directly to avoid an import cycle."""
+    path = root / "retired.json"
+    if not path.exists():
+        return set()
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return set()
+    retired = data.get("retired") if isinstance(data, dict) else None
+    if not isinstance(retired, dict):
+        return set()
+    return {account_slug(n) for n in retired if isinstance(n, str) and n}
+
+
 def paper_book_dbs() -> list[str]:
-    """The paper-book DBs /api/live uses: isolated accounts, else legacy."""
+    """The paper-book DBs /api/live uses: isolated accounts, else legacy.
+
+    Retired accounts are skipped. If every isolated account is retired the
+    book is empty; it does not fall back to the legacy single DB.
+    """
     root = state_root()
     per_strategy = sorted(root.glob("trades_*.sqlite"))
     if per_strategy:
-        return [str(p) for p in per_strategy]
+        retired = _retired_slugs(root)
+        return [
+            str(p)
+            for p in per_strategy
+            if account_name_from_db(p) not in retired
+        ]
     legacy = root / "trades.sqlite"
     if legacy.exists():
         return [str(legacy)]

@@ -13,7 +13,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from hedge_fund.trading.champions import load_graduated, load_pool, save_pool
+from hedge_fund.trading.champions import load_graduated, load_pool, retired_names, save_pool
 from hedge_fund.trading.constants import QUAL_TIMEFRAME, RISK_POLICY
 from hedge_fund.trading.discovery import (
     append_discovery_evaluation,
@@ -169,6 +169,7 @@ def ingest_discovery_payload(payload: dict) -> dict:
         grads = load_graduated()
         existing = {c["name"] for c in (st.get("champions") or []) if c.get("name")}
         existing |= {g["name"] for g in grads if isinstance(g, dict) and g.get("name")}
+        existing |= retired_names()
 
         for raw in raw_evals:
             rec = _validate_eval(raw)

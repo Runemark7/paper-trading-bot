@@ -1185,3 +1185,16 @@ This amendment does not rewrite original §§ 1–8 or prior amendments. Qual/li
 **Workers.** Claim mode mints on prod (`POST /api/discovery/claim` → `next_refill_batch`). The farm host evaluates leased names with its local parser, which already accepts these atoms; no farm pull is needed for the names.
 
 **What did not change.** Sharpe 0.30, 30 OOS trades, beat B&H, beat `sma_stack`, 5m, `rm_v1`, fail-once, `QUAL_N_WINDOWS` = 23, `QUAL_WARMUP_BARS` = 4032. `STRUCTURE_NS` cap at 96. Mom∧dip guard. h4×mom ban. Live risk unchanged. Island #2c / #2b / older families stay in the stream after this prefix.
+
+### Amendment 2026-10-08 — retire all champions that failed the gate23 requalify
+
+This amendment does not rewrite original §§ 1–8 or prior amendments. OOS **thresholds** are unchanged: `MIN_BACKTEST_TRADES` = 30, Sharpe 0.30, beat B&H, beat `sma_stack`, fail-once, `QUAL_N_WINDOWS` = 23, `QUAL_WARMUP_BARS` = 4032.
+
+**Why.** Requalify batch `gate23-20261008` re-ran every champion and graduated row on the current 23-window gate: 127 done, 0 pass (120 champions, 7 graduated). Alexander decided to retire all of them.
+
+**What was added** (`hedge_fund.trading.retire`). One-shot batch `RETIRE_AUTO_BATCH` = `requalify-gate23-20261008`, run once on a daemon thread at server start (no token, like the requalify autoseed). It retires every name that finished requalify batch `gate23-20261008` and did not pass. Names admitted later are not in that batch and are not touched. The batch id is recorded in `retired.json["applied"]` so it never runs again.
+
+**Retire = archive, not delete.** The row moves from `champions.json` / `graduated.json` to `retired.json` with `role`, `retired_at`, `batch_id`, reason `failed gate23 requalify 2026-10-08`, the requalify numbers, and the full original record (graduated `trade_history` included). `trades_*.sqlite`, `discovery_log.json`, `discovery_tested.json`, the results log, and fail-once are untouched. A retired name is blocked like a pooled one: ingest / promote / tournament never re-admit it, and claim / refill never re-mint it as never-tested. `paper_book_dbs` leaves retired accounts off the live book (`/api/live`, summary, open lots). `GET /api/champions/retired` lists the archive; `/api/champions` carries `retired_count` and the discovery summary `counts.retired`.
+
+**Empty pool.** With no champions the live cycle runs the existing `PAPER_STRATEGY` (`sma_stack`) fallback account, as before. `/api/champions` and `/api/live` return empty lists.
+

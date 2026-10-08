@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from hedge_fund.paths import state_root
-from hedge_fund.trading.champions import load_graduated, load_pool
+from hedge_fund.trading.champions import load_graduated, load_pool, retired_names
 from hedge_fund.trading.constants import (
     CYCLE_INTERVAL_SECONDS,
     GRADUATED_PAPER,
@@ -336,6 +336,7 @@ def _build_status_uncached() -> dict:
     heartbeat = _heartbeat_block(now)
     grad = load_graduated()
     blocked = {n for n in names if n} | {g.get("name") for g in grad if g.get("name")}
+    blocked |= retired_names()
     replenish_needed = bool(untested_candidates(blocked))
 
     # Replenish is implied by leftover universe names, not a slot cap.
