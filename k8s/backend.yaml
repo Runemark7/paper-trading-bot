@@ -50,24 +50,28 @@ spec:
             httpGet:
               path: /health
               port: 8787
-            initialDelaySeconds: 15
+            initialDelaySeconds: 20
             periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
           readinessProbe:
             httpGet:
               path: /health
               port: 8787
-            initialDelaySeconds: 5
+            initialDelaySeconds: 10
             periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
           resources:
             requests:
               cpu: 100m
-              memory: 128Mi
+              memory: 256Mi
             limits:
               cpu: 500m
-              # 512Mi is enough: GET /api/champions is read-only (no collect_live_results)
-              # and GET /api/live / /api/candles reuse one CcxtSource per venue instead of
-              # constructing ccxt.binance() per request (that was the OOM, not the rows).
-              memory: 512Mi
+              # 512Mi OOMs under live arena state (kubelet: OOMKilled → probe
+              # timeouts on :8787/health). 1Gi leaves headroom on the 4GB node
+              # alongside the cycle sidecar (1.5Gi limit).
+              memory: 1Gi
           volumeMounts:
             - name: state-storage
               mountPath: /app/state
