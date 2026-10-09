@@ -29,6 +29,7 @@ from hedge_fund.trading.refill import (
     LITDIP_GATE_PERIODS,
     RECIPE_MAX_ATOMS,
     iter_daily_sharpe_dip_names,
+    iter_dense_ema150_names,
     iter_lit_trend_dip_names,
     iter_recipe_names,
     name_has_mom_gt_and_dip,
@@ -68,11 +69,14 @@ class DailySharpeDipTests(unittest.TestCase):
         self.assertEqual(QUAL_N_WINDOWS, 23)
         self.assertEqual(QUAL_WARMUP_BARS, 4032)
 
-    def test_family_is_the_recipe_prefix(self):
+    def test_family_follows_the_dense5_prefix(self):
+        dense = list(iter_dense_ema150_names())
         family = list(iter_daily_sharpe_dip_names())
-        names = list(iter_recipe_names())
+        names = list(iter_recipe_names())[len(dense) :]
         self.assertEqual(family[0], LEAD)
         self.assertEqual(names[: len(family)], family)
+        dense_keys = {near_duplicate_key(n) for n in dense}
+        self.assertTrue(dense_keys.isdisjoint({near_duplicate_key(n) for n in family}))
         self.assertGreaterEqual(len(family), 50)
         self.assertLessEqual(len(family), 400)
         keys = {near_duplicate_key(n) for n in family}
@@ -154,6 +158,7 @@ class DailySharpeDipTests(unittest.TestCase):
     def test_refill_batch_nonempty_when_prior_families_are_taken(self):
         family = list(iter_daily_sharpe_dip_names())
         family_set = set(family)
+        # Densify #5 (the newer prefix) is treated as drained here.
         taken = {n for n in iter_recipe_names() if n not in family_set}
         taken |= set(generate_universe())
         batch = next_refill_batch(taken_names=taken, n=50)
