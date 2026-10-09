@@ -111,27 +111,34 @@ def qual_metrics(record: dict) -> dict | None:
 
 
 def _default_lookup() -> Callable[[str], dict | None]:
-    cache: dict[str, dict] | None = None
+    """Results log first; the discovery log only on a miss. Loaded lazily."""
+    results: dict[str, dict] | None = None
+    log_rows: dict[str, dict] | None = None
 
     def lookup(name: str) -> dict | None:
-        nonlocal cache
-        if cache is None:
+        nonlocal results, log_rows
+        if results is None:
             try:
                 from hedge_fund.trading.discovery_results import records_by_name
 
-                cache = records_by_name()
+                results = records_by_name()
             except Exception:
-                cache = {}
+                results = {}
+        got = _current(results.get(name))
+        if got:
+            return got
+        if log_rows is None:
+            log_rows = {}
             try:
                 from hedge_fund.trading.discovery import load_discovery_log
 
                 for row in load_discovery_log():
                     n = row.get("strategy") if isinstance(row, dict) else None
-                    if isinstance(n, str) and n not in cache:
-                        cache[n] = row
+                    if isinstance(n, str) and n not in log_rows:
+                        log_rows[n] = row
             except Exception:
                 pass
-        return _current(cache.get(name))
+        return _current(log_rows.get(name))
 
     return lookup
 
