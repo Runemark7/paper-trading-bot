@@ -56,9 +56,13 @@ class LitTrendDipTests(unittest.TestCase):
         self.assertEqual(QUAL_WARMUP_BARS, 4032)
 
     def test_family_follows_the_daily_sharpe_prefix(self):
-        from hedge_fund.trading.refill import iter_daily_sharpe_dip_names
+        from hedge_fund.trading.refill import (
+            iter_daily_sharpe_dip_names,
+            iter_dense_ema150_names,
+        )
 
-        sharp = list(iter_daily_sharpe_dip_names())
+        # Densify #5 then #4 lead; #3 follows both.
+        sharp = list(iter_dense_ema150_names()) + list(iter_daily_sharpe_dip_names())
         lit = list(iter_lit_trend_dip_names())
         names = list(iter_recipe_names())
         self.assertEqual(lit[0], LEAD)
