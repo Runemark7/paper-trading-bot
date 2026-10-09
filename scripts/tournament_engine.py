@@ -728,6 +728,11 @@ def replenish_and_evaluate(
             admitted.append(q)
 
     save_pool(st)
+    if admitted:
+        from hedge_fund.trading.families import enforce_champion_families
+
+        enforce_champion_families()
+        st = load_pool()
     return {
         "active_champions_count": len(st["champions"]),
         "evaluation_limit": TRADE_EVALUATION_LIMIT,

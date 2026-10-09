@@ -401,7 +401,10 @@ def promote_candidates(candidates: list[dict]) -> dict:
 
     backfill_champion_since(st)
     save_pool(st)
-    return {"added": added, "active_count": len(st["champions"])}
+    from hedge_fund.trading.families import enforce_champion_families
+
+    enforce_champion_families()
+    return {"added": added, "active_count": len(load_pool()["champions"])}
 
 
 def _load_discovery_log() -> list[dict]:
@@ -491,12 +494,27 @@ def pool_status(*, read_only: bool = False) -> dict:
         row["champion_since"] = c.get("champion_since") or None
         champs.append(row)
     grad = load_graduated()
+    retired = load_retired()["retired"]
+    parked = [
+        {
+            "name": name,
+            "family_winner": row.get("family_winner"),
+            "reason": row.get("reason"),
+            "parked_at": row.get("retired_at"),
+            "daily_sharpe": (row.get("metrics") or {}).get("daily_sharpe"),
+        }
+        for name, row in retired.items()
+        if isinstance(row, dict) and row.get("role") == "parked_twin"
+    ]
+    parked.sort(key=lambda r: (str(r.get("parked_at") or ""), r["name"]))
     return attach_open_lots({
         "active_champions": champs,
         "active_count": len(st["champions"]),
         "evaluation_limit": TRADE_EVALUATION_LIMIT,
         "graduated_count": len(grad),
         "graduated": grad,
-        "retired_count": len(retired_names()),
+        "retired_count": len(retired),
+        "parked_count": len(parked),
+        "parked": parked,
         "synced_until": st.get("synced_until") or None,
     })
