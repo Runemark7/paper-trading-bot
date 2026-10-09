@@ -73,6 +73,15 @@ the 23-window gate and the h1×mom densify is burned. Literature undry
 #3 (``LITDIP_*``) leads: slow h4 trend gate (25–75 day SMA/EMA) AND an
 8h–60h capitulation dip, two atoms, no mom. ~2.5k names. OOS gates
 unchanged.
+2026-10-09: #3 drained (~2.5k cell×gate names, 0 new OOS passes).
+Densify #4 (``DSHARP_*``) leads. It does not re-mint those cells.
+The current-gate near-misses are 2-atom ``dip×h4_ema`` with net
+OOS P&L > 0 and trades >= 30 that miss beat-B&H daily Sharpe.
+A 5m MA / RSI-above confirm on that h4 spine is ``filler_atom``
+and is not minted. The new names are the untested one-axis
+neighborhood: ema periods ``_round_period`` does not collapse onto
+the #3 gates, and step-6 lookbacks the #3 12-bar grid skipped.
+OOS gates unchanged.
 """
 from __future__ import annotations
 
@@ -512,6 +521,43 @@ LITDIP_GATE_TIERS: tuple[tuple[str, ...], ...] = (
     LITDIP_GATES[4:10],
     LITDIP_GATES[10:],
 )
+# 2026-10-09 densify #4. #3 drained with 0 admits. These four 2-atom
+# names cleared net OOS P&L > 0, trades >= 30, and 23 windows on tag
+# sltp_cap100_bhdsr_tiled87, and missed beat-B&H daily Sharpe
+# (bh_daily_sharpe 0.415) rather than the trade floor:
+#   dip_300b_lt8pc&h4_ema_abv_180  +1551 / 161 tr / daily Sharpe 0.388
+#   dip_264b_lt8pc&h4_ema_abv_150  +1508 / 127 tr / daily Sharpe 0.370
+#   dip_216b_lt8pc&h4_ema_abv_180   +894 / 107 tr / daily Sharpe 0.251
+#   dip_264b_lt8pc&h4_ema_abv_180   +885 / 137 tr / daily Sharpe 0.215
+# (lookback, drop %, seed gate). Best daily Sharpe first.
+DSHARP_SEEDS: tuple[tuple[int, int, int], ...] = (
+    (300, 8, 180),
+    (264, 8, 150),
+    (216, 8, 180),
+    (264, 8, 180),
+)
+# Periods whose ``_round_period`` is the identity and is not a
+# LITDIP gate. 185→180 and 195→200, so those spellings are not
+# emitted. 7% and 9% dips round onto 8% and are not emitted either.
+# Close to the seed gates (150/180) first; a tie prefers the longer
+# gate (lower turnover). Then the unused band around 300.
+DSHARP_PERIODS_NEAR_180: tuple[int, ...] = (190, 170, 200, 160)
+DSHARP_PERIODS_NEAR_150: tuple[int, ...] = (160, 170, 190, 200)
+DSHARP_PERIODS_NEAR_300: tuple[int, ...] = (310, 290, 320, 280)
+DSHARP_NEW_PERIODS: tuple[int, ...] = DSHARP_PERIODS_NEAR_180 + DSHARP_PERIODS_NEAR_300
+# Step-6 lookbacks (near-duplicate identity) that LITDIP's 12-bar
+# grid never crossed. Longer first: a rarer dip, fewer trades.
+DSHARP_LB_NEIGHBORS: dict[int, tuple[int, ...]] = {
+    300: (306, 294),
+    264: (270, 258),
+    216: (222, 210),
+}
+DSHARP_GAP_LOOKBACKS: tuple[int, ...] = (318, 306, 294, 282, 270, 258, 222, 210)
+# In-grid (step 12) lookbacks on the same cluster, already crossed
+# with every LITDIP gate at 8%. Not the measured seed dips. Crossing
+# them with DSHARP_NEW_PERIODS is one axis (the gate period).
+DSHARP_CLUSTER_LOOKBACKS: tuple[int, ...] = (288, 312, 276, 324, 252, 240, 228)
+DSHARP_SEED_GATES: tuple[int, ...] = (180, 150)
 # Skip mom_12b on the undry prefix (research + Sharpe near-miss).
 UNDRY_MOM_PRIORITY: tuple[str, ...] = (
     "mom_18b_gt2pc",
@@ -1081,8 +1127,72 @@ def _regime_island_2c(blocked_keys: set[str]) -> Iterator[str]:
                 yield from emit(f"{regime}&{nmom}&{cont}&{rsi_paid}")
 
 
+def _dsharp_periods_for_gate(gate: int) -> tuple[int, ...]:
+    close = DSHARP_PERIODS_NEAR_150 if gate == 150 else DSHARP_PERIODS_NEAR_180
+    return close + DSHARP_PERIODS_NEAR_300
+
+
+def _daily_sharpe_dip(blocked_keys: set[str]) -> Iterator[str]:
+    """Densify #4: untested dip×h4 neighborhood of the daily-Sharpe near-misses.
+
+    Emit first, ahead of literature undry #3. Two atoms, ema before sma.
+    Order is the measured seeds (best daily Sharpe first), each varied on
+    one axis: the nearest new gate period, then a step-6 lookback at the
+    seed gate (longer first), then the unused periods around 300. Cluster
+    lookbacks (288/312 and the step-12 rungs between the seeds) times the
+    new periods follow, then the step-6 gaps times those periods, then the
+    sma twin of each seed dip. A 5m ``sma_abv`` / ``ema_abv`` / ``rsi_>``
+    confirm on an h4 gate is ``filler_atom`` and is not minted. No mom,
+    no structure, no new parser atom. ``blocked_keys`` are near-duplicate
+    keys of LITDIP and the older recipe.
+    """
+    from hedge_fund.trading.mint_quality import mint_block_reason
+
+    seen = set(blocked_keys)
+
+    def emit(lookback: int, pct: int, kind: str, period: int) -> Iterator[str]:
+        name = f"dip_{lookback}b_lt{pct}pc&h4_{kind}_abv_{period}"
+        if name_has_mom_gt_and_dip(name) or not name_is_parseable(name):
+            return
+        if mint_block_reason(name):
+            return
+        key = near_duplicate_key(name)
+        if key in seen:
+            return
+        seen.add(key)
+        yield name
+
+    for lookback, pct, gate in DSHARP_SEEDS:
+        close = DSHARP_PERIODS_NEAR_150 if gate == 150 else DSHARP_PERIODS_NEAR_180
+        for period in close:
+            yield from emit(lookback, pct, "ema", period)
+        for neighbor in DSHARP_LB_NEIGHBORS[lookback]:
+            yield from emit(neighbor, pct, "ema", gate)
+        for period in DSHARP_PERIODS_NEAR_300:
+            yield from emit(lookback, pct, "ema", period)
+    for gate in DSHARP_SEED_GATES:
+        for lookback in DSHARP_GAP_LOOKBACKS:
+            yield from emit(lookback, 8, "ema", gate)
+    for period in DSHARP_NEW_PERIODS:
+        for lookback in DSHARP_CLUSTER_LOOKBACKS:
+            yield from emit(lookback, 8, "ema", period)
+    for period in DSHARP_NEW_PERIODS:
+        for lookback in DSHARP_GAP_LOOKBACKS:
+            yield from emit(lookback, 8, "ema", period)
+    for lookback, pct, gate in DSHARP_SEEDS:
+        for period in _dsharp_periods_for_gate(gate):
+            yield from emit(lookback, pct, "sma", period)
+
+
+def iter_daily_sharpe_dip_names() -> Iterator[str]:
+    """Densify #4 names in emit order (the recipe prefix)."""
+    yield from _daily_sharpe_dip(set())
+
+
 def _lit_trend_dip(blocked_keys: set[str]) -> Iterator[str]:
-    """Literature undry #3: slow h4 trend gate × capitulation dip. Emit first.
+    """Literature undry #3: slow h4 trend gate × capitulation dip.
+
+    Emitted immediately after densify #4.
 
     ``dip_{L}b_lt{T}pc&h4_{sma,ema}_abv_{P}``, already in canonical (sorted)
     atom order. Gate tiers outer, dip cells (EV order) inner, so the
@@ -1105,7 +1215,7 @@ def _lit_trend_dip(blocked_keys: set[str]) -> Iterator[str]:
 
 
 def iter_lit_trend_dip_names() -> Iterator[str]:
-    """Literature undry #3 names in emit order (the recipe prefix)."""
+    """Literature undry #3 names in emit order (after densify #4)."""
     yield from _lit_trend_dip(set())
 
 def _regime_undry_winner_shaped() -> Iterator[str]:
@@ -1329,10 +1439,12 @@ def _regime_ands() -> Iterator[str]:
     ``mom_18b_gt2pc & *_abv_30 & rsi_14_>50``. 2026-10-07 those h4
     evals measured FAIL. **Island #2c** emits first (h1 +
     ``rsi_14_>45`` / gap MAs / 5-atom extensions / modest mom
-    neighbors). Island #2b stays next, deprioritized. No
-    ``don_hi`` / ``near_swing_lo``. Cheap ``near_swing_hi`` N≤48
-    only on depth-7 stacks (not minted without a dip extra). HTF
-    False → no new long (flat). No named candlesticks.
+    neighbors).     Island #2b stays next, deprioritized. 2026-10-08 literature
+    undry #3 (``LITDIP_*``) led and drained. 2026-10-09 densify #4
+    (``DSHARP_*``, the dip×h4 daily-Sharpe neighborhood) emits
+    first. No ``don_hi`` / ``near_swing_lo``. Cheap ``near_swing_hi``
+    N≤48 only on depth-7 stacks (not minted without a dip extra).
+    HTF False → no new long (flat). No named candlesticks.
     """
     yield from _iter_without_mom_and_dip(_regime_ands_raw())
 
@@ -1357,7 +1469,11 @@ def _regime_ands_raw() -> Iterator[str]:
     island_2c = list(_regime_island_2c(blocked_2c))
     blocked_lit = set(blocked_2c)
     blocked_lit.update(near_duplicate_key(name) for name in island_2c)
-    yield from _lit_trend_dip(blocked_lit)
+    lit = list(_lit_trend_dip(blocked_lit))
+    blocked_sharp = set(blocked_lit)
+    blocked_sharp.update(near_duplicate_key(name) for name in lit)
+    yield from _daily_sharpe_dip(blocked_sharp)
+    yield from lit
     yield from island_2c
     yield from island_2b
     yield from drained
@@ -1393,8 +1509,10 @@ def _trend_participation_ands(n: int) -> Iterator[str]:
 def iter_recipe_names() -> Iterator[str]:
     """Deterministic bounded stream. Not a full cartesian of every atom.
 
+    Densify #4 (``DSHARP_*``: one-axis neighborhood of the dip×h4
+    daily-Sharpe near-misses, no mom, no 5m filler) is first.
     Literature undry #3 (``LITDIP_*``: slow h4 trend gate AND a
-    capitulation dip, no mom) is first. Island #2c follows so a dry refill mints h1 densify of the paying
+    capitulation dip, no mom) follows it. Island #2c follows so a dry refill mints h1 densify of the paying
     ``mom_18b_gt2pc`` island (``rsi_14_>45`` on ``*_abv_{30,20,50}``,
     gap MAs 35/25/15/60, one extra MA on ``…&*_abv_30&rsi_14_>50``,
     then modest mom neighbors) immediately. Island #2b (h4×mom) follows,
