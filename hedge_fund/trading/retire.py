@@ -366,6 +366,7 @@ def retired_payload() -> dict:
             "champion_since": record.get("champion_since"),
             "graduated_at": record.get("graduated_at"),
             "status": record.get("status"),
+            "family_winner": row.get("family_winner"),
         })
     rows.sort(key=lambda r: (str(r.get("retired_at") or ""), r["name"]))
     return {

@@ -6,14 +6,15 @@ Fail-once: a name that already has any discovery_log row is skipped
 stored aggregates (Sharpe / trades / beat-B&H / sma) are flipped and
 admitted without re-running walk-forwards. Optional ``force_admit`` seats
 a named existing log row even when those aggregates still fail (token
-gated). Existing champions are never removed. Paper only.
+gated). Champions are only removed by the one-per-family rule
+(``families.py``): a twin is parked to ``retired.json``. Paper only.
 """
 from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Any
 
-from hedge_fund.trading.champions import load_graduated, load_pool, retired_names, save_pool
+from hedge_fund.trading.champions import load_graduated, load_pool, save_pool
 from hedge_fund.trading.constants import GATE_RULES, QUAL_TIMEFRAME, RISK_POLICY
 from hedge_fund.trading.discovery import (
     append_discovery_evaluation,
@@ -22,6 +23,12 @@ from hedge_fund.trading.discovery import (
     save_discovery_log,
     tested_discovery_names,
     write_in_flight,
+)
+from hedge_fund.trading.families import (
+    admit_blocked_names,
+    enforce_champion_families_unlocked,
+    qual_metrics,
+    unpark_unlocked,
 )
 from hedge_fund.trading.farm import apply_heartbeat_unlocked
 from hedge_fund.trading.leases import clear_leases_unlocked, touch_worker_unlocked
@@ -80,7 +87,7 @@ def _admit_qualified(st: dict, record: dict, existing: set[str]) -> bool:
     if name in existing:
         return False
     admitted_at = record.get("tested_at") or _now()
-    st.setdefault("champions", []).append({
+    row = {
         "name": name,
         "closed": 0,
         "pnl": 0.0,
@@ -92,7 +99,12 @@ def _admit_qualified(st: dict, record: dict, existing: set[str]) -> bool:
         "source": "5m_qualification_filter",
         "timeframe": QUAL_TIMEFRAME,
         "risk_policy": RISK_POLICY,
-    })
+    }
+    qual = qual_metrics(record)
+    if qual:
+        # Ranking fields for the one-per-family rule (families.py).
+        row["qual"] = qual
+    st.setdefault("champions", []).append(row)
     existing.add(name)
     return True
 
@@ -140,7 +152,7 @@ def _apply_force_admit(
 def ingest_discovery_payload(payload: dict) -> dict:
     """Apply a worker batch. Caller must already have checked the ingest token.
 
-    Returns counts. Never culls champions. May flip a parked log row to
+    Returns counts. Parks family twins (families.py); never deletes. May flip a parked log row to
     qualified when stored aggregates now pass (all-windows veto dropped),
     or when ``force_admit`` names an existing log row.
     """
@@ -174,7 +186,9 @@ def ingest_discovery_payload(payload: dict) -> dict:
         grads = load_graduated()
         existing = {c["name"] for c in (st.get("champions") or []) if c.get("name")}
         existing |= {g["name"] for g in grads if isinstance(g, dict) and g.get("name")}
-        existing |= retired_names()
+        # Retired / parked names stay blocked; a parked twin whose family
+        # winner was retired is reconsiderable (families.py).
+        existing |= admit_blocked_names()
 
         for raw in raw_evals:
             rec = _validate_eval(raw)
@@ -231,8 +245,13 @@ def ingest_discovery_payload(payload: dict) -> dict:
         if requal_names or force_admitted:
             save_discovery_log(log)
 
+        families = None
         if admitted:
             save_pool(st)
+            unpark_unlocked(admitted)
+        # One champion per near-identical family: a new pass is parked or
+        # replaces (and parks) its family winner. Also retries deferred twins.
+        families = enforce_champion_families_unlocked(datetime.now(timezone.utc))
 
         if raw_extended:
             names = [n for n in raw_extended if isinstance(n, str) and n]
@@ -294,5 +313,6 @@ def ingest_discovery_payload(payload: dict) -> dict:
         "force_admitted": force_admitted,
         "rejected_invalid": rejected_invalid,
         "extended_added": added_extended,
+        "family_parked": (families or {}).get("parked") or {},
         "source": payload.get("source") or "windows_worker",
     }

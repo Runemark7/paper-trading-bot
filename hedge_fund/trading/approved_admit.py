@@ -171,8 +171,16 @@ def ensure_approved_admits_unlocked(now: datetime) -> dict | None:
 
 
 def run_approved_admits() -> dict | None:
+    from hedge_fund.trading.families import enforce_champion_families_unlocked
+
     with paper_state_lock("discovery"):
-        out = ensure_approved_admits_unlocked(datetime.now(timezone.utc))
+        now = datetime.now(timezone.utc)
+        out = ensure_approved_admits_unlocked(now)
+        # Startup pass of the one-per-family rule (idempotent; runs after the
+        # approved admits so it sees them).
+        families = enforce_champion_families_unlocked(now)
+    if families and families.get("parked"):
+        log.info("families: parked %s", families["parked"])
     if out is not None:
         log.info("approved admit: batch %s admitted %s", APPROVED_ADMIT_BATCH, out["admitted"])
     return out
