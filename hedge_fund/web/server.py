@@ -773,6 +773,9 @@ def main():
     from hedge_fund.trading.retire import start_auto_retire
 
     start_auto_retire()
+    from hedge_fund.trading.approved_admit import start_approved_admits
+
+    start_approved_admits()
     httpd = ThreadingHTTPServer((args.host, args.port), Handler)
     print(f"paperbot dashboard service on http://{args.host}:{args.port}")
     try:
