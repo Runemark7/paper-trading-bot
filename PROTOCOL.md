@@ -1236,3 +1236,9 @@ Alexander, 2026-10-08 18:08 (option b). The 23 walk-forward windows were end-ali
 - `GATE_RULES` = `sltp_cap100_bhdsr_tiled87_20261008`. Stale workers get no claims, and their rows are refused. Parked rows from older rules are never re-decided into a pass.
 - Requalify batch `rules-v3-tiled-20261008` re-checks the same 448 names once a current-tag worker claims them. It never admits or retires.
 - When segment 22 grows past 2 × 87d (2027-01-07), add segment 23 with a rules bump.
+
+### Amendment 2026-10-09 — approved admit of the rules-v3 requalify pass
+
+**Why.** The requalify lane records verdicts and never admits. Batch `rules-v3-tiled-20261008` (448 names, tag `sltp_cap100_bhdsr_tiled87_20261008`) had one pass: `dip_204b_lt8pc&h4_ema_abv_150` (102 trades, gate Sharpe 0.40, daily Sharpe 0.504 vs B&H 0.415, +1,765.7). Alexander approved admitting it on 2026-10-09 at 07:41 Stockholm.
+
+**What was added** (`hedge_fund.trading.approved_admit`). One-shot batch `rules-v3-admit-20261009`, run once on server start (marker in `approved_admits.json`). It seats only the names in `APPROVED_ADMITS`, and only from a stored requalify verdict of the named batch that is a pass on the current `GATE_RULES`. If that verdict is missing, the batch does nothing and leaves no marker. Retired names are not admitted. Already-pooled names are not duplicated. The champion row has `source` `requalify_approved_admit` and a `provenance` object (admit batch, requalify batch, approved_by, approved_at, gate_rules, trades, Sharpe, daily vs B&H daily Sharpe, P&L, avg hold, worker, data_end), shown on `GET /api/champions`. The OOS gate, the rules tag, the requalify state, the discovery log, the tested index and every other champion are untouched.
