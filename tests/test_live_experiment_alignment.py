@@ -13,22 +13,26 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 
-# 2026-10-08: literature undry #3 (``LITDIP_*``) is the recipe prefix.
+# 2026-10-09: densify #4 (``DSHARP_*``) is the recipe prefix.
+# 2026-10-08: literature undry #3 (``LITDIP_*``) follows it.
 # Older amendment tests pin the pre-#3 stream, so they read the recipe
-# without that prefix and treat its names as already taken.
-from hedge_fund.trading.refill import iter_lit_trend_dip_names as _iter_lit
+# without those prefixes and treat their names as already taken.
+from hedge_fund.trading.refill import (
+    iter_daily_sharpe_dip_names as _iter_dsharp,
+    iter_lit_trend_dip_names as _iter_lit,
+)
 
-_LIT_NAMES = frozenset(_iter_lit())
+_PREFIX_NAMES = frozenset(_iter_dsharp()) | frozenset(_iter_lit())
 
 
 def _legacy_recipe_names():
     from hedge_fund.trading.refill import iter_recipe_names as _iter
 
-    return (n for n in _iter() if n not in _LIT_NAMES)
+    return (n for n in _iter() if n not in _PREFIX_NAMES)
 
 
 def _with_lit(taken):
-    return set(taken) | _LIT_NAMES
+    return set(taken) | _PREFIX_NAMES
 
 
 REPO = Path(__file__).resolve().parents[1]

@@ -55,16 +55,22 @@ class LitTrendDipTests(unittest.TestCase):
         self.assertEqual(QUAL_N_WINDOWS, 23)
         self.assertEqual(QUAL_WARMUP_BARS, 4032)
 
-    def test_family_is_the_recipe_prefix(self):
+    def test_family_follows_the_daily_sharpe_prefix(self):
+        from hedge_fund.trading.refill import iter_daily_sharpe_dip_names
+
+        sharp = list(iter_daily_sharpe_dip_names())
         lit = list(iter_lit_trend_dip_names())
         names = list(iter_recipe_names())
         self.assertEqual(lit[0], LEAD)
-        self.assertEqual(names[: len(lit)], lit)
+        self.assertEqual(names[len(sharp) : len(sharp) + len(lit)], lit)
         self.assertEqual(len(lit), len(LITDIP_GATES) * len(LITDIP_CELLS))
         self.assertGreaterEqual(len(lit), 2500)
         lit_keys = {near_duplicate_key(n) for n in lit}
         self.assertEqual(len(lit_keys), len(lit))
-        rest_keys = {near_duplicate_key(n) for n in names[len(lit):]}
+        rest_keys = {near_duplicate_key(n) for n in names[: len(sharp)]}
+        rest_keys.update(
+            near_duplicate_key(n) for n in names[len(sharp) + len(lit) :]
+        )
         self.assertTrue(lit_keys.isdisjoint(rest_keys))
 
     def test_names_respect_bans(self):
