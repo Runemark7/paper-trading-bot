@@ -90,6 +90,17 @@ whole dip 186–246 (step 6) × h4 period 120–170 (step 10, the
 spine, ema 8% first, plus a ~20% exploratory share on two
 current-gate near-miss families (trend-stack × swing-low support,
 long 12% dip × slow h4 ema). OOS gates unchanged.
+2026-10-11: #5 drained (eligible 0, untested 0, densify exhausted).
+Densify #6 (``DENSE6_*``) leads. On the current 23-window gate the
+highest excess P&L is ``dip_234b_lt8pc&h4_ema_abv_140`` and the best
+per-trade Sharpe is the lower-turnover
+``dip_240b_lt10pc&h4_sma_abv_140``. The lt8×ema box and the lt10 ×
+h4 120–170 box are mined. #6 mints the untested lt12% depth on
+lookback 198–264 × h4 120–200 (ema, then sma), a ~20–30% exploratory
+share on ``near_swing_lo`` × ``sma_stack_20_50_200`` (the +2104
+near-miss spine, N≤96, plus that spine gated by h4 sma around 140),
+then the untested lt10 holes in the same dip box. Odd dip percents
+collapse and are not emitted. OOS gates unchanged.
 """
 from __future__ import annotations
 
@@ -634,6 +645,42 @@ DENSE5_LONG_DIPS: tuple[tuple[tuple[int, ...], int, str, tuple[int, ...]], ...] 
     ((348, 342, 354, 336, 360), 10, "ema", (440, 460, 470)),
     ((444, 450, 456), 12, "sma", (410, 420, 430, 440)),
 )
+# 2026-10-11 densify #6. #5 drained with eligible 0 / untested 0.
+# Current gate sltp_cap100_bhdsr_tiled87_20261008 (23 windows):
+#   dip_234b_lt8pc&h4_ema_abv_140   102 tr / +2905 / Sharpe 0.30 / daily 0.842
+#   dip_240b_lt10pc&h4_sma_abv_140   56 tr / +1128 / Sharpe 2.76 / daily 0.438
+#   (B&H daily Sharpe 0.407 on both). Near-miss
+#   near_swing_lo_66&sma_stack_20_50_200  57 tr / +2104 / Sharpe 0.01
+#   (fails only the per-trade Sharpe floor).
+# The lt8×ema box and lt10 × period 120–170 are mined. lt12 on
+# lookback 198–264 (step 6; 200 rounds to 198) × h4 period 120–200
+# (step 10) is untested for ema and sma. 9% rounds onto 8%, 11% and
+# 13% onto 12%, so those spellings are not emitted. lt10 holes in
+# the same box (the #5 grid skipped lookbacks 252+ and periods
+# 180–200) follow the exploratory share. Centers are the two
+# champions; a distance tie prefers the longer lookback and the
+# slower gate. No mom, no h4×mom, no 5m filler, structure N<=96.
+DENSE6_EMA_CENTER: tuple[int, int] = (234, 140)
+DENSE6_SMA_CENTER: tuple[int, int] = (240, 140)
+DENSE6_LOOKBACKS: tuple[int, ...] = (
+    234, 240, 228, 246, 222, 252, 216, 258, 210, 264, 204, 198,
+)
+DENSE6_PERIODS: tuple[int, ...] = (140, 150, 130, 160, 120, 170, 180, 190, 200)
+DENSE6_DEPTH_PCT = 12
+DENSE6_EDGE_PCT = 10
+# ema first: highest net OOS P&L minus B&H. sma second: the Sharpe champion.
+DENSE6_HEAD: tuple[str, ...] = ("ema", "sma")
+# Tail is the same box at the proven 10% threshold, holes only.
+DENSE6_TAIL: tuple[str, ...] = ("sma", "ema")
+DENSE6_STACK = "sma_stack_20_50_200"
+# 2-atom N neighbors of the +2104 near-miss. 42/48/54/60/66 are #5.
+# Longer N first on a distance tie (96 before 36).
+DENSE6_SWING_NS: tuple[int, ...] = (72, 78, 84, 90, 96, 36)
+# 3-atom: that stack × near_swing_lo × h4 sma around the Sharpe champion's
+# gate. One family, nearest (66, 140) first. Not the ema twin (a pass
+# would park it as the same family).
+DENSE6_GATE_CENTER: tuple[int, int] = (66, 140)
+DENSE6_GATE_NS: tuple[int, ...] = (66, 72, 60, 54, 78, 48, 84, 42, 90, 36)
 # Skip mom_12b on the undry prefix (research + Sharpe near-miss).
 UNDRY_MOM_PRIORITY: tuple[str, ...] = (
     "mom_18b_gt2pc",
@@ -1322,8 +1369,74 @@ def _dense_ema150(blocked_keys: set[str]) -> Iterator[str]:
 
 
 def iter_dense_ema150_names() -> Iterator[str]:
-    """Densify #5 names in emit order (the recipe prefix)."""
+    """Densify #5 names in emit order (after densify #6)."""
     yield from _regime_ands_parts()["dense5"]
+
+
+def _dense6_center(kind: str) -> tuple[int, int]:
+    return DENSE6_EMA_CENTER if kind == "ema" else DENSE6_SMA_CENTER
+
+
+def _dense6_box(kind: str, pct: int) -> list[str]:
+    cl, cp = _dense6_center(kind)
+    cells = [(lb, p) for lb in DENSE6_LOOKBACKS for p in DENSE6_PERIODS]
+    cells.sort(key=lambda c: (abs(c[0] - cl) / 6 + abs(c[1] - cp) / 10, -c[0], -c[1]))
+    return [f"dip_{lb}b_lt{pct}pc&h4_{kind}_abv_{p}" for lb, p in cells]
+
+
+def _dense6_explore() -> list[str]:
+    stack = DENSE6_STACK
+    out = [f"near_swing_lo_{n}&{stack}" for n in DENSE6_SWING_NS]
+    cn, cp = DENSE6_GATE_CENTER
+    cells = [(n, p) for n in DENSE6_GATE_NS for p in DENSE6_PERIODS]
+    cells.sort(key=lambda c: (abs(c[0] - cn) / 6 + abs(c[1] - cp) / 10, -c[0], -c[1]))
+    for n, p in cells:
+        out.append(f"h4_sma_abv_{p}&near_swing_lo_{n}&{stack}")
+    return out
+
+
+def _dense6(blocked_keys: set[str]) -> Iterator[str]:
+    """Densify #6: deeper dip × h4, then a swing-stack exploratory share.
+
+    Emit first, ahead of densify #5. ema lt12 (the excess-P&L champion's
+    depth), then sma lt12 (the Sharpe champion's depth), then
+    ``near_swing_lo`` × ``sma_stack_20_50_200`` and that spine gated by
+    h4 sma, then the untested lt10 holes of the same dip box. Names are
+    emitted in canonical atom order. Every name passes
+    ``mint_block_reason``, has no mom atom, at most 3 atoms, and
+    structure N<=96. ``blocked_keys`` are the near-duplicate keys of
+    #5, #4, #3 and the older regime recipe, so a cell #5 already minted
+    is not repeated.
+    """
+    from hedge_fund.trading.mint_quality import canonical_name, mint_block_reason
+
+    seen = set(blocked_keys)
+
+    def emit(raw: str) -> Iterator[str]:
+        name = canonical_name(raw) or raw
+        if name_has_mom_gt_and_dip(name) or not name_is_parseable(name):
+            return
+        if mint_block_reason(name):
+            return
+        key = near_duplicate_key(name)
+        if key in seen:
+            return
+        seen.add(key)
+        yield name
+
+    for kind in DENSE6_HEAD:
+        for name in _dense6_box(kind, DENSE6_DEPTH_PCT):
+            yield from emit(name)
+    for name in _dense6_explore():
+        yield from emit(name)
+    for kind in DENSE6_TAIL:
+        for name in _dense6_box(kind, DENSE6_EDGE_PCT):
+            yield from emit(name)
+
+
+def iter_dense6_names() -> Iterator[str]:
+    """Densify #6 names in emit order (the recipe prefix)."""
+    yield from _regime_ands_parts()["dense6"]
 
 
 def _lit_trend_dip(blocked_keys: set[str]) -> Iterator[str]:
@@ -1578,8 +1691,10 @@ def _regime_ands() -> Iterator[str]:
     ``rsi_14_>45`` / gap MAs / 5-atom extensions / modest mom
     neighbors).     Island #2b stays next, deprioritized. 2026-10-08 literature
     undry #3 (``LITDIP_*``) led and drained. 2026-10-09 densify #4
-    (``DSHARP_*``, the dip×h4 daily-Sharpe neighborhood) emits
-    first. No ``don_hi`` / ``near_swing_lo``. Cheap ``near_swing_hi``
+    (``DSHARP_*``, the dip×h4 daily-Sharpe neighborhood) led next and
+    drained. Densify #5 then led and drained. 2026-10-11 densify #6
+    (``DENSE6_*``, lt12 dip depth plus the swing-stack share) emits
+    first. No ``don_hi``. Cheap ``near_swing_hi``
     N≤48 only on depth-7 stacks (not minted without a dip extra).
     HTF False → no new long (flat). No named candlesticks.
     """
@@ -1626,7 +1741,10 @@ def _regime_ands_parts() -> dict[str, list[str]]:
     blocked.update(near_duplicate_key(name) for name in sharp)
     blocked.update(_rest_of_recipe_keys())
     dense = list(_dense_ema150(blocked))
+    blocked.update(near_duplicate_key(name) for name in dense)
+    depth = list(_dense6(blocked))
     return {
+        "dense6": depth,
         "dense5": dense,
         "dsharp": sharp,
         "lit": lit,
@@ -1638,7 +1756,7 @@ def _regime_ands_parts() -> dict[str, list[str]]:
 
 def _regime_ands_raw() -> Iterator[str]:
     parts = _regime_ands_parts()
-    for fam in ("dense5", "dsharp", "lit", "island_2c", "island_2b", "drained"):
+    for fam in ("dense6", "dense5", "dsharp", "lit", "island_2c", "island_2b", "drained"):
         yield from parts[fam]
 
 
@@ -1672,10 +1790,14 @@ def _trend_participation_ands(n: int) -> Iterator[str]:
 def iter_recipe_names() -> Iterator[str]:
     """Deterministic bounded stream. Not a full cartesian of every atom.
 
-    Densify #5 (``DENSE5_*``: dip 186–246 × h4 120–170 box around the
-    ``dip×h4_ema_abv_150`` passes, plus a ~20% exploratory share) is
-    first. Densify #4 (``DSHARP_*``: one-axis neighborhood of the dip×h4
-    daily-Sharpe near-misses, no mom, no 5m filler) follows it.
+    Densify #6 (``DENSE6_*``: lt12 dip 198–264 × h4 120–200 around the
+    current-gate champions, plus a ~20–30% exploratory share on
+    ``near_swing_lo`` × ``sma_stack_20_50_200``, then the untested lt10
+    holes of that box) is first. Densify #5 (``DENSE5_*``: dip 186–246
+    × h4 120–170 box around the ``dip×h4_ema_abv_150`` passes, plus a
+    ~20% exploratory share) follows it. Densify #4 (``DSHARP_*``:
+    one-axis neighborhood of the dip×h4 daily-Sharpe near-misses, no
+    mom, no 5m filler) follows that.
     Literature undry #3 (``LITDIP_*``: slow h4 trend gate AND a
     capitulation dip, no mom) follows it. Island #2c follows so a dry refill mints h1 densify of the paying
     ``mom_18b_gt2pc`` island (``rsi_14_>45`` on ``*_abv_{30,20,50}``,
