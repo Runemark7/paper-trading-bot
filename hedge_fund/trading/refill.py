@@ -104,6 +104,8 @@ collapse and are not emitted. OOS gates unchanged.
 """
 from __future__ import annotations
 
+from functools import lru_cache
+
 import json
 import re
 from datetime import datetime, timezone
@@ -1728,6 +1730,20 @@ def _rest_of_recipe_keys() -> set[str]:
 
 
 def _regime_ands_parts() -> dict[str, list[str]]:
+    """Regime families in emit order (memoized; copies returned).
+
+    The recipe is a pure function of this module's constants. Every claim
+    walked it from scratch (~1.6s on prod-shaped state), several times.
+    """
+    return {fam: list(names) for fam, names in _regime_ands_parts_cached().items()}
+
+
+@lru_cache(maxsize=1)
+def _regime_ands_parts_cached() -> dict[str, tuple[str, ...]]:
+    return {fam: tuple(names) for fam, names in _regime_ands_parts_raw().items()}
+
+
+def _regime_ands_parts_raw() -> dict[str, list[str]]:
     """Regime families in emit order, each deduped against the ones after it."""
     drained = list(_drained_regime_raw())
     blocked = {near_duplicate_key(name) for name in drained}
@@ -1950,3 +1966,33 @@ def maybe_refill_discovery(
     if added:
         append_extended_batch(added)
     return added
+
+
+def warm_refill_caches() -> int:
+    """Build the memoized recipe and the tape reachability caps off the claim path.
+
+    Server start runs this on a daemon thread so the first claim after a
+    deploy does not pay for them under the discovery lock. Read-only.
+    """
+    from hedge_fund.trading.mint_quality import canonical_name, unreachable_threshold_reason
+
+    count = 0
+    for name in iter_recipe_names():
+        canonical_name(name)
+        near_duplicate_key(name)
+        unreachable_threshold_reason(name)
+        count += 1
+    return count
+
+
+def start_refill_warmup() -> None:
+    import logging
+    import threading
+
+    def run() -> None:
+        try:
+            warm_refill_caches()
+        except Exception:
+            logging.getLogger(__name__).exception("refill warm-up failed")
+
+    threading.Thread(target=run, name="refill-warmup", daemon=True).start()
