@@ -61,8 +61,14 @@ class LitTrendDipTests(unittest.TestCase):
             iter_dense_ema150_names,
         )
 
-        # Densify #5 then #4 lead; #3 follows both.
-        sharp = list(iter_dense_ema150_names()) + list(iter_daily_sharpe_dip_names())
+        # Densify #6, #5, then #4 lead; #3 follows them.
+        from hedge_fund.trading.refill import iter_dense6_names
+
+        sharp = (
+            list(iter_dense6_names())
+            + list(iter_dense_ema150_names())
+            + list(iter_daily_sharpe_dip_names())
+        )
         lit = list(iter_lit_trend_dip_names())
         names = list(iter_recipe_names())
         self.assertEqual(lit[0], LEAD)

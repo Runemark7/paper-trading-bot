@@ -26,6 +26,7 @@ from hedge_fund.trading.refill import (
     RECIPE_MAX_ATOMS,
     _dense5_explore,
     iter_daily_sharpe_dip_names,
+    iter_dense6_names,
     iter_dense_ema150_names,
     iter_lit_trend_dip_names,
     iter_recipe_names,
@@ -67,9 +68,10 @@ class DenseEma150Tests(unittest.TestCase):
         self.assertEqual(QUAL_N_WINDOWS, 23)
         self.assertEqual(QUAL_WARMUP_BARS, 4032)
 
-    def test_family_is_the_recipe_prefix(self):
+    def test_family_follows_the_dense6_prefix(self):
+        prefix = list(iter_dense6_names())
         family = list(iter_dense_ema150_names())
-        names = list(iter_recipe_names())
+        names = list(iter_recipe_names())[len(prefix) :]
         self.assertEqual(family[0], LEAD)
         self.assertEqual(names[: len(family)], family)
         self.assertGreaterEqual(len(family), 300)
