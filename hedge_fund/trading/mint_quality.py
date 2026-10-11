@@ -18,6 +18,7 @@ import math
 import os
 import re
 from dataclasses import dataclass
+from functools import lru_cache
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Sequence
@@ -64,6 +65,11 @@ _MIN_EMPIRICAL_RETURNS = 500
 
 _cap_cache: dict[tuple, dict[int, float | None]] = {}
 _closes_cache: dict[tuple, list] = {}
+# (state root, monotonic time, token). _history_token stats up to five files;
+# a refill walk asks for it once per mom/dip atom (tens of thousands of
+# stats per claim on the PVC). Reuse it briefly instead.
+_TOKEN_TTL_SECONDS = 2.0
+_token_memo: list = [None, 0.0, None]
 
 
 @dataclass(frozen=True)
@@ -251,6 +257,18 @@ def _static_cap(lookback: int) -> int:
 
 
 def _history_token() -> tuple:
+    import time
+
+    root = str(state_root())
+    now = time.monotonic()
+    if _token_memo[0] == root and now - _token_memo[1] < _TOKEN_TTL_SECONDS:
+        return _token_memo[2]
+    token = _history_token_uncached()
+    _token_memo[0], _token_memo[1], _token_memo[2] = root, now, token
+    return token
+
+
+def _history_token_uncached() -> tuple:
     root = state_root()
     json_path = root / "crypto_history_5m.json"
     if json_path.is_file():
@@ -298,11 +316,16 @@ def _load_closes(token: tuple) -> list:
         for path_s, _mtime, _size in token[1]:
             try:
                 arr = np.load(path_s, mmap_mode="r")
-                closes = [float(x) for x in arr["close"]]
+                # Keep a float64 array: _percentile_99 needs one per lookback,
+                # and a 600k-element list → array copy per call was the cost.
+                closes = np.array(arr["close"], dtype=np.float64)
             except (OSError, ValueError, KeyError):
                 continue
             if len(closes) >= 2:
                 series.append(closes)
+    # One tape generation at a time: the live tape rewrites every few
+    # minutes, so older tokens would otherwise pile up in memory.
+    _closes_cache.clear()
     _closes_cache[token] = series
     return series
 
@@ -325,11 +348,36 @@ def _percentile_99(closes: Sequence[float], lookback: int) -> float | None:
     return float(np.percentile(rets, 99))
 
 
+# The live tape is a fixed-length rolling window rewritten every few
+# minutes (new mtime, same size). A 99th percentile over ~600k bars does
+# not move with a handful of new bars, so npy caps are keyed by path and
+# size and refreshed at most every _NPY_CAP_TTL_SECONDS instead of being
+# recomputed for every lookback after each tape write (cold claims).
+_NPY_CAP_TTL_SECONDS = 6 * 3600.0
+_npy_cap_born: dict[tuple, float] = {}
+
+
+def _cap_key(token: tuple) -> tuple:
+    if token[0] != "npy":
+        return token
+    import time
+
+    key = ("npy", tuple((path, size) for path, _mtime, size in token[1]))
+    born = _npy_cap_born.get(key)
+    now = time.monotonic()
+    if born is None or now - born > _NPY_CAP_TTL_SECONDS:
+        _npy_cap_born.clear()
+        _npy_cap_born[key] = now
+        _cap_cache.pop(key, None)
+    return key
+
+
 def _empirical_cap(lookback: int) -> float | None:
     token = _history_token()
     if token[0] == "static":
         return None
-    per_token = _cap_cache.setdefault(token, {})
+    key = _cap_key(token)
+    per_token = _cap_cache.setdefault(key, {})
     if lookback in per_token:
         return per_token[lookback]
     caps = []
@@ -359,6 +407,8 @@ def clear_move_cap_cache() -> None:
     """Drop the tape-derived cap cache. Tests change ``PAPER_STATE`` under us."""
     _cap_cache.clear()
     _closes_cache.clear()
+    _npy_cap_born.clear()
+    _token_memo[0] = None
 
 
 def unreachable_threshold_reason(name: str) -> str | None:
@@ -435,6 +485,14 @@ def _strict_raw(group: Sequence[AtomParts]) -> list[str]:
 
 
 def canonical_atoms(name: str) -> tuple[str, ...]:
+    """Memoized: a pure function of the string (claim hot path)."""
+    if not name or not isinstance(name, str):
+        return ()
+    return _canonical_atoms_cached(name)
+
+
+@lru_cache(maxsize=262_144)
+def _canonical_atoms_cached(name: str) -> tuple[str, ...]:
     """Sorted atoms with same-indicator bounds collapsed to the strictest.
 
     ``mom_18b_gt2pc&mom_18b_gt4pc`` becomes ``mom_18b_gt4pc``. Atom order
@@ -537,7 +595,10 @@ def canonical_tested_reason(name: str, tested_keys: Iterable[str] | None) -> str
     if not tested_keys:
         return None
     key = canonical_name(name)
-    if key and key in set(tested_keys):
+    # Callers pass the per-claim canonical set; copying it for every
+    # candidate made a refill walk O(recipe × tested) (the 2026-10-11 504).
+    keys = tested_keys if isinstance(tested_keys, (set, frozenset)) else set(tested_keys)
+    if key and key in keys:
         return REASON_CANONICAL
     return None
 

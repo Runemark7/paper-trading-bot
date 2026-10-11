@@ -39,6 +39,7 @@ Lookbacks in names (e.g. dip_24b) are bar counts: on 5m, 24 bars = 2 hours.
 from __future__ import annotations
 
 import re
+from functools import lru_cache
 
 # Documented size (tests lock this band). Was 3546 combinatorial names.
 UNIVERSE_TARGET_MIN = 40
@@ -79,6 +80,18 @@ NEW_STRUCTURE_ANDS: tuple[str, ...] = (
 
 
 def near_duplicate_key(name: str) -> str:
+    """Memoized wrapper (pure function of the string; claim hot path)."""
+    if not isinstance(name, str):
+        return _near_duplicate_key_raw(name)
+    return _near_duplicate_key_cached(name)
+
+
+@lru_cache(maxsize=262_144)
+def _near_duplicate_key_cached(name: str) -> str:
+    return _near_duplicate_key_raw(name)
+
+
+def _near_duplicate_key_raw(name: str) -> str:
     """Cheap canonical key so ``sma_stack_5_20_50`` and ``sma_stack_5_21_51`` collide.
 
     Used to skip re-testing graduated/active names' near-twins without a

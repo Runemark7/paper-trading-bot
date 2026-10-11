@@ -776,6 +776,9 @@ def main():
     from hedge_fund.trading.approved_admit import start_approved_admits
 
     start_approved_admits()
+    from hedge_fund.trading.refill import start_refill_warmup
+
+    start_refill_warmup()
     httpd = ThreadingHTTPServer((args.host, args.port), Handler)
     print(f"paperbot dashboard service on http://{args.host}:{args.port}")
     try:
