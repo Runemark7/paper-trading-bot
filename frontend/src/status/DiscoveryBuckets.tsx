@@ -178,7 +178,7 @@ export default function DiscoveryBuckets() {
       <p className="text-sm text-white/55 mb-4">
         {data?.gate?.criteria
           ? data.gate.criteria
-          : "Gate v5: trades, Sharpe, sma_stack, holdout (including holdout vs buy-and-hold), DSR, PBO, neighbours, and cost stress still decide. Buy-and-hold daily Sharpe and B&H P&L on the discovery windows are informational, not a pass requirement."}
+          : "Gate v5: trades, Sharpe, sma_stack, holdout Sharpe, holdout trades, holdout vs sma_stack, DSR, PBO, neighbours, and stressed Sharpe still decide. Buy-and-hold on the discovery windows, the holdout, and the cost-stress re-run is informational, not a pass requirement."}
       </p>
 
       {q.isError && (

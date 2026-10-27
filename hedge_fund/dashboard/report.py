@@ -361,7 +361,7 @@ def generate_dashboard(store: TradeStore, out_path: str, calib_path: str | None 
 </div>
 
 <h2>Equity curve vs buy-and-hold baseline</h2>
-<div class="sm">The live cycle stores an equal-weight buy-and-hold overlay on each snapshot (amendment 2026-09-01). Paper equity is the solid line; B&amp;H is dashed. As of 2026-10-27 the overlay is informational: graduation is net paper P&amp;L &gt; 0 after fees, and the discovery gate does not require beating buy-and-hold.</div>
+<div class="sm">The live cycle stores an equal-weight buy-and-hold overlay on each snapshot (amendment 2026-09-01). Paper equity is the solid line; B&amp;H is dashed. As of 2026-10-27 the overlay is informational: graduation is net paper P&amp;L &gt; 0 after fees, and no discovery qualification check (discovery windows, sealed holdout, or cost stress) requires beating buy-and-hold.</div>
 <div class="wrap"><canvas id="curve" height="120"></canvas></div>
 
 <h2>Calibration by condition</h2>

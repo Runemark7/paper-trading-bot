@@ -94,8 +94,9 @@ the name, clears that name from in-flight, and moves on. Leftover
 lookback-168 structure names are pathological O(n·k) and burned this PC
 for ~2h with no completed evals. This is **ops/throughput, not a gate
 softening** — discovery floors stay 30 trades / Sharpe ≥ 0.30 / beat
-`sma_stack`. Discovery-window buy-and-hold is informational (gate v5).
-The sealed holdout and the cost-stress re-run still clear buy-and-hold.
+`sma_stack`. Buy-and-hold is informational on the discovery windows, the
+sealed holdout, and the cost-stress re-run (gate v5). Cost stress still
+requires stressed Sharpe ≥ 0.30.
 Set to `0` to disable. Mint no longer emits structure
 `N>96`; leftover already-tested lookback-168/192 names stay parked.
 Worker fail-park remains the backstop for any leftover already-queued

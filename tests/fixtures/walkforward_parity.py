@@ -20,10 +20,10 @@ Train/test cut stays 70/30 inside each window (``_prepare_sample``).
 Prior bars (``QUAL_WARMUP_BARS``) seed indicators; OOS trades/PnL/Sharpe
 exclude the pad. Admit semantics stay the frozen OOS gates (trades ≥ 30,
 Sharpe ≥ 0.30, beat sma_stack, fail-once, 5m, rm_v1 with stop/TP-only
-exits and the 100% notional cap — amendment 2026-10-08). Discovery-window
-buy-and-hold daily Sharpe is recorded and is not a fail reason (gate v5,
-2026-10-27). The sealed holdout and the cost-stress re-run still compare
-with buy-and-hold.
+exits and the 100% notional cap — amendment 2026-10-08). Buy-and-hold
+daily Sharpe is recorded and is not a fail reason on the discovery
+windows, the sealed holdout, or the cost-stress re-run (gate v5,
+2026-10-27). Cost stress still requires stressed Sharpe ≥ 0.30.
 """
 from __future__ import annotations
 

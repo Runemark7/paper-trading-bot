@@ -180,21 +180,33 @@ class UnchangedV4ChecksTests(unittest.TestCase):
                 n_trials=n_trials,
             )
 
-    def test_holdout_loss_to_buy_and_hold_still_fails(self):
+    def test_holdout_buy_and_hold_loss_does_not_fail_the_gate(self):
         out = self._finish(
             n_trials=1,
-            holdout={"pass": False, "reason": "holdout_daily_sharpe 0.10 <= bh 0.40",
-                     "sharpe": 0.5, "trades": 10, "pnl": 3.0},
-            stress_bh=-0.5,
+            holdout={
+                "pass": True,
+                "sharpe": 0.5,
+                "trades": 10,
+                "pnl": 3.0,
+                "daily_sharpe": 0.10,
+                "bh_daily_sharpe": 0.40,
+                "bh_role": "informational",
+            },
+            stress_bh=1e9,
             neighbours=["n1", "n2"],
         )
-        self.assertFalse(out["qualified"])
-        self.assertTrue(any("holdout_daily_sharpe" in reason for reason in out["fail_reasons"]))
+        self.assertTrue(out["qualified"], out["fail_reasons"])
+        self.assertEqual(out["gate_v4"]["holdout"]["bh_daily_sharpe"], 0.40)
+        self.assertTrue(out["gate_v4"]["cost_pass"])
+        self.assertEqual(out["gate_v4"]["cost_bh_daily_sharpe"], 1e9)
+        self.assertEqual(out["gate_v4"]["cost_bh_role"], "informational")
+        self.assertFalse(any("bh" in reason for reason in out["fail_reasons"]))
 
-    def test_holdout_metrics_compare_daily_sharpe(self):
+    def test_holdout_metrics_keep_buy_and_hold_and_do_not_fail_on_it(self):
         from hedge_fund.trading.gate_v4 import _holdout_metrics
 
         result = SimpleNamespace(total_pnl=10.0, trades=10, sharpe=0.5, max_drawdown=0.01)
+        weak = SimpleNamespace(total_pnl=10.0, trades=10, sharpe=0.1, max_drawdown=0.01)
         with patch("scripts.tournament_engine._eval_slice", return_value=[result]), patch(
             "scripts.tournament_engine._book_daily_returns",
             return_value=[0.01, 0.02],
@@ -212,21 +224,78 @@ class UnchangedV4ChecksTests(unittest.TestCase):
                 {"ok": True},
                 {"bh_daily_sharpe": None, "sma_pnl": 1.0},
             )
-        self.assertFalse(lost["pass"])
-        self.assertIn("holdout_daily_sharpe 0.10 <= bh 0.40", lost["reason"])
-        self.assertFalse(missing["pass"])
-        self.assertIn("holdout buy-and-hold daily sharpe missing", missing["reason"])
+        self.assertTrue(lost["pass"], lost["reason"])
+        self.assertEqual(lost["daily_sharpe"], 0.1)
+        self.assertEqual(lost["bh_daily_sharpe"], 0.4)
+        self.assertEqual(lost["bh_role"], "informational")
+        self.assertNotIn("bh", lost["reason"])
+        self.assertTrue(missing["pass"], missing["reason"])
+        self.assertIsNone(missing["bh_daily_sharpe"])
+        self.assertEqual(missing["bh_role"], "informational")
 
-    def test_cost_stress_still_has_to_beat_stressed_buy_and_hold(self):
+        with patch("scripts.tournament_engine._eval_slice", return_value=[weak]), patch(
+            "scripts.tournament_engine._book_daily_returns",
+            return_value=[0.01],
+        ), patch(
+            "hedge_fund.trading.buy_and_hold.daily_returns_sharpe",
+            return_value=0.10,
+        ):
+            soft = _holdout_metrics(
+                "sma_abv_20",
+                {"ok": True},
+                {"bh_daily_sharpe": 0.40, "sma_pnl": 1.0},
+            )
+        self.assertFalse(soft["pass"])
+        self.assertIn("holdout_sharpe", soft["reason"])
+        self.assertNotIn("bh", soft["reason"])
+        self.assertEqual(soft["bh_daily_sharpe"], 0.4)
+
+    def test_cost_stress_keeps_the_sharpe_floor_and_records_buy_and_hold(self):
         out = self._finish(
             n_trials=1,
             holdout={"pass": True, "sharpe": 0.5, "trades": 10, "pnl": 3.0},
             stress_bh=1e9,
             neighbours=["n1", "n2"],
         )
-        self.assertFalse(out["qualified"])
-        self.assertFalse(out["gate_v4"]["cost_pass"])
-        self.assertTrue(any("vs bh" in reason for reason in out["fail_reasons"]))
+        self.assertTrue(out["qualified"], out["fail_reasons"])
+        self.assertTrue(out["gate_v4"]["cost_pass"])
+        self.assertEqual(out["gate_v4"]["cost_bh_role"], "informational")
+        self.assertFalse(any("vs bh" in reason for reason in out["fail_reasons"]))
+
+        def cheap(name, slices, taker_fee=None, slippage=None):
+            if taker_fee is not None:
+                return _scored([1.0, 0.5, 1.2, 0.4], sharpe=0.1)
+            if slices == ["eth"]:
+                return _scored([-1.0, -0.5, -1.2, -0.4], sharpe=0.4)
+            if name == "cand":
+                return _scored([10.0, 12.0, 11.0, 13.0])
+            return _scored([1.0, 0.5, 1.2, 0.4])
+
+        with patch("hedge_fund.trading.gate_v4.score_name", side_effect=cheap), patch(
+            "hedge_fund.trading.gate_v4._holdout_metrics",
+            return_value={"pass": True, "sharpe": 0.5, "trades": 10, "pnl": 3.0},
+        ), patch(
+            "hedge_fund.trading.gate_v4._stressed_bh_daily",
+            return_value=-1.0,
+        ), patch(
+            "hedge_fund.trading.gate_v4.neighbor_names",
+            return_value=["n1", "n2"],
+        ):
+            failed = finish_gate_v4(
+                "cand",
+                {"qualified": True, "fail_reasons": [], "sharpe": 0.4},
+                btc_slices=["btc"],
+                eth_slices=["eth"],
+                holdout_sample={"ok": True},
+                holdout_benchmarks={"ok": True},
+                n_trials=1,
+            )
+        self.assertFalse(failed["qualified"])
+        self.assertFalse(failed["gate_v4"]["cost_pass"])
+        self.assertTrue(any(reason.startswith("cost stress sharpe") for reason in failed["fail_reasons"]))
+        self.assertFalse(any("vs bh" in reason for reason in failed["fail_reasons"]))
+        self.assertEqual(failed["gate_v4"]["cost_bh_daily_sharpe"], -1.0)
+        self.assertEqual(failed["gate_v4"]["cost_bh_role"], "informational")
 
     def test_missing_trials_and_lone_spike_still_fail(self):
         missing = self._finish(

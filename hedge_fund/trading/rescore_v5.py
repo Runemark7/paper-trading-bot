@@ -1,9 +1,10 @@
-"""Re-label stored names whose only fail was the discovery buy-and-hold floor.
+"""Re-label stored names whose only fails were buy-and-hold comparisons.
 
-Gate v5 drops that floor. A name is re-labelled qualified only when every
+Gate v5 drops buy-and-hold from the discovery windows, the sealed holdout,
+and the cost-stress check. A name is re-labelled qualified only when every
 other stored v4 input is present and still passes. Missing inputs stay as
 they are: this module does not invent a holdout, a trial count, a DSR, a
-PBO, a neighbour fraction, or a cost-stress result.
+PBO, a neighbour fraction, or a cost-stress Sharpe.
 
 Dry-run is the default. Apply rewrites the discovery log and the tested
 index flag. It does not admit or retire champions.
@@ -32,8 +33,19 @@ from hedge_fund.trading.constants import (
 
 RESCORE_REASON = "gate_v5_buy_and_hold_informational"
 _BH_MISSING = "buy-and-hold daily sharpe missing"
+_HOLDOUT_BH_MISSING = "holdout buy-and-hold daily sharpe missing"
 _BH_BEAT = re.compile(
     r"^daily_sharpe\s+-?[\d.]+\s+<=\s+bh_daily_sharpe\s+-?[\d.]+$"
+)
+_HOLDOUT_BEAT = re.compile(
+    r"^holdout_daily_sharpe\s+-?[\d.]+\s+<=\s+bh\s+-?[\d.]+$"
+)
+# Historical cost-stress fail. The same sentence was used when stressed
+# Sharpe missed 0.30 and when daily Sharpe lost to stressed buy-and-hold.
+# Only the second case is a buy-and-hold comparison.
+_COST_BH = re.compile(
+    r"^cost stress sharpe\s+(-?[\d.]+)\s+/\s+daily\s+-?[\d.]+\s+"
+    r"vs bh\s+\S+\s+\(2x fee \+ \d+bps\)$"
 )
 _STATUSES = (
     "relabel",
@@ -45,13 +57,29 @@ _STATUSES = (
 
 
 def is_bh_decision_reason(reason: object) -> bool:
-    """True for the discovery-window B&H fail strings gate v5 drops.
+    """True when the stored fail is only a buy-and-hold comparison.
 
-    Holdout and cost-stress B&H strings are not included. Those checks
-    still fail a name.
+    Discovery-window, holdout, and stressed-cost comparisons count, including
+    the old "missing" sentences. A cost-stress sentence whose Sharpe is below
+    the floor is not one of these: that name also missed the Sharpe check.
+    A holdout sentence that also names Sharpe, trades, or sma_stack is not
+    one of these.
     """
     text = str(reason).strip()
-    return text == _BH_MISSING or _BH_BEAT.match(text) is not None
+    if text in (_BH_MISSING, _HOLDOUT_BH_MISSING):
+        return True
+    if _BH_BEAT.match(text) or _HOLDOUT_BEAT.match(text):
+        return True
+    cost = _COST_BH.match(text)
+    if cost is None:
+        return False
+    try:
+        sharpe = float(cost.group(1))
+    except ValueError:
+        return False
+    if sharpe != sharpe or sharpe in (float("inf"), float("-inf")):
+        return False
+    return sharpe >= MIN_BACKTEST_SHARPE
 
 
 def _finite(value: object) -> float | None:
@@ -117,16 +145,12 @@ def _stored_v4_problem(row: dict) -> str | None:
         _whole(holdout.get("trades")),
         _finite(holdout.get("pnl")),
         _finite(holdout.get("sma_pnl")),
-        _finite(holdout.get("daily_sharpe")),
-        _finite(holdout.get("bh_daily_sharpe")),
         _finite(block.get("dsr")),
         _whole(block.get("n_trials")),
         _finite(block.get("pbo")),
         _whole(block.get("neighbours")),
         _whole(block.get("neighbours_pass")),
         _finite(block.get("cost_sharpe")),
-        _finite(block.get("cost_daily_sharpe")),
-        _finite(block.get("cost_bh_daily_sharpe")),
     )
     if any(item is None for item in needed):
         return "missing_inputs"
@@ -151,16 +175,11 @@ def _stored_v4_problem(row: dict) -> str | None:
     h_trades = _whole(holdout.get("trades"))
     h_pnl = _finite(holdout.get("pnl"))
     h_sma = _finite(holdout.get("sma_pnl"))
-    h_dsr = _finite(holdout.get("daily_sharpe"))
-    h_bh = _finite(holdout.get("bh_daily_sharpe"))
     if (
         h_sharpe is None
         or h_sharpe < MIN_BACKTEST_SHARPE
         or h_trades is None
         or h_trades < HOLDOUT_MIN_TRADES
-        or h_dsr is None
-        or h_bh is None
-        or h_dsr <= h_bh
         or h_sma is None
         or h_pnl is None
         or h_pnl <= h_sma
@@ -181,15 +200,7 @@ def _stored_v4_problem(row: dict) -> str | None:
     if passed / neighbours + 1e-12 < NEIGHBOR_PASS_MIN_FRACTION:
         return "other_failures"
     cost_sharpe = _finite(block.get("cost_sharpe"))
-    cost_daily = _finite(block.get("cost_daily_sharpe"))
-    cost_bh = _finite(block.get("cost_bh_daily_sharpe"))
-    if (
-        cost_sharpe is None
-        or cost_sharpe < MIN_BACKTEST_SHARPE
-        or cost_daily is None
-        or cost_bh is None
-        or cost_daily <= cost_bh
-    ):
+    if cost_sharpe is None or cost_sharpe < MIN_BACKTEST_SHARPE:
         return "other_failures"
     # Referenced so a threshold edit cannot silently drop the stress size.
     if COST_STRESS_EXTRA_SLIPPAGE <= 0:
@@ -237,6 +248,12 @@ def _stamp_row(row: dict, stamp: str) -> None:
         updated["rules"] = GATE_RULES
         for key in ("holdout_pass", "dsr_pass", "pbo_pass", "perturb_pass", "cost_pass"):
             updated[key] = True
+        updated["cost_bh_role"] = BH_METRIC_ROLE
+        holdout = updated.get("holdout")
+        if isinstance(holdout, dict):
+            holdout = dict(holdout)
+            holdout["bh_role"] = BH_METRIC_ROLE
+            updated["holdout"] = holdout
         row["gate_v4"] = updated
     from hedge_fund.trading.qualify import qualification_from_record
 
@@ -299,9 +316,11 @@ def _report(
         "retired": [],
         "champions_active": active,
         "note": (
-            "Buy-and-hold is informational under gate v5. Names are re-labelled "
-            "only when every other stored v4 input passes. Missing inputs are "
-            "left unchanged. Champions are not admitted or retired."
+            "Buy-and-hold is informational under gate v5 on the discovery "
+            "windows, the holdout, and the cost-stress re-run. Names are "
+            "re-labelled only when every other stored v4 input passes, "
+            "including the stressed Sharpe floor. Missing inputs are left "
+            "unchanged. Champions are not admitted or retired."
         ),
     }
 

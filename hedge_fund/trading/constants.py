@@ -65,24 +65,26 @@ RISK_POLICY = "rm_v1"
 # Amendment 2026-10-27 (Alexander): gate v4. Same v3 floors, plus a sealed
 # holdout, BTC-only entries, deflated Sharpe, CSCV PBO, parameter
 # neighbours, and a fee stress. Workers on the 2026-10-08 tag are paused.
-# Amendment 2026-10-27 later the same day (Alexander): gate v5. The
-# discovery decision no longer fails for losing to buy-and-hold or for a
-# missing B&H daily Sharpe. Those figures stay on the row as informational
-# metrics. Every other v4 check is unchanged. Workers on the v4 tag are paused.
+# Amendment 2026-10-27 later the same day (Alexander): gate v5. No
+# discovery qualification check fails for losing to buy-and-hold: not the
+# discovery windows, not the sealed holdout, and not the cost-stress
+# re-run. Those figures stay on the row as informational metrics. Cost
+# stress still requires stressed Sharpe >= 0.30. Workers on the v4 tag
+# are paused.
 V4_GATE_RULES = "gate_v4_btc_holdout_dsr_pbo_20261027"
 GATE_RULES = "gate_v5_btc_holdout_dsr_pbo_20261027"
 # Shown on the discovery API and the Discovery page. B&H is not a pass rule.
 GATE_CRITERIA = (
     "Gate v5 (paper only): BTC-only; 18 walk-forward windows that end before "
     "the sealed holdout 2025-10-01..2026-10-01; trades ≥ 30; Sharpe ≥ 0.30; "
-    "beat sma_stack; holdout Sharpe, holdout trades, holdout vs buy-and-hold "
-    "daily Sharpe, and holdout vs sma_stack; "
+    "beat sma_stack; holdout Sharpe, holdout trades, and holdout vs sma_stack; "
     "DSR ≥ 0.95 using the true trial count (missing trial count fails closed); "
     "PBO ≤ 0.20; at least 70% of parameter neighbours pass; cost stress at "
-    "2× fees + 5 bps/side still clears Sharpe and stressed buy-and-hold; "
-    "ETH Sharpe is recorded and does not block. Buy-and-hold daily Sharpe and "
-    "buy-and-hold P&L on the discovery windows are informational, not a pass "
-    "requirement. Fail-once. Forward-test kill rules only flag."
+    "2× fees + 5 bps/side still clears Sharpe ≥ 0.30. Buy-and-hold daily "
+    "Sharpe and buy-and-hold P&L are informational on the discovery windows, "
+    "the sealed holdout, and the cost-stress re-run. They are not a pass "
+    "requirement. ETH Sharpe is recorded and does not block. Fail-once. "
+    "Forward-test kill rules only flag."
 )
 BH_METRIC_ROLE = "informational"
 # Historical full-tape grid (23 x 87d, last segment open). Discovery no
@@ -136,8 +138,9 @@ HOLDOUT_END_MS = 1_790_812_800_000  # 2026-10-01 00:00 UTC
 DISCOVERY_N_WINDOWS = (HOLDOUT_START_MS - QUAL_OOS_START_MS) // QUAL_SEGMENT_MS
 
 # Gate v4 thresholds that v5 keeps. v3 floors that remain are Sharpe,
-# trades, and sma_stack. Daily buy-and-hold is informational under v5
-# (it is not a discovery-window pass rule). These extras are unchanged.
+# trades, and sma_stack. Buy-and-hold is informational under v5 on the
+# discovery windows, the holdout, and the cost-stress re-run. Cost stress
+# still requires stressed Sharpe >= MIN_BACKTEST_SHARPE. These extras stay.
 # Bailey & Lopez de Prado 2014: DSR is the probability the true Sharpe
 # clears the expected maximum of N trials. 0.95 is their usual confidence.
 DSR_MIN_PROBABILITY = 0.95

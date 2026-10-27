@@ -109,6 +109,70 @@ def _fixture() -> list[dict]:
                 "holdout": _holdout(daily=0.1, bh=0.4),
             },
         ),
+        _row(
+            "holdout_only",
+            dsr=0.96,
+            daily=0.4,
+            fail_reasons=["holdout_daily_sharpe 0.10 <= bh 0.40"],
+            gate_v4={
+                "dsr": 0.96,
+                "n_trials": 100,
+                "pbo": 0.1,
+                "neighbours": 10,
+                "neighbours_pass": 8,
+                "cost_sharpe": 0.4,
+                "cost_daily_sharpe": 0.1,
+                "cost_bh_daily_sharpe": 0.8,
+                "holdout": _holdout(daily=0.1, bh=0.4),
+            },
+        ),
+        _row(
+            "stress_only",
+            dsr=0.96,
+            daily=0.2,
+            fail_reasons=["cost stress sharpe 0.40 / daily 0.10 vs bh 0.80 (2x fee + 5bps)"],
+            gate_v4={
+                "dsr": 0.96,
+                "n_trials": 100,
+                "pbo": 0.1,
+                "neighbours": 10,
+                "neighbours_pass": 8,
+                "cost_sharpe": 0.4,
+                "cost_daily_sharpe": 0.1,
+                "cost_bh_daily_sharpe": 0.8,
+                "holdout": _holdout(),
+            },
+        ),
+        _row(
+            "stress_floor",
+            fail_reasons=["cost stress sharpe 0.10 / daily 0.50 vs bh 0.10 (2x fee + 5bps)"],
+            gate_v4={
+                "dsr": 0.99,
+                "n_trials": 100,
+                "pbo": 0.1,
+                "neighbours": 10,
+                "neighbours_pass": 8,
+                "cost_sharpe": 0.1,
+                "cost_daily_sharpe": 0.5,
+                "cost_bh_daily_sharpe": 0.1,
+                "holdout": _holdout(),
+            },
+        ),
+        _row(
+            "holdout_mixed",
+            fail_reasons=["holdout_daily_sharpe 0.10 <= bh 0.40; holdout_sharpe 0.10 < 0.3"],
+            gate_v4={
+                "dsr": 0.99,
+                "n_trials": 100,
+                "pbo": 0.1,
+                "neighbours": 10,
+                "neighbours_pass": 8,
+                "cost_sharpe": 0.4,
+                "cost_daily_sharpe": 0.5,
+                "cost_bh_daily_sharpe": 0.1,
+                "holdout": _holdout(daily=0.1, bh=0.4),
+            },
+        ),
         _row("already", fail_reasons=[], qualified=True),
         _row(
             "done",
@@ -153,14 +217,15 @@ class RescoreTests(unittest.TestCase):
         self.assertFalse(report["applied"])
         self.assertIsNone(report["rescored_at"])
         self.assertEqual(report["counts"], {
-            "relabel": 3,
+            "relabel": 6,
             "already_rescored": 1,
             "already_qualified": 1,
             "missing_inputs": 1,
-            "other_failures": 2,
+            "other_failures": 3,
         })
-        self.assertEqual(report["relabel_names"], ["beta", "alpha", "gamma"])
-        self.assertEqual([item["strategy"] for item in report["top"]], ["beta", "alpha", "gamma"])
+        ranked = ["beta", "alpha", "holdout_loss", "gamma", "holdout_only", "stress_only"]
+        self.assertEqual(report["relabel_names"], ranked)
+        self.assertEqual([item["strategy"] for item in report["top"]], ranked)
         self.assertEqual(report["admitted"], [])
         self.assertEqual(report["retired"], [])
         self.assertEqual(report["champions_active"], 2)
@@ -205,10 +270,12 @@ class RescoreTests(unittest.TestCase):
             self.assertEqual(row["rescore_from_rules"], V4_GATE_RULES)
             self.assertEqual(row["bh_daily_sharpe_role"], "informational")
             self.assertTrue(row["gate_v4"]["passed"])
+            self.assertEqual(row["gate_v4"]["cost_bh_role"], "informational")
+            self.assertEqual(row["gate_v4"]["holdout"]["bh_role"], "informational")
         self.assertFalse(second["applied"])
         self.assertFalse(second["dry_run"])
         self.assertEqual(second["counts"]["relabel"], 0)
-        self.assertEqual(second["counts"]["already_rescored"], 4)
+        self.assertEqual(second["counts"]["already_rescored"], 7)
         for name in ("alpha", "beta", "gamma"):
             self.assertEqual(again[name]["rescored_at"], "2026-10-27T22:10:00+00:00")
         self.assertEqual(again["done"]["rescored_at"], "2026-10-27T21:00:00+00:00")
@@ -233,7 +300,31 @@ class RescoreTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertTrue(report["dry_run"])
         self.assertFalse(report["applied"])
-        self.assertEqual(report["relabel_count"], 3)
+        self.assertEqual(report["relabel_count"], 6)
+
+
+class BhReasonTests(unittest.TestCase):
+    def test_only_buy_and_hold_comparisons_match(self):
+        from hedge_fund.trading.rescore_v5 import is_bh_decision_reason
+
+        self.assertTrue(is_bh_decision_reason("buy-and-hold daily sharpe missing"))
+        self.assertTrue(is_bh_decision_reason("daily_sharpe 0.40 <= bh_daily_sharpe 1.20"))
+        self.assertTrue(is_bh_decision_reason("holdout buy-and-hold daily sharpe missing"))
+        self.assertTrue(is_bh_decision_reason("holdout_daily_sharpe 0.10 <= bh 0.40"))
+        self.assertTrue(is_bh_decision_reason(
+            "cost stress sharpe 0.40 / daily 0.10 vs bh 0.80 (2x fee + 5bps)"
+        ))
+        self.assertTrue(is_bh_decision_reason(
+            "cost stress sharpe 0.30 / daily 0.10 vs bh missing (2x fee + 5bps)"
+        ))
+        self.assertFalse(is_bh_decision_reason(
+            "cost stress sharpe 0.10 / daily 0.50 vs bh 0.10 (2x fee + 5bps)"
+        ))
+        self.assertFalse(is_bh_decision_reason(
+            "holdout_daily_sharpe 0.10 <= bh 0.40; holdout_sharpe 0.10 < 0.3"
+        ))
+        self.assertFalse(is_bh_decision_reason("oos_trades 10 < 30"))
+        self.assertFalse(is_bh_decision_reason("cost stress sharpe 0.10 < 0.3 (2x fee + 5bps)"))
 
 
 class RescoreHttpTests(unittest.TestCase):
@@ -292,7 +383,9 @@ class RescoreHttpTests(unittest.TestCase):
                     dry_body = json.loads(urlopen(dry, timeout=3).read().decode())
                     self.assertTrue(dry_body["dry_run"])
                     self.assertFalse(dry_body["applied"])
-                    self.assertEqual(dry_body["relabel_names"], ["beta", "alpha", "gamma"])
+                    self.assertEqual(dry_body["relabel_names"], [
+                        "beta", "alpha", "holdout_loss", "gamma", "holdout_only", "stress_only",
+                    ])
 
                     explicit = Request(
                         f"http://127.0.0.1:{port}/api/discovery/rescore",

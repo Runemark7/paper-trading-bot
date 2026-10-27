@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """Re-score stored discovery rows under gate v5. Dry-run unless --apply.
 
+A name is eligible when every stored fail is a buy-and-hold comparison
+(discovery window, holdout, or stressed cost) and every other stored v4
+input still passes. Cost-stress Sharpe below 0.30 is not one of those
+comparisons.
+
 Prints a JSON report: how many names would be re-labelled, and the top
 names by deflated Sharpe then daily Sharpe. Does not admit or retire
 champions. Does not read or print secrets.
