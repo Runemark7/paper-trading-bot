@@ -1,0 +1,58 @@
+# Append closed Binance 5m candles to Postgres every 5 minutes.
+# The secret paperbot-db / DATABASE_URL is created out of band
+# (TLS required, host on a private WireGuard address). Do not commit the URL.
+# Pool is 1 connection; the process exits and closes it. Web uses 2, cycle 1.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: paperbot-candle-updater
+  namespace: trading
+  labels:
+    app: paperbot-candle-updater
+spec:
+  schedule: "*/5 * * * *"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 180
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 240
+      ttlSecondsAfterFinished: 600
+      template:
+        metadata:
+          labels:
+            app: paperbot-candle-updater
+        spec:
+          restartPolicy: Never
+          imagePullSecrets:
+            - name: ghcr-pull-secret
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+            fsGroup: 1000
+          containers:
+            - name: updater
+              image: ghcr.io/runemark7/paper-trading-bot/backend:latest
+              imagePullPolicy: IfNotPresent
+              command: ["python", "-m", "hedge_fund.data.candle_update"]
+              env:
+                - name: PAPERBOT_DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: paperbot-db
+                      key: DATABASE_URL
+                - name: PAPERBOT_DB_APP_NAME
+                  value: paperbot-candle-update
+                - name: PAPERBOT_DB_POOL_MAX
+                  value: "1"
+                - name: PAPER_ONLY
+                  value: "1"
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 128Mi
+                limits:
+                  cpu: 500m
+                  memory: 256Mi

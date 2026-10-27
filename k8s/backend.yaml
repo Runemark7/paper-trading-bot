@@ -46,6 +46,17 @@ spec:
                   name: paper-discovery-ingest
                   key: token
                   optional: true
+            # Shared 5m candle store. Secret is created out of band
+            # (TLS required, WireGuard host). Do not commit the URL.
+            - name: PAPERBOT_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: paperbot-db
+                  key: DATABASE_URL
+            - name: PAPERBOT_DB_APP_NAME
+              value: paperbot-web
+            - name: PAPERBOT_DB_POOL_MAX
+              value: "2"
           livenessProbe:
             httpGet:
               path: /health
@@ -129,6 +140,15 @@ spec:
               value: "0"
             - name: PAPER_DISCOVERY_MODE
               value: "off"
+            - name: PAPERBOT_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: paperbot-db
+                  key: DATABASE_URL
+            - name: PAPERBOT_DB_APP_NAME
+              value: paperbot-cycle
+            - name: PAPERBOT_DB_POOL_MAX
+              value: "1"
           resources:
             requests:
               cpu: 100m

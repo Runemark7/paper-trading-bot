@@ -62,8 +62,9 @@ python -m pip install -e .
 python scripts/fetch_history.py
 ```
 
-`crypto_history_5m.json` must exist under `state\`. Fetch talks to public
-Binance; it does not need the cluster. Default symbols are **BTC/USDT and
+Claim mode does **not** need `crypto_history_5m.json` (prod serves the
+shared tape). The fetch above is for `--local-plan` / offline evals.
+Fetch talks to public Binance; it does not need the cluster. Default symbols are **BTC/USDT and
 ETH/USDT only** (no SOL/XRP — discovery/qual tape is BTC+ETH). Override
 with `HIST_SYMBOLS` (comma-separated ccxt symbols) only if you need extra
 pairs. Default bars track
@@ -129,7 +130,9 @@ locally only.
 No PVC copy and no `kubectl port-forward`. Default is **claim mode**: prod
 leases names, so a Linux laptop and jensa can run at the same time without
 evaluating the same name. The worker does not need the recipe or a copy of
-the discovery log — only the URL, the token, and `crypto_history_5m.json`.
+the discovery log — only the URL and the token. It downloads the shared
+tape from prod (`GET /api/discovery/history`). No database credentials
+and no `crypto_history_5m.json` placeholder.
 
 1. Worker polls `GET /api/discovery/summary?compact=1` for the Start/Stop flag.
 2. `POST /api/discovery/claim` `{worker_id, n, parallel}` with
@@ -150,8 +153,9 @@ the discovery log — only the URL, the token, and `crypto_history_5m.json`.
    lock. Skip uses the names map, not the capped display log, plus
    `near_duplicate_key`. Claim and ingest read the published lift
    snapshot and do not fit it.
-3. Evaluates that batch (default size = `--workers`) against local
-   `crypto_history_5m.json`.
+3. Evaluates that batch (default size = `--workers`) against the shared
+   tape downloaded from prod (installed under `live_tape/`). `--local-plan`
+   still reads local `crypto_history_5m.json`.
 4. POSTs each finished evaluation to
    `https://trading.runevibe.se/api/discovery/ingest` with
    `X-Discovery-Token` and `heartbeat.worker_id`. Ingest clears that name's

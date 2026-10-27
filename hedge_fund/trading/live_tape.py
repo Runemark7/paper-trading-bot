@@ -13,6 +13,12 @@ with the same timeout and binance → binanceus fallback as the chart
 (``hedge_fund.web.candles.fetch_chunk``). If ``crypto_history_5m.json``
 is already on the volume, it is imported once instead of re-downloaded.
 
+When ``PAPERBOT_DATABASE_URL`` is set and the candle store covers the
+canonical tape, the signal slice is read from Postgres instead. The
+5-minute updater (and a short append at the start of this cycle) owns
+new closed bars. The file tape remains the fallback while the URL is
+unset or the store is not caught up.
+
 Signals are computed on the trailing last qualification window
 (``live_signal_eval_bars()`` = ``QUAL_WINDOW_BARS + QUAL_WARMUP_BARS``),
 not on the whole multi-year file. That is the series the last
@@ -410,6 +416,36 @@ def ensure_symbol(
     return arr
 
 
+def _db_selected() -> bool:
+    if not os.environ.get("PAPERBOT_DATABASE_URL", "").strip():
+        return False
+    try:
+        from hedge_fund.data.candle_store import candle_store_selected
+
+        return bool(candle_store_selected())
+    except Exception as exc:
+        print(f"[live tape] candle store unavailable, using files: {exc}", flush=True)
+        return False
+
+
+def _fetch_adapter(source):
+    """ccxt page function, or None to use the store's own public client."""
+    exchange = getattr(source, "exchange", None)
+    fetch_ohlcv = getattr(exchange, "fetch_ohlcv", None) if exchange is not None else None
+    if fetch_ohlcv is None:
+        return None
+
+    def _fetch(symbol, since_ms, limit):
+        return fetch_ohlcv(
+            symbol,
+            timeframe=QUAL_TIMEFRAME,
+            since=int(since_ms),
+            limit=int(limit),
+        )
+
+    return _fetch
+
+
 def ensure_live_tape(
     *,
     source=None,
@@ -419,6 +455,24 @@ def ensure_live_tape(
     max_pages: int | None = None,
 ) -> dict:
     """Import JSON if present, then incremental-append / backfill both symbols."""
+    if _db_selected():
+        from hedge_fund.data.candle_store import quality_summary
+
+        quality = quality_summary()
+        out: dict[str, dict] = {}
+        for sym in SYMBOLS:
+            row = (quality.get("symbols") or {}).get(sym) or {}
+            out[sym] = {
+                "bars": int(row.get("bars") or 0),
+                "last_bar_time": row.get("last_bar_time"),
+            }
+        target = qual_store_bars() if target_bars is None else int(target_bars)
+        return {
+            "target_bars": target,
+            "symbols": out,
+            "paper_only": True,
+            "store": "candles",
+        }
     root = tape_dir(state_dir)
     root.mkdir(parents=True, exist_ok=True)
     target = qual_store_bars() if target_bars is None else int(target_bars)
@@ -449,6 +503,21 @@ def signal_candles(
 ) -> list[Candle]:
     """Trailing slice used for live signals. Already the qual last window when full."""
     want = live_signal_eval_bars() if n is None else int(n)
+    if _db_selected():
+        from hedge_fund.data.candle_store import clear_ready, tail_candles
+
+        try:
+            bars = tail_candles(symbol, want)
+        except Exception as exc:
+            print(
+                f"[live tape] candle read {symbol} failed, using file tape: {exc}",
+                flush=True,
+            )
+        else:
+            if bars:
+                return bars
+            print(f"[live tape] candle store has no {symbol} bars; using file tape", flush=True)
+            clear_ready()
     return array_to_candles(load_tail(symbol, want, state_dir))
 
 
@@ -477,6 +546,27 @@ def load_cycle_klines(
 ) -> dict[str, list[Candle] | None]:
     """Signal-slice klines for both symbols. ``refresh`` appends/backfills first."""
     root = tape_dir(state_dir)
+    if _db_selected():
+        if refresh:
+            try:
+                from hedge_fund.data.candle_sync import update_incremental
+
+                update_incremental(fetch=_fetch_adapter(source), max_pages=3, pause_s=0.0)
+            except Exception as exc:
+                print(f"[live tape] candle update failed: {exc}", flush=True)
+        try:
+            out: dict[str, list[Candle] | None] = {}
+            empty = True
+            for sym in SYMBOLS:
+                bars = signal_candles(sym, state_dir=root)
+                if bars:
+                    empty = False
+                out[sym] = bars or None
+            if not empty:
+                return out
+            print("[live tape] candle store empty; using file tape", flush=True)
+        except Exception as exc:
+            print(f"[live tape] candle read failed, using file tape: {exc}", flush=True)
     if refresh:
         try:
             ensure_live_tape(
@@ -545,51 +635,60 @@ def refresh_cycle_market(price_source, *, state_dir: Path, **tape_kw) -> CachedM
     return CachedMarket(prices, clean)
 
 
-def _symbol_health(symbol: str, state_dir: Path) -> dict:
-    path = tape_path(symbol, state_dir)
-    base = {
+def _empty_symbol() -> dict:
+    return {
         "bars": 0,
         "first_bar_time": None,
         "last_bar_time": None,
+        "last_candle_time": None,
         "short": True,
+        "gap_count": 0,
+        "known_gap_count": 0,
+        "duplicates": 0,
+        "monotonic": True,
+        "gaps": [],
     }
+
+
+def _symbol_health(symbol: str, state_dir: Path) -> dict:
+    path = tape_path(symbol, state_dir)
     if not path.exists():
-        return base
+        return _empty_symbol()
     arr = np.load(path, mmap_mode="r")
     try:
         n = int(arr.shape[0])
         if n <= 0:
-            return base
+            return _empty_symbol()
         first = int(arr[0]["ts"])
         last = int(arr[-1]["ts"])
+        ts = np.array(arr["ts"], dtype=np.int64, copy=True)
     finally:
         del arr
+    from hedge_fund.data.candle_quality import summarize_timestamp_array
+
+    summary = summarize_timestamp_array(ts)
+    last_iso = _iso_ms(last)
     return {
         "bars": n,
         "first_bar_time": _iso_ms(first),
-        "last_bar_time": _iso_ms(last),
+        "last_bar_time": last_iso,
+        "last_candle_time": last_iso,
         "short": n < live_signal_eval_bars(),
+        "gap_count": summary["gap_count"],
+        "known_gap_count": summary["known_gap_count"],
+        "duplicates": summary["duplicates"],
+        "monotonic": summary["monotonic"],
+        "gaps": summary["gaps"],
     }
 
 
-def live_history_health(state_dir: Path | None = None) -> dict:
-    """Read-only tape summary for /api/status and /api/summary. No Binance."""
-    root = tape_dir(state_dir)
-    symbols = {}
-    try:
-        for sym in SYMBOLS:
-            symbols[sym] = _symbol_health(sym, root)
-    except Exception as exc:  # noqa: BLE001 — status must still render
-        return {
-            "paper_only": True,
-            "timeframe": QUAL_TIMEFRAME,
-            "error": str(exc),
-            "symbols": symbols,
-            "target_bars": qual_store_bars(),
-            "signal_eval_bars": live_signal_eval_bars(),
-            "minimum_bars": minimum_store_bars(),
-            "store": "live_tape",
-        }
+def _history_from_symbols(symbols: dict, *, store: str) -> dict:
+    lasts = []
+    for sym in SYMBOLS:
+        row = symbols.get(sym) or _empty_symbol()
+        symbols[sym] = row
+        if row.get("last_candle_time"):
+            lasts.append(row["last_candle_time"])
     return {
         "paper_only": True,
         "timeframe": QUAL_TIMEFRAME,
@@ -597,5 +696,90 @@ def live_history_health(state_dir: Path | None = None) -> dict:
         "target_bars": qual_store_bars(),
         "signal_eval_bars": live_signal_eval_bars(),
         "minimum_bars": minimum_store_bars(),
-        "store": "live_tape",
+        "store": store,
+        "gap_count": sum(int((symbols.get(sym) or {}).get("gap_count") or 0) for sym in SYMBOLS),
+        "known_gap_count": sum(
+            int((symbols.get(sym) or {}).get("known_gap_count") or 0) for sym in SYMBOLS
+        ),
+        "duplicates": sum(int((symbols.get(sym) or {}).get("duplicates") or 0) for sym in SYMBOLS),
+        "monotonic": all(bool((symbols.get(sym) or {}).get("monotonic", True)) for sym in SYMBOLS),
+        "last_candle_time": min(lasts) if lasts else None,
     }
+
+
+def _db_history_payload() -> dict:
+    from hedge_fund.data.candle_store import quality_summary
+
+    quality = quality_summary()
+    symbols = {}
+    for sym in SYMBOLS:
+        row = (quality.get("symbols") or {}).get(sym) or {}
+        n = int(row.get("bars") or 0)
+        symbols[sym] = {
+            "bars": n,
+            "first_bar_time": row.get("first_bar_time"),
+            "last_bar_time": row.get("last_bar_time"),
+            "last_candle_time": row.get("last_candle_time"),
+            "short": n < live_signal_eval_bars(),
+            "gap_count": int(row.get("gap_count") or 0),
+            "known_gap_count": int(row.get("known_gap_count") or 0),
+            "duplicates": int(row.get("duplicates") or 0),
+            "monotonic": bool(row.get("monotonic", True)),
+            "gaps": list(row.get("gaps") or []),
+        }
+    payload = _history_from_symbols(symbols, store="candles")
+    payload["gap_count"] = int(quality.get("gap_count") or 0)
+    payload["known_gap_count"] = int(quality.get("known_gap_count") or 0)
+    payload["duplicates"] = int(quality.get("duplicates") or 0)
+    payload["monotonic"] = bool(quality.get("monotonic"))
+    payload["last_candle_time"] = quality.get("last_candle_time")
+    return payload
+
+
+def _candle_store_block(serving: str) -> dict:
+    block = {
+        "configured": False,
+        "ready": False,
+        "serving": serving,
+        "gap_count": None,
+        "known_gap_count": None,
+        "last_candle_time": None,
+        "monotonic": None,
+        "duplicates": None,
+        "error": None,
+    }
+    if not os.environ.get("PAPERBOT_DATABASE_URL", "").strip():
+        return block
+    block["configured"] = True
+    try:
+        from hedge_fund.data.candle_store import quality_summary, store_is_ready
+
+        quality = quality_summary()
+        block["ready"] = bool(store_is_ready())
+        block["gap_count"] = quality["gap_count"]
+        block["known_gap_count"] = quality["known_gap_count"]
+        block["last_candle_time"] = quality["last_candle_time"]
+        block["monotonic"] = quality["monotonic"]
+        block["duplicates"] = quality["duplicates"]
+    except Exception as exc:  # noqa: BLE001 — status must still render
+        block["error"] = str(exc)
+    return block
+
+
+def live_history_health(state_dir: Path | None = None) -> dict:
+    """Read-only tape summary for /api/status and /api/summary. No Binance."""
+    root = tape_dir(state_dir)
+    try:
+        if _db_selected():
+            payload = _db_history_payload()
+        else:
+            symbols = {sym: _symbol_health(sym, root) for sym in SYMBOLS}
+            payload = _history_from_symbols(symbols, store="live_tape")
+    except Exception as exc:  # noqa: BLE001 — status must still render
+        payload = _history_from_symbols(
+            {sym: _empty_symbol() for sym in SYMBOLS},
+            store="live_tape",
+        )
+        payload["error"] = str(exc)
+    payload["candle_store"] = _candle_store_block(payload.get("store") or "live_tape")
+    return payload
