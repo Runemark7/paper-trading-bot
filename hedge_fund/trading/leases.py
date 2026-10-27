@@ -97,6 +97,9 @@ def load_refill_status() -> dict[str, Any]:
         "generated_last": 0,
         "exhausted": False,
         "strategy": "recipe_order",
+        "random": 0,
+        "paired": 0,
+        "exploit": 0,
     }
     path = refill_status_path()
     if not path.exists():
@@ -108,7 +111,7 @@ def load_refill_status() -> dict[str, Any]:
     if not isinstance(data, dict):
         return dict(default)
     source = data.get("source")
-    if source not in ("recipe", "densify"):
+    if source not in ("recipe", "densify", "random", "paired", "mixed"):
         source = "recipe"
     try:
         generated = int(data.get("generated_last") or 0)
@@ -122,7 +125,17 @@ def load_refill_status() -> dict[str, Any]:
         "generated_last": generated,
         "exhausted": bool(data.get("exhausted")),
         "strategy": strategy,
+        "random": _nonneg(data.get("random")),
+        "paired": _nonneg(data.get("paired")),
+        "exploit": _nonneg(data.get("exploit")),
     }
+
+
+def _nonneg(value: object) -> int:
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
 
 
 def save_refill_status(status: dict) -> None:
@@ -130,7 +143,7 @@ def save_refill_status(status: dict) -> None:
     path = refill_status_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     source = status.get("source")
-    if source not in ("recipe", "densify"):
+    if source not in ("recipe", "densify", "random", "paired", "mixed"):
         source = "recipe"
     strategy = status.get("strategy")
     if strategy not in ("lift_ucb", "recipe_order"):
@@ -140,6 +153,9 @@ def save_refill_status(status: dict) -> None:
         "generated_last": int(status.get("generated_last") or 0),
         "exhausted": bool(status.get("exhausted")),
         "strategy": strategy,
+        "random": _nonneg(status.get("random")),
+        "paired": _nonneg(status.get("paired")),
+        "exploit": _nonneg(status.get("exploit")),
         "paper_only": True,
         "updated_at": _iso(datetime.now(timezone.utc)),
     }
@@ -292,15 +308,18 @@ def _prune_workers(state: dict, now: datetime) -> None:
 
 
 def _mint_unlocked(taken: set[str], n: int) -> tuple[list[str], dict]:
-    """Recipe first. Densify only the shortfall. Logs if nothing can be minted.
+    """Random explorer, then paired swaps, then recipe/densify.
 
-    Uses the published lift snapshot. Does not fit and does not schedule a
-    fit; that runs on a background thread at most once every five minutes.
-    The OOS gate is not involved.
+    The recipe and densify ranking is unchanged. Uses the published lift
+    snapshot. Does not fit and does not schedule a fit; that runs on a
+    background thread at most once every five minutes. The OOS gate is
+    not involved. ``next_refill_batch`` is the local binding so tests can
+    still stub the exploit stream.
     """
     from hedge_fund.trading.atom_lift import lift_model_for_mint
     from hedge_fund.trading.discovery_results import load_seed_view
-    from hedge_fund.trading.tested_index import load_tested_metrics
+    from hedge_fund.trading.explorer import mix_refill
+    from hedge_fund.trading.tested_index import load_tested_index, load_tested_metrics
 
     model = lift_model_for_mint()
     metrics = load_tested_metrics()
@@ -308,37 +327,32 @@ def _mint_unlocked(taken: set[str], n: int) -> tuple[list[str], dict]:
     # "results were consulted", so old 8-window passes are not seeds
     # just because they are qualified. Does not scan the jsonl.
     results = load_seed_view()
+    # ensure_tested_index already ran in this claim. A second merge is
+    # not required; the bool map is the parent pool and the densify index.
+    tested = load_tested_index()
     want = max(0, int(n))
-    recipe = next_refill_batch(taken_names=taken, n=want, lift=model) if want else []
-    recipe = [name for name in recipe if not mint_block_reason(name)]
-    names = list(recipe)
-    exhausted = False
-    source = "recipe"
-    if len(names) < want:
-        more, ran_out = next_densify_batch(
-            taken_names=set(taken) | set(names),
-            n=want - len(names),
-            lift=model,
-            metrics=metrics,
-            results=results,
+    names, meta = mix_refill(
+        taken_names=taken,
+        n=want,
+        lift=model,
+        metrics=metrics,
+        results=results,
+        parents=list(tested),
+        index=tested,
+        recipe_batch=next_refill_batch,
+        densify_batch=next_densify_batch,
+    )
+    names = [name for name in names if not mint_block_reason(name)]
+    if meta.get("exhausted"):
+        logger.warning(
+            "discovery refill exhausted: wanted %s names, random produced %s, "
+            "paired produced %s, exploit produced %s",
+            want,
+            meta.get("random"),
+            meta.get("paired"),
+            meta.get("exploit"),
         )
-        more = [name for name in more if not mint_block_reason(name)]
-        names.extend(more)
-        source = "densify"
-        exhausted = bool(ran_out) and len(names) < want
-        if exhausted:
-            logger.warning(
-                "discovery refill exhausted: wanted %s names, recipe produced %s, densify produced %s",
-                want,
-                len(recipe),
-                len(more),
-            )
-    return names, {
-        "source": source,
-        "generated_last": len(names),
-        "exhausted": exhausted,
-        "strategy": model.strategy,
-    }
+    return names, meta
 
 
 def _claimable_names(state: dict, n: int) -> tuple[list[str], list[str], dict]:

@@ -235,10 +235,59 @@ export interface DiscoveryCounts {
 }
 
 export interface DiscoveryRefill {
-  source: "recipe" | "densify" | string;
+  source: "recipe" | "densify" | "random" | "paired" | "mixed" | string;
   eligible: number;
   generated_last: number;
   exhausted: boolean;
+  strategy?: string;
+  random?: number;
+  paired?: number;
+  exploit?: number;
+}
+
+/** One family or parameter-bucket row from GET /api/discovery/blocks. */
+export interface BlockEffect {
+  block: string;
+  level: "family" | "bucket" | string;
+  n_with: number;
+  n_without: number;
+  mean_daily_sharpe_with: number | null;
+  mean_daily_sharpe_without: number | null;
+  mean_trade_sharpe_with: number | null;
+  mean_trade_sharpe_without: number | null;
+  mean_trades_with: number | null;
+  mean_trades_without: number | null;
+  pass_rate_with: number | null;
+  pass_rate_without: number | null;
+  depth_controlled_daily_sharpe: number | null;
+  method: string;
+}
+
+/** Child minus parent on one swap axis. Zeros are counted and left out of the sign test. */
+export interface PairedAxisEffect {
+  axis: string;
+  n: number;
+  n_positive: number;
+  n_negative: number;
+  n_zero: number;
+  mean_daily_sharpe_delta: number | null;
+  ci95_low: number | null;
+  ci95_high: number | null;
+  sign_test_p: number | null;
+}
+
+/** Exploratory marginal effects. Does not change the gate. */
+export interface BlockReport {
+  paper_only: boolean;
+  exploratory: boolean;
+  changes_gate: boolean;
+  label: string;
+  gate_rules: string;
+  n_results: number;
+  method: string;
+  families: BlockEffect[];
+  buckets: BlockEffect[];
+  paired: PairedAxisEffect[];
 }
 
 export type DiscoveryFarmStatus = "running" | "paused" | "worker_idle" | "worker_unseen" | string;

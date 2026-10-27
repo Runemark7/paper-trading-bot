@@ -1,3 +1,4 @@
+import BlockEffects from "../status/BlockEffects";
 import DiscoveryBuckets from "../status/DiscoveryBuckets";
 import FarmControl from "../status/FarmControl";
 
@@ -12,6 +13,7 @@ export default function Discovery() {
       </p>
       <FarmControl />
       <DiscoveryBuckets />
+      <BlockEffects />
     </div>
   );
 }

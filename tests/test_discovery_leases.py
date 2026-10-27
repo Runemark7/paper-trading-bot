@@ -109,7 +109,12 @@ class LeaseQueueTests(unittest.TestCase):
         universe = _names(2)
         t0 = datetime(2026, 10, 7, 12, 0, tzinfo=timezone.utc)
         with tempfile.TemporaryDirectory() as tmp:
-            with patch.dict(os.environ, self._env(Path(tmp))):
+            env = {
+                **self._env(Path(tmp)),
+                "DISCOVERY_RANDOM_SHARE": "0",
+                "DISCOVERY_PAIRED_SHARE": "0",
+            }
+            with patch.dict(os.environ, env):
                 with patch(
                     "hedge_fund.trading.leases.discovery_universe",
                     return_value=universe,
