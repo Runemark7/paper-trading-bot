@@ -106,15 +106,23 @@ class PromoteAndIngestTests(unittest.TestCase):
                 save_pool({"champions": [_champ(f"n{i}") for i in range(4)], "synced_until": ""})
                 first = ingest_discovery_payload({"evaluations": [_eval("seat_me", qualified=True)]})
                 second = ingest_discovery_payload({"evaluations": [_eval("wait_me", qualified=True)]})
+                seated = ingest_discovery_payload({"evaluations": [], "force_admit": ["seat_me"]})
+                refused = ingest_discovery_payload({"evaluations": [], "force_admit": ["wait_me"]})
                 names = [c["name"] for c in load_pool()["champions"]]
                 logged = {row["strategy"]: row["qualified"] for row in load_discovery_log()}
-        self.assertEqual(first["admitted"], ["seat_me"])
+        self.assertEqual(first["admitted"], [])
+        self.assertEqual(first["proposed"], ["seat_me"])
         self.assertEqual(second["admitted"], [])
+        self.assertEqual(second["proposed"], ["wait_me"])
+        self.assertEqual(seated["force_admitted"], ["seat_me"])
+        self.assertEqual(seated["admitted"], ["seat_me"])
+        self.assertEqual(refused["admitted"], [])
         self.assertIn(
             {"strategy": "wait_me", "reason": "forward champion cap is 5; 5 active; admission refused"},
-            second["skipped"],
+            refused["skipped"],
         )
         self.assertEqual(names, ["n0", "n1", "n2", "n3", "seat_me"])
+        self.assertTrue(logged["seat_me"])
         self.assertTrue(logged["wait_me"])
 
     def test_force_admit_refuses_before_it_rewrites_the_row(self):
@@ -187,6 +195,7 @@ class CandidateRankingTests(unittest.TestCase):
         for row in ranked["proposed"]:
             self.assertTrue(row["proposed"])
             self.assertFalse(row["admitted"])
+            self.assertEqual(row["status"], "proposed, awaiting approval")
             self.assertEqual(row["bh_role"], "informational")
         self.assertEqual(status["forward_champion_cap"], 5)
         self.assertEqual(status["forward_candidates"]["proposed"], ranked["proposed"])

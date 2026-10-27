@@ -51,6 +51,27 @@ def trial_census() -> dict:
         "n_ops_park": n_ops,
         "n_backtested": n_backtested,
         # The name being evaluated is one more trial than the index.
+        # A retest of a name already in ``n_backtested`` uses that count
+        # and does not add one. See ``n_trials_for_retest``.
         "n_trials": n_backtested + 1,
         "trade_sharpe_std": None if std is None else round(float(std), 6),
     }
+
+
+def n_trials_for_retest(census: object) -> int | None:
+    """Trial count for a name that is already in the census.
+
+    ``trial_census()["n_trials"]`` is ``n_backtested + 1`` because a fresh
+    candidate is not in the index yet. A retest of a stored name is already
+    inside ``n_backtested``. Using the fresh count would count it twice.
+    ``None`` when the census has no backtested names: DSR then fails closed
+    instead of inventing N=1.
+    """
+    if not isinstance(census, dict):
+        return None
+    raw = census.get("n_backtested")
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        return None
+    if raw < 1:
+        return None
+    return raw

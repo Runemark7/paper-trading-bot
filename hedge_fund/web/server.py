@@ -21,7 +21,8 @@ A small, dependency-free HTTP server (stdlib only) that exposes:
   GET /api/discovery/blocks -> exploratory atom-block effects (cached; does not change the gate)
   GET /api/discovery/history -> canonical 5m tape hash + data_end (ingest token)
   GET /api/discovery/history/tape -> that tape as a compressed npz (ingest token)
-  POST /api/discovery/ingest -> Windows worker: append evals + admit / force_admit (shared secret)
+  POST /api/discovery/ingest -> Windows worker: append evals. A pass is proposed,
+                                not seated. force_admit seats (shared secret)
   POST /api/discovery/claim -> lease never-tested names (same ingest token)
   POST /api/discovery/release -> drop this worker's leases (same ingest token)
   POST /api/discovery/requalify -> queue a re-qualification batch (same ingest token)
@@ -29,6 +30,10 @@ A small, dependency-free HTTP server (stdlib only) that exposes:
   POST /api/discovery/rescore -> gate v5 B&H re-label (same ingest token).
                                 Dry-run unless the body sets apply=true.
                                 Does not admit or retire champions.
+  POST /api/discovery/requeue -> one-shot v4 discovery-window B&H retest
+                                queue (same ingest token). Dry-run unless
+                                the body sets apply=true. Does not unseal
+                                the holdout and does not admit or retire.
   POST /api/discovery/farm -> Start/Stop Windows farm (same ingest token)
   POST /api/champions/retain -> keep-list filter of champions.json (same ingest token)
   POST /api/champions/cull_undated -> drop missing champion_since (same ingest token)
@@ -723,6 +728,23 @@ class Handler(BaseHTTPRequestHandler):
                 from hedge_fund.trading.rescore_v5 import rescore_v5
 
                 self._send_json(rescore_v5(apply=payload.get("apply") is True))
+            except ValueError as exc:
+                self._send_json({"ok": False, "error": str(exc), "paper_only": True}, 400)
+            except Exception as exc:
+                self._send_json({"ok": False, "error": str(exc), "paper_only": True}, 500)
+        elif route == "/api/discovery/requeue":
+            ok, err, code = self._discovery_ingest_authorized()
+            if not ok:
+                self._send_json({"ok": False, "error": err, "paper_only": True}, code)
+                return
+            payload, err = self._read_json_body()
+            if err:
+                self._send_json({"ok": False, "error": err, "paper_only": True}, 400)
+                return
+            try:
+                from hedge_fund.trading.requeue_v4_bh import requeue_v4_bh
+
+                self._send_json(requeue_v4_bh(apply=payload.get("apply") is True))
             except ValueError as exc:
                 self._send_json({"ok": False, "error": str(exc), "paper_only": True}, 400)
             except Exception as exc:

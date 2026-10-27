@@ -39,6 +39,15 @@ def _names(n: int = 8) -> list[str]:
 
 
 class LeaseQueueTests(unittest.TestCase):
+    def setUp(self):
+        # Buffer mints run after the claim. These tests assert the claim
+        # itself. The buffer has its own tests.
+        self._sched = patch("hedge_fund.trading.leases.schedule_refill_buffer")
+        self._sched.start()
+
+    def tearDown(self):
+        self._sched.stop()
+
     def _env(self, root: Path) -> dict:
         return {
             "PAPER_STATE": str(root),

@@ -469,6 +469,7 @@ export interface ForwardCandidate {
   bh_role?: string;
   proposed: boolean;
   admitted: boolean;
+  status: string;
 }
 
 export interface ForwardCandidates {

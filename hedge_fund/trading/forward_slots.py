@@ -8,6 +8,9 @@ from __future__ import annotations
 
 from hedge_fund.trading.constants import BH_METRIC_ROLE, FORWARD_CHAMPION_CAP
 
+# Shown on GET /api/champions and in the Champions UI. A proposal is not a seat.
+AWAITING_APPROVAL = "proposed, awaiting approval"
+
 
 def forward_cap_block(active_count: int) -> str | None:
     """Refusal text when another admission would pass the cap. None if it fits."""
@@ -79,6 +82,7 @@ def forward_candidates(*, limit: int = FORWARD_CHAMPION_CAP) -> dict:
             "gate_rules": row.get("gate_rules"),
             "proposed": True,
             "admitted": False,
+            "status": AWAITING_APPROVAL,
         })
 
     def _key(item: dict) -> tuple:
@@ -103,8 +107,10 @@ def forward_candidates(*, limit: int = FORWARD_CHAMPION_CAP) -> dict:
         "admitted": [],
         "retired": [],
         "note": (
-            "Proposed only. Ranked by deflated Sharpe, then daily Sharpe, then "
-            "lower PBO. Admission is a manual owner decision and refuses when "
+            "Proposed, awaiting approval. Ranked by deflated Sharpe, then "
+            "daily Sharpe, then lower PBO. A newly qualified pass is not "
+            "seated. Admission is an explicit owner decision (force_admit or "
+            "promote_candidates) and refuses when "
             f"{FORWARD_CHAMPION_CAP} champions are already active. "
             "Nothing in this list is admitted or retired. "
             "Buy-and-hold figures are informational."

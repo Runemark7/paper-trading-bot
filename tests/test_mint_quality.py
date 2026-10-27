@@ -355,7 +355,8 @@ class ClaimSkipTests(unittest.TestCase):
                     "hedge_fund.trading.leases.discovery_universe",
                     return_value=universe,
                 ):
-                    body = claim_discovery_batch("linux-1", 2, parallel=1)
+                    with patch("hedge_fund.trading.leases.schedule_refill_buffer"):
+                        body = claim_discovery_batch("linux-1", 2, parallel=1)
                 handed = list(body["names"]) + list(body["refilled"])
                 for blocked in (
                     tested_bad,

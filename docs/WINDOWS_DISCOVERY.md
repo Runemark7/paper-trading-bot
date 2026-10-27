@@ -102,10 +102,15 @@ Set to `0` to disable. Mint no longer emits structure
 Worker fail-park remains the backstop for any leftover already-queued
 name so dry refill can continue.
 
-`DISCOVERY_EVAL_TIMEOUT_SECONDS` (default **600**) is a **coarse backstop
-only**. If a cheap-enough name still hangs, the worker fail-parks
-`eval_timeout after 600s`, recycles the multiprocessing pool, and
-continues. Set to `0` to disable.
+`DISCOVERY_EVAL_TIMEOUT_SECONDS` (default **600**) is a **coarse per-name
+backstop only**. The worker keeps `--workers` evals in flight and starts
+the next leased name as soon as one finishes. A name still running after
+its own 600s is fail-parked `eval_timeout after 600s`. That recycles the
+pool; any other name that was in flight is evaluated again and is not
+parked. Names not yet started stay leased until this process stops, and
+shutdown releases those leases. The process pool and the loaded tape are
+reused across claims. The tape is read again only when its hash changes.
+Set the timeout to `0` to disable.
 
 4. Start the farm:
 
@@ -141,8 +146,10 @@ and no `crypto_history_5m.json` placeholder.
 2. `POST /api/discovery/claim` `{worker_id, n, parallel}` with
    `X-Discovery-Token`. Prod returns up to `n` never-tested names that are
    not already leased, and records a lease (`worker_id`, `claimed_at`,
-   `expires_at`). TTL is about 2× the batch (2 × `DISCOVERY_EVAL_TIMEOUT_SECONDS`
-   × waves). A dead worker's names return to the pool when the lease expires.
+   `expires_at`). TTL is about 2× the worst-case batch
+   (2 × `DISCOVERY_EVAL_TIMEOUT_SECONDS` × ceil(n / parallel)), which still
+   covers every name using its full timeout. A dead worker's names return
+   to the pool when the lease expires.
    If the unleased pool cannot cover `n`, or never-tested work is below
    twice the active lease capacity, prod refills `discovery_extended.json`.
    The recipe runs first (`iter_recipe_names` / `next_refill_batch`). When
@@ -156,19 +163,23 @@ and no `crypto_history_5m.json` placeholder.
    lock. Skip uses the names map, not the capped display log, plus
    `near_duplicate_key`. Claim and ingest read the published lift
    snapshot and do not fit it.
-3. Evaluates that batch (default size = `--workers`) against the shared
-   tape downloaded from prod (installed under `live_tape/`). `--local-plan`
-   still reads local `crypto_history_5m.json`.
+3. Evaluates the claimed names with `--workers` jobs in flight (the next
+   name starts when a slot frees) against the shared tape downloaded from
+   prod (installed under `live_tape/`). The tape and the process pool stay
+   loaded until the tape hash changes. `--local-plan` still reads local
+   `crypto_history_5m.json`.
 4. POSTs each finished evaluation to
    `https://trading.runevibe.se/api/discovery/ingest` with
    `X-Discovery-Token` and `heartbeat.worker_id`. Ingest clears that name's
    lease. Nginx already proxies `/api/`.
 5. On SIGINT/exit or Stop, `POST /api/discovery/release` drops this worker's
-   leases. Prod appends `discovery_log.json` and, if the name **qualified**,
-   admits it to `champions.json` the same way tournament does. Existing
-   champions are never removed. Fail-once: a tested name is never leased
-   again. Same-token optional `force_admit` (e.g. `["dbl_bot_120"]`)
-   seats an existing log row as a paper champion even when beat-B&H still fails.
+   leases. Prod appends `discovery_log.json`. A name that **qualified** is
+   proposed, awaiting approval. It is not written to `champions.json`.
+   Existing champions are never removed. Fail-once: a tested name is never
+   leased again, except one admin-queued v4 discovery-window buy-and-hold
+   retest. Same-token optional `force_admit` (e.g. `["dbl_bot_120"]`)
+   seats an existing log row as a paper champion even when beat-B&H still
+   fails, and still refuses past the forward cap of 5.
 
 `worker_id` defaults to `hostname-pid`. Override with `--worker-id` or
 `DISCOVERY_WORKER_ID`.

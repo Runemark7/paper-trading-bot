@@ -419,41 +419,62 @@ export default function Champions() {
         aside={`${forward?.active ?? champs.length} active · ${forward?.open_slots ?? "…"} open of ${forwardCap}`}
       >
         <div className="text-sm text-white/60 mb-3">
-          Proposed only. Ranked by deflated Sharpe, then daily Sharpe, then lower PBO.
-          The top {forwardCap} are a suggestion for the owner. This list does not admit
-          or retire anyone. Buy-and-hold figures stay informational.
+          Each name here is proposed, awaiting approval. Ranked by deflated Sharpe, then
+          daily Sharpe, then lower PBO. The top {forwardCap} are a suggestion for the owner.
+          This list does not admit or retire anyone. Buy-and-hold figures stay informational.
         </div>
         {!forward?.proposed?.length ? (
           <Empty>No qualified names are waiting outside the active book.</Empty>
         ) : (
-          <DesktopTable>
-            <table className="w-full text-xs">
-              <thead className="text-white/40 uppercase">
-                <tr>
-                  <th className="text-left py-1">Rank</th>
-                  <th className="text-left">Name</th>
-                  <th className="text-right">DSR</th>
-                  <th className="text-right">Daily Sharpe</th>
-                  <th className="text-right">PBO</th>
-                  <th className="text-right">B&amp;H daily (info)</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(forward?.proposed ?? []).map((row: ForwardCandidate) => (
-                  <tr key={row.strategy} className="border-t border-white/5">
-                    <td className="py-1 font-mono">{row.rank}</td>
-                    <td><MonoName className="text-white">{row.strategy}</MonoName></td>
-                    <td className="text-right font-mono">{row.dsr != null ? row.dsr.toFixed(3) : "—"}</td>
-                    <td className="text-right font-mono">{row.daily_sharpe != null ? row.daily_sharpe.toFixed(3) : "—"}</td>
-                    <td className="text-right font-mono">{row.pbo != null ? row.pbo.toFixed(3) : "—"}</td>
-                    <td className="text-right font-mono text-white/50">
+          <>
+            <PhoneCards>
+              {(forward?.proposed ?? []).map((row: ForwardCandidate) => (
+                <li key={row.strategy} className="rounded-lg border border-white/10 p-3 min-w-0">
+                  <div className="text-xs text-white/40">#{row.rank}</div>
+                  <MonoName className="block text-white mt-1">{row.strategy}</MonoName>
+                  <div className="text-xs text-amber-200/90 mt-1">{row.status}</div>
+                  <FieldGrid>
+                    <Field label="DSR">{row.dsr != null ? row.dsr.toFixed(3) : "—"}</Field>
+                    <Field label="Daily Sharpe">{row.daily_sharpe != null ? row.daily_sharpe.toFixed(3) : "—"}</Field>
+                    <Field label="PBO">{row.pbo != null ? row.pbo.toFixed(3) : "—"}</Field>
+                    <Field label="B&H daily (info)">
                       {row.bh_daily_sharpe != null ? row.bh_daily_sharpe.toFixed(3) : "—"}
-                    </td>
+                    </Field>
+                  </FieldGrid>
+                </li>
+              ))}
+            </PhoneCards>
+            <DesktopTable>
+              <table className="w-full text-xs">
+                <thead className="text-white/40 uppercase">
+                  <tr>
+                    <th className="text-left py-1">Rank</th>
+                    <th className="text-left">Name</th>
+                    <th className="text-left">Status</th>
+                    <th className="text-right">DSR</th>
+                    <th className="text-right">Daily Sharpe</th>
+                    <th className="text-right">PBO</th>
+                    <th className="text-right">B&amp;H daily (info)</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </DesktopTable>
+                </thead>
+                <tbody>
+                  {(forward?.proposed ?? []).map((row: ForwardCandidate) => (
+                    <tr key={row.strategy} className="border-t border-white/5">
+                      <td className="py-1 font-mono">{row.rank}</td>
+                      <td><MonoName className="text-white">{row.strategy}</MonoName></td>
+                      <td className="text-amber-200/90">{row.status}</td>
+                      <td className="text-right font-mono">{row.dsr != null ? row.dsr.toFixed(3) : "—"}</td>
+                      <td className="text-right font-mono">{row.daily_sharpe != null ? row.daily_sharpe.toFixed(3) : "—"}</td>
+                      <td className="text-right font-mono">{row.pbo != null ? row.pbo.toFixed(3) : "—"}</td>
+                      <td className="text-right font-mono text-white/50">
+                        {row.bh_daily_sharpe != null ? row.bh_daily_sharpe.toFixed(3) : "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </DesktopTable>
+          </>
         )}
       </Card>
 
