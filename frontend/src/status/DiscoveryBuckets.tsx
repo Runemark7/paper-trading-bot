@@ -48,6 +48,10 @@ function TestedRowFields({ d }: { d: DiscoveryEvaluation }) {
           {fmt(d.test_pnl)}
         </span>
       </Field>
+      <Field label="B&H daily Sharpe (informational)">
+        {d.bh_daily_sharpe != null ? d.bh_daily_sharpe.toFixed(3) : "—"}
+      </Field>
+      <Field label="B&H P&L (informational)">{d.bh_oos_pnl != null ? fmt(d.bh_oos_pnl) : "—"}</Field>
     </FieldGrid>
   );
 }
@@ -170,6 +174,11 @@ export default function DiscoveryBuckets() {
         rejected, and unique totals count every tested name, including rows that
         have scrolled off the display log. The table is only that newest tail.
         Already tested · rejected is parked forever — fail once, never retested.
+      </p>
+      <p className="text-sm text-white/55 mb-4">
+        {data?.gate?.criteria
+          ? data.gate.criteria
+          : "Gate v5: trades, Sharpe, sma_stack, holdout (including holdout vs buy-and-hold), DSR, PBO, neighbours, and cost stress still decide. Buy-and-hold daily Sharpe and B&H P&L on the discovery windows are informational, not a pass requirement."}
       </p>
 
       {q.isError && (
@@ -448,6 +457,8 @@ export default function DiscoveryBuckets() {
                     <SortTh label="Sharpe" column="sharpe" sort={sort} onCycle={cycleColumn} align="right" />
                     <SortTh label="OOS trades" column="trades" sort={sort} onCycle={cycleColumn} align="right" />
                     <SortTh label="Test P&L" column="testPnl" sort={sort} onCycle={cycleColumn} align="right" />
+                    <th className="text-right py-1 whitespace-nowrap">B&amp;H Sharpe (info)</th>
+                    <th className="text-right py-1 whitespace-nowrap">B&amp;H P&amp;L (info)</th>
                     <th className="text-left py-1 pl-3 whitespace-nowrap">Fail reasons</th>
                   </tr>
                 </thead>
@@ -465,6 +476,12 @@ export default function DiscoveryBuckets() {
                       <td className="text-right font-mono">{d.trades ?? "—"}</td>
                       <td className={`text-right font-mono font-bold ${(d.test_pnl ?? 0) >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
                         {fmt(d.test_pnl)}
+                      </td>
+                      <td className="text-right font-mono text-white/50">
+                        {d.bh_daily_sharpe != null ? d.bh_daily_sharpe.toFixed(3) : "—"}
+                      </td>
+                      <td className="text-right font-mono text-white/50">
+                        {d.bh_oos_pnl != null ? fmt(d.bh_oos_pnl) : "—"}
                       </td>
                       <td className="text-white/40 break-words pl-3">
                         {[

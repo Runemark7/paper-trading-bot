@@ -178,8 +178,8 @@ Discovery qualifies on the same {QUAL_TIMEFRAME} tape and <code>{RISK_POLICY}</c
 <tr><td>Decision cycle</td><td>Every {CYCLE_INTERVAL_SECONDS}s on {QUAL_TIMEFRAME} closes, around the clock. Heartbeat stays frequent and does not open trades.</td></tr>
 <tr><td>Accounts</td><td>One €10k paper book per champion (<code>run_isolated</code>). No homemade live-slot cap; universe size (~40–120) is the combinatorial bound. <code>run.py</code> uses the same cycle on a single account (champion override, else sma_stack).</td></tr>
 <tr><td>Stated probability</td><td>Beta-Binomial calibration of a deterministic RSI/score heuristic — not an LLM, not a constant 0.60. Cold-start blends the proposal; after 20 trials the posterior mean dominates.</td></tr>
-<tr><td>Admit bar</td><td>OOS/test only. ≥ {MIN_BACKTEST_TRADES} OOS trades; OOS Sharpe ≥ {MIN_BACKTEST_SHARPE:.2f}; must beat buy-and-hold and <code>sma_stack</code> after fees. A single empty/neg window is logged as a diagnostic, not a veto. Train PnL does not enter the score.</td></tr>
-<tr><td>Graduation</td><td>{TRADE_EVALUATION_LIMIT} closed paper trades. Status <code>{GRADUATED_PAPER}</code> means <b>graduated paper</b> (paper P&amp;L greater than buy-and-hold of the same assets over the same period, after fees), not a real-money go-live.</td></tr>
+<tr><td>Admit bar</td><td>OOS/test only. ≥ {MIN_BACKTEST_TRADES} OOS trades; OOS Sharpe ≥ {MIN_BACKTEST_SHARPE:.2f}; must beat <code>sma_stack</code> after fees. Buy-and-hold daily Sharpe and B&amp;H P&amp;L are informational, not a pass requirement. A single empty/neg window is logged as a diagnostic, not a veto. Train PnL does not enter the score.</td></tr>
+<tr><td>Graduation</td><td>{TRADE_EVALUATION_LIMIT} closed paper trades. Status <code>{GRADUATED_PAPER}</code> means <b>graduated paper</b> (net paper P&amp;L &gt; 0 after taker fee and slippage). Buy-and-hold P&amp;L is an informational column, not the rule. Not a real-money go-live.</td></tr>
 <tr><td>Buy-and-hold</td><td>Equal-weight long of the same assets, paper taker+slippage on the B&amp;H entry, marked to market each cycle (<code>snapshot_equity</code> baseline). Graduation uses that overlay, or a round-trip reconstruction from the trade tape.</td></tr>
 </tbody></table></div>
 
@@ -361,7 +361,7 @@ def generate_dashboard(store: TradeStore, out_path: str, calib_path: str | None 
 </div>
 
 <h2>Equity curve vs buy-and-hold baseline</h2>
-<div class="sm">PROTOCOL §3: &ldquo;profitable&rdquo; means vs buy-and-hold of the same assets over the same period, after fees. The live cycle stores an equal-weight B&amp;H overlay on each snapshot (amendment 2026-09-01). Paper equity is the solid line; B&amp;H is dashed.</div>
+<div class="sm">The live cycle stores an equal-weight buy-and-hold overlay on each snapshot (amendment 2026-09-01). Paper equity is the solid line; B&amp;H is dashed. As of 2026-10-27 the overlay is informational: graduation is net paper P&amp;L &gt; 0 after fees, and the discovery gate does not require beating buy-and-hold.</div>
 <div class="wrap"><canvas id="curve" height="120"></canvas></div>
 
 <h2>Calibration by condition</h2>

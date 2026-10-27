@@ -94,7 +94,8 @@ def buy_and_hold_realized_pnl(
 ) -> float | None:
     """Round-trip B&H PnL: buy at start, sell at end, fees+slippage both sides.
 
-    Used for OOS window gates and graduation when comparing a completed period.
+    Recorded on discovery windows and on paper graduation. Gate v5 does not
+    fail a name, or refuse graduation, for losing this comparison.
     """
     symbols = [
         s for s in start_prices

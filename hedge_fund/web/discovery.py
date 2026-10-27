@@ -17,7 +17,10 @@ from datetime import datetime, timezone
 
 from hedge_fund.trading.champions import load_graduated, load_pool, retired_names
 from hedge_fund.trading.constants import (
+    BH_METRIC_ROLE,
     DISCOVERY_QUIET_SECONDS,
+    GATE_CRITERIA,
+    GATE_RULES,
 )
 from hedge_fund.trading.discovery import (
     evals_on_utc_date,
@@ -93,6 +96,10 @@ def _eval_row(row: dict) -> dict:
         "test_pnl": row.get("test_pnl"),
         "fail_reasons": reasons,
         "all_windows_nonneg": row.get("all_windows_nonneg"),
+        "daily_sharpe": row.get("daily_sharpe"),
+        "bh_daily_sharpe": row.get("bh_daily_sharpe"),
+        "bh_oos_pnl": row.get("bh_oos_pnl"),
+        "bh_role": BH_METRIC_ROLE,
     }
 
 
@@ -342,6 +349,11 @@ def build_discovery_summary(*, lists: bool = True) -> dict:
 
     return {
         "paper_only": True,
+        "gate": {
+            "rules": GATE_RULES,
+            "criteria": GATE_CRITERIA,
+            "bh_role": BH_METRIC_ROLE,
+        },
         "as_of": _iso(now),
         "compact": not lists,
         "certainty": "stamp" if tournament_now else ("last_known" if log else "no_signal"),

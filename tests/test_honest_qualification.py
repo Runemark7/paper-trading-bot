@@ -1,4 +1,4 @@
-"""Honest 5m qualification gates, unbounded paper pool, paper vs buy-and-hold graduation."""
+"""Honest 5m qualification gates, forward-cap admissions, net paper P&L graduation."""
 from __future__ import annotations
 
 import json
@@ -123,12 +123,15 @@ class OosGateTests(unittest.TestCase):
         self.assertEqual(d_ok["tot_oos_trades"], 30)
         self.assertTrue(d_ok["passed"], d_ok["reasons"])
 
-    def test_must_beat_buy_and_hold_and_sma_stack(self):
+    def test_discovery_buy_and_hold_is_informational_sma_stack_still_fails(self):
         windows = [_win(test_pnl=20, test_trades=12) for _ in range(3)]  # tot 60
         vs_bh = qualification_decision(windows, expected_windows=3, bh_oos_pnl=80.0, sma_stack_oos_pnl=1.0, **_BH_LOSE)
-        self.assertFalse(vs_bh["passed"])
+        self.assertTrue(vs_bh["passed"], vs_bh["reasons"])
+        self.assertFalse(any("bh" in r for r in vs_bh["reasons"]))
+        self.assertEqual(vs_bh["bh_role"], "informational")
         vs_sma = qualification_decision(windows, expected_windows=3, bh_oos_pnl=1.0, sma_stack_oos_pnl=80.0, **_BH_BEAT)
         self.assertFalse(vs_sma["passed"])
+        self.assertTrue(any("sma" in r for r in vs_sma["reasons"]))
         beat = qualification_decision(windows, expected_windows=3, bh_oos_pnl=10.0, sma_stack_oos_pnl=10.0, **_BH_BEAT)
         self.assertTrue(beat["passed"], beat["reasons"])
 
@@ -144,11 +147,12 @@ class OosGateTests(unittest.TestCase):
             _win(test_pnl=20, test_trades=12),
             _win(test_pnl=-5, test_trades=12),
         ]
-        d = qualification_decision(windows, expected_windows=3, bh_oos_pnl=80.0, sma_stack_oos_pnl=1.0, **_BH_LOSE)
+        d = qualification_decision(windows, expected_windows=3, bh_oos_pnl=80.0, sma_stack_oos_pnl=80.0, **_BH_LOSE)
         self.assertFalse(d["passed"])
         self.assertFalse(d["all_windows_nonneg"])
         _assert_no_window_veto(d["reasons"])
-        self.assertTrue(any("bh" in r for r in d["reasons"]))
+        self.assertTrue(any("sma" in r for r in d["reasons"]))
+        self.assertFalse(any("bh" in r for r in d["reasons"]))
 
     def test_stored_aggregates_window_only_fail_now_passes(self):
         # Fixture that used to fail only on windows (dbl_bot_120-shaped, but beats B&H).
@@ -173,7 +177,9 @@ class OosGateTests(unittest.TestCase):
         self.assertTrue(d["passed"], d["reasons"])
         self.assertFalse(d["all_windows_nonneg"])
 
-        # Prod-like dbl_bot_120: same window veto, still loses to B&H → stay parked.
+        # Prod-like dbl_bot_120: same window veto, and it loses the discovery
+        # daily-Sharpe comparison. Gate v5 does not fail that comparison.
+        # Requalify still does not flip a row with no current-tag attestation.
         dbl = {
             **row,
             "strategy": "dbl_bot_120",
@@ -181,8 +187,8 @@ class OosGateTests(unittest.TestCase):
             "bh_daily_sharpe": 1.5,
         }
         d_dbl = qualification_from_record(dbl)
-        self.assertFalse(d_dbl["passed"])
-        self.assertTrue(any("bh" in r for r in d_dbl["reasons"]))
+        self.assertTrue(d_dbl["passed"], d_dbl["reasons"])
+        self.assertFalse(any("bh" in r for r in d_dbl["reasons"]))
         _assert_no_window_veto(d_dbl["reasons"])
 
         flipped, names = requalify_parked_log([row, dbl], existing_names=set())
@@ -311,8 +317,9 @@ class QualTapeTests(unittest.TestCase):
 
 
 class PoolAdmitTests(unittest.TestCase):
-    def test_pool_at_31_still_admits_new_qualified_and_skips_dup_graduated(self):
+    def test_pool_above_cap_refuses_new_names_and_keeps_the_book(self):
         from hedge_fund.trading.champions import load_pool, promote_candidates, save_graduated, save_pool
+        from hedge_fund.trading.constants import FORWARD_CHAMPION_CAP
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -320,6 +327,7 @@ class PoolAdmitTests(unittest.TestCase):
             with patch.dict(os.environ, {"PAPER_STATE": str(root)}):
                 save_pool({"champions": champs, "synced_until": ""})
                 save_graduated([{"name": "already_grad"}])
+                before = [c["name"] for c in load_pool()["champions"]]
                 out = promote_candidates([
                     {"strategy": "n0"},
                     {"strategy": "already_grad"},
@@ -327,13 +335,16 @@ class PoolAdmitTests(unittest.TestCase):
                     {"strategy": "dbl_bot_12&sma_abv_50"},
                 ])
                 pool = load_pool()["champions"]
-        self.assertEqual(out["added"], ["dbl_bot_12", "dbl_bot_12&sma_abv_50"])
-        self.assertEqual(out["active_count"], 33)
-        self.assertEqual(len(pool), 33)
-        new_rows = [c for c in pool if c["name"] in out["added"]]
-        self.assertEqual(len(new_rows), 2)
-        for row in new_rows:
-            self.assertTrue(row.get("champion_since"))
+        self.assertEqual(out["added"], [])
+        self.assertEqual(out["active_count"], 31)
+        self.assertEqual([c["name"] for c in pool], before)
+        self.assertEqual(
+            [row["reason"] for row in out["refused"]],
+            [
+                f"forward champion cap is {FORWARD_CHAMPION_CAP}; 31 active; admission refused",
+                f"forward champion cap is {FORWARD_CHAMPION_CAP}; 31 active; admission refused",
+            ],
+        )
 
     def test_replenish_still_runs_when_pool_has_31(self):
         from hedge_fund.trading.champions import save_pool
@@ -351,7 +362,7 @@ class PoolAdmitTests(unittest.TestCase):
 
 
 class GraduationVsBuyAndHoldTests(unittest.TestCase):
-    def test_graduation_at_80_uses_vs_bh_not_raw_pnl(self):
+    def test_graduation_at_80_is_net_pnl_buy_and_hold_is_informational(self):
         from hedge_fund.trading.champions import collect_live_results, load_graduated
         from hedge_fund.trading.constants import (
             GRADUATED_PAPER,
@@ -370,7 +381,7 @@ class GraduationVsBuyAndHoldTests(unittest.TestCase):
                     tid = store.open_trade(
                         "BTC/USDT", "5m", "sma_stack_long", 0.6, 100.0, 0.01, 0.01, lot_id=i,
                     )
-                    # Tiny paper PnL, huge B&H (100 → 150).
+                    # Tiny positive net P&L. Price 100 → 150 makes B&H much larger.
                     store.close_trade(tid, 150.0, "take_profit", 0.01, 0.05, 0.5, 1)
                 (root / "champions.json").write_text(json.dumps({
                     "champions": [{"name": "loser_vs_bh", "closed": 0, "pnl": 0.0, "wins": 0}],
@@ -378,9 +389,12 @@ class GraduationVsBuyAndHoldTests(unittest.TestCase):
                 }))
                 out = collect_live_results()
                 self.assertTrue(out["graduated"])
-                self.assertGreater(out["graduated"][0]["total_pnl"], 0)
-                self.assertEqual(out["graduated"][0]["status"], REJECTED_NEGATIVE_PNL)
-                self.assertEqual(load_graduated()[0]["status"], REJECTED_NEGATIVE_PNL)
+                row = out["graduated"][0]
+                self.assertGreater(row["total_pnl"], 0)
+                self.assertGreater(row["buy_and_hold_pnl"], row["total_pnl"])
+                self.assertEqual(row["buy_and_hold_role"], "informational")
+                self.assertEqual(row["status"], GRADUATED_PAPER)
+                self.assertEqual(load_graduated()[0]["status"], GRADUATED_PAPER)
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -397,6 +411,46 @@ class GraduationVsBuyAndHoldTests(unittest.TestCase):
                 }))
                 out = collect_live_results()
                 self.assertEqual(out["graduated"][0]["status"], GRADUATED_PAPER)
+                self.assertEqual(out["graduated"][0]["buy_and_hold_role"], "informational")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch.dict(os.environ, {"PAPER_STATE": str(root)}):
+                store = TradeStore(root / "trades_loses_less_than_bh.sqlite")
+                for i in range(TRADE_EVALUATION_LIMIT):
+                    tid = store.open_trade(
+                        "BTC/USDT", "5m", "sma_stack_long", 0.6, 100.0, 0.01, 0.01, lot_id=i,
+                    )
+                    # Net P&L is negative. Price 100 → 50 makes B&H worse, so the
+                    # old beat-B&H rule would have graduated this name.
+                    store.close_trade(tid, 50.0, "stop", 0.01, -1.0, -0.01, 0)
+                (root / "champions.json").write_text(json.dumps({
+                    "champions": [{"name": "loses_less_than_bh", "closed": 0, "pnl": 0.0, "wins": 0}],
+                    "synced_until": "",
+                }))
+                out = collect_live_results()
+                row = out["graduated"][0]
+                self.assertLess(row["total_pnl"], 0)
+                self.assertLess(row["buy_and_hold_pnl"], row["total_pnl"])
+                self.assertEqual(row["status"], REJECTED_NEGATIVE_PNL)
+                self.assertEqual(load_graduated()[0]["status"], REJECTED_NEGATIVE_PNL)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch.dict(os.environ, {"PAPER_STATE": str(root)}):
+                store = TradeStore(root / "trades_flat.sqlite")
+                for i in range(TRADE_EVALUATION_LIMIT):
+                    tid = store.open_trade(
+                        "BTC/USDT", "5m", "sma_stack_long", 0.6, 100.0, 0.01, 0.01, lot_id=i,
+                    )
+                    store.close_trade(tid, 50.0, "stop", 0.01, 0.0, 0.0, 0)
+                (root / "champions.json").write_text(json.dumps({
+                    "champions": [{"name": "flat", "closed": 0, "pnl": 0.0, "wins": 0}],
+                    "synced_until": "",
+                }))
+                out = collect_live_results()
+                self.assertEqual(out["graduated"][0]["total_pnl"], 0)
+                self.assertEqual(out["graduated"][0]["status"], REJECTED_NEGATIVE_PNL)
 
 
 class LeftoverDrainTests(unittest.TestCase):

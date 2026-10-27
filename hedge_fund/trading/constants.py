@@ -65,7 +65,26 @@ RISK_POLICY = "rm_v1"
 # Amendment 2026-10-27 (Alexander): gate v4. Same v3 floors, plus a sealed
 # holdout, BTC-only entries, deflated Sharpe, CSCV PBO, parameter
 # neighbours, and a fee stress. Workers on the 2026-10-08 tag are paused.
-GATE_RULES = "gate_v4_btc_holdout_dsr_pbo_20261027"
+# Amendment 2026-10-27 later the same day (Alexander): gate v5. The
+# discovery decision no longer fails for losing to buy-and-hold or for a
+# missing B&H daily Sharpe. Those figures stay on the row as informational
+# metrics. Every other v4 check is unchanged. Workers on the v4 tag are paused.
+V4_GATE_RULES = "gate_v4_btc_holdout_dsr_pbo_20261027"
+GATE_RULES = "gate_v5_btc_holdout_dsr_pbo_20261027"
+# Shown on the discovery API and the Discovery page. B&H is not a pass rule.
+GATE_CRITERIA = (
+    "Gate v5 (paper only): BTC-only; 18 walk-forward windows that end before "
+    "the sealed holdout 2025-10-01..2026-10-01; trades ≥ 30; Sharpe ≥ 0.30; "
+    "beat sma_stack; holdout Sharpe, holdout trades, holdout vs buy-and-hold "
+    "daily Sharpe, and holdout vs sma_stack; "
+    "DSR ≥ 0.95 using the true trial count (missing trial count fails closed); "
+    "PBO ≤ 0.20; at least 70% of parameter neighbours pass; cost stress at "
+    "2× fees + 5 bps/side still clears Sharpe and stressed buy-and-hold; "
+    "ETH Sharpe is recorded and does not block. Buy-and-hold daily Sharpe and "
+    "buy-and-hold P&L on the discovery windows are informational, not a pass "
+    "requirement. Fail-once. Forward-test kill rules only flag."
+)
+BH_METRIC_ROLE = "informational"
 # Historical full-tape grid (23 x 87d, last segment open). Discovery no
 # longer scores that grid: the holdout and everything after it are sealed.
 # Kept so the tiled-layout tests and the pre-v4 segment dates stay honest.
@@ -116,8 +135,9 @@ HOLDOUT_END_MS = 1_790_812_800_000  # 2026-10-01 00:00 UTC
 # is not scored. It is also not part of the holdout.
 DISCOVERY_N_WINDOWS = (HOLDOUT_START_MS - QUAL_OOS_START_MS) // QUAL_SEGMENT_MS
 
-# Gate v4 thresholds. v3 floors (Sharpe, trades, sma_stack, daily B&H)
-# are not lowered. These are extra.
+# Gate v4 thresholds that v5 keeps. v3 floors that remain are Sharpe,
+# trades, and sma_stack. Daily buy-and-hold is informational under v5
+# (it is not a discovery-window pass rule). These extras are unchanged.
 # Bailey & Lopez de Prado 2014: DSR is the probability the true Sharpe
 # clears the expected maximum of N trials. 0.95 is their usual confidence.
 DSR_MIN_PROBABILITY = 0.95
@@ -192,17 +212,24 @@ def live_signal_eval_bars() -> int:
 # only. Train PnL is logged, never scored, never an admit rule.
 MIN_BACKTEST_SHARPE = 0.30  # modest OOS floor; 0.10 was a participation trophy
 MIN_BACKTEST_TRADES = 30  # OOS trades across all windows (not train+test)
-# Win-rate 38% dropped as an admit bar (2026-09-01). Beating B&H + sma_stack
-# + 30 OOS trades + Sharpe ≥ 0.30 is the bar. All-windows non-negative is a
-# diagnostic only (2026-09-12) — one empty/neg window does not veto.
+# Win-rate 38% dropped as an admit bar (2026-09-01). The discovery bar is
+# 30 OOS trades, Sharpe ≥ 0.30, and beat sma_stack. Buy-and-hold daily
+# Sharpe and B&H P&L are informational (2026-10-27, gate v5). All-windows
+# non-negative is a diagnostic only (2026-09-12) — one empty/neg window
+# does not veto.
 
-# Paper graduation: TRADE_EVALUATION_LIMIT closed paper trades, then vs B&H.
+# Paper graduation: TRADE_EVALUATION_LIMIT closed paper trades, then net
+# paper P&L > 0 after taker fee and slippage (the stored trade P&L).
+# Buy-and-hold P&L is recorded and is not the graduation rule (2026-10-27).
 # Not a cap on how many champions the live cycle evaluates. run_isolated
-# runs every active name each cycle; the pool can be larger than this.
+# runs every active name each cycle.
 TRADE_EVALUATION_LIMIT = 80
 # No MAX_ACTIVE_CHAMPIONS. The 2026-09-01 20-slot arena starved prod's 31
-# grandfathered names (needed = 20 - 31 <= 0). Admission is OOS 5m / rm_v1
-# only. Universe size (~40–120) is the combinatorial bound, not a live cap.
+# grandfathered names (needed = 20 - 31 <= 0) and stays deleted.
+# FORWARD_CHAMPION_CAP is a different rule: new admissions stop at 5 active
+# forward champions. Names already on the book are not retired to get under
+# it. Admission stays a manual owner decision.
+FORWARD_CHAMPION_CAP = 5
 # No DISCOVER_BATCH_SIZE. The old random sample of 30 (shuffle 30 and
 # ignore the rest) stays deleted. Leftovers still drain 24/7, but each
 # live_cycle tournament invocation takes a time-shared slice so a 60-name
@@ -233,9 +260,9 @@ DISCOVERY_QUIET_SECONDS = 2 * 3600
 
 PAPER_START_CASH = 10_000.0
 
-# GRADUATED_PAPER means finished the paper evaluation window beating
-# buy-and-hold of the same assets over the same period, after fees.
-# It is not authorization to trade real funds.
+# GRADUATED_PAPER means the paper evaluation window finished with net paper
+# P&L > 0 after taker fee and slippage. Buy-and-hold P&L is informational.
+# It is not authorization to trade real funds. Paper prices only.
 GRADUATED_PAPER = "GRADUATED_PAPER"
 REJECTED_NEGATIVE_PNL = "REJECTED_NEGATIVE_PNL"
 

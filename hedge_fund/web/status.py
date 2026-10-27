@@ -281,8 +281,9 @@ def _graduation_block() -> dict:
         "last_graduated_at": (last or {}).get("graduated_at"),
         "token": GRADUATED_PAPER,
         "note": (
-            f"{GRADUATED_PAPER} means graduated paper (paper P&L greater than "
-            f"buy-and-hold after {TRADE_EVALUATION_LIMIT} closed trades), not live money."
+            f"{GRADUATED_PAPER} means graduated paper (net paper P&L > 0 after "
+            f"taker fee and slippage, once {TRADE_EVALUATION_LIMIT} trades have "
+            f"closed). Buy-and-hold P&L is informational. Not live money."
         ),
     }
 
@@ -401,7 +402,9 @@ def _build_status_uncached() -> dict:
                 "file": _file_mtime_note(root / "champions.json"),
                 "note": (
                     "Active names are on the paper book (see Running now). "
-                    "There is no live-slot cap and no per-cycle champion cap. "
+                    "New admissions stop at 5 active forward champions. "
+                    "Names already on the book are not retired to get under that cap. "
+                    "The revoked 20-slot arena stays deleted. "
                     "evaluation_limit is closed paper trades before graduation, "
                     "not how many champions run_isolated evaluates. "
                     "Qualification/replenish is last-known from champions.json "

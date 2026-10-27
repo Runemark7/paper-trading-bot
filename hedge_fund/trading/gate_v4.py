@@ -1,10 +1,11 @@
-"""Gate v4 on top of the v3 aggregate OOS floors.
+"""Gate v4 checks that gate v5 still applies on top of the aggregate floors.
 
-A name that already passed Sharpe, trades, sma_stack, and daily-equity
-buy-and-hold (``qualification_decision``) is not admitted until:
+A name that already passed Sharpe, trades, and sma_stack
+(``qualification_decision``) is not admitted until:
 
-* one sealed holdout evaluation passes the same economic floors
-  (Sharpe, beat B&H, beat sma_stack) and the holdout trade floor,
+* one sealed holdout evaluation passes the same economic floors the
+  holdout has always used (Sharpe, beat B&H, beat sma_stack) and the
+  holdout trade floor,
 * the deflated Sharpe ratio of the walk-forward daily returns is
   at least ``DSR_MIN_PROBABILITY`` given the true trial count,
 * CSCV PBO on the walk-forward windows of this name and its parameter
