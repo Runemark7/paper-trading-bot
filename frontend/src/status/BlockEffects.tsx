@@ -41,7 +41,7 @@ function AxisRow({ row }: { row: PairedAxisEffect }) {
         {" · "}
         sign p {num(row.sign_test_p, 3)}
         {" · "}
-        {row.n_positive}+ / {row.n_negative}− / {row.n_zero}0
+        {row.n_positive}+ / {row.n_negative}− / {row.n_zero} ties
       </span>
     </div>
   );
