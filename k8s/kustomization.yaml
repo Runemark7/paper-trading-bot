@@ -5,6 +5,7 @@ resources:
   - namespace.yaml
   - pvc.yaml
   - backend.yaml
+  - candle-updater.yaml
   - frontend.yaml
   - ingress.yaml
 images:

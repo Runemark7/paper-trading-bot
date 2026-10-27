@@ -30,7 +30,9 @@ A small, dependency-free HTTP server (stdlib only) that exposes:
   POST /api/champions/cull_undated -> drop missing champion_since (same ingest token)
   GET /api/champions/retired -> archived (retired) champions + graduated rows
   POST /run             -> trigger a live decision cycle, then regenerate
-  GET /health           -> liveness probe
+  GET /health           -> liveness probe. Adds candle last time and gap
+                           count when PAPERBOT_DATABASE_URL is set. Stays
+                           ok if that database is unreachable.
 
 Purpose: a durable little service you can port-forward to and open the
 dashboard (and its data) from any device. Everything is read-only except
@@ -162,6 +164,27 @@ def _build_summary_uncached() -> dict:
         # Build time of this payload. Stays put when a later rebuild is skipped or fails.
         "as_of": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
+
+
+def health_payload() -> dict:
+    """Liveness. Candle fields are best-effort and never fail the probe."""
+    body: dict = {"ok": True, "ts": time.time()}
+    try:
+        from hedge_fund.data.candle_store import health_snapshot
+
+        body["candles"] = health_snapshot()
+    except Exception as exc:  # noqa: BLE001 — probe must stay green
+        body["candles"] = {
+            "configured": bool(os.environ.get("PAPERBOT_DATABASE_URL", "").strip()),
+            "ready": False,
+            "last_candle_time": None,
+            "gap_count": None,
+            "known_gap_count": None,
+            "monotonic": None,
+            "duplicates": None,
+            "error": str(exc),
+        }
+    return body
 
 
 def parse_route(path: str) -> tuple[str, dict[str, str]]:
@@ -380,7 +403,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         route, qs = parse_route(self.path)
         if route in ("/health", "/healthz"):
-            self._send_json({"ok": True, "ts": time.time()})
+            self._send_json(health_payload())
         elif route == "/dashboard" or route == "/":
             live_report()  # re-price open positions live before serving
             self._send_html(_dashboard_html())

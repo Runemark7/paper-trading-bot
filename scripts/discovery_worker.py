@@ -1,11 +1,11 @@
 """Stateless discovery farm — same OOS gates as tournament, not on the k8s cycle.
 
 Default (claim mode): prod leases never-tested names
-(``POST /api/discovery/claim``). This process only needs the prod URL,
-the ingest token, and local ``crypto_history_5m.json``. It does not plan
-from a bootstrapped copy of the log, so several hosts can run at once
-without evaluating the same name. ``--local-plan`` keeps the old local
-cursor / refill path.
+(``POST /api/discovery/claim``). This process only needs the prod URL
+and the ingest token. It downloads prod's shared tape; it does not need
+a local ``crypto_history_5m.json`` and it does not need database
+credentials. ``--local-plan`` keeps the old local cursor / refill path
+and still reads that JSON file.
 
 Evaluates leased names (fail-once, rm_v1, 5m windows) and POSTs results to
 ``/api/discovery/ingest``. Cluster ``live_cycle`` stays live-only.
@@ -609,6 +609,11 @@ def run_batch(
             history_stamp = None
     data = _load_qual_history(keep_bars=qual_store_bars())
     if not data:
+        if claim_mode:
+            raise SystemExit(
+                "shared price history is empty. Claim mode loads it from prod "
+                "and does not use crypto_history_5m.json."
+            )
         raise SystemExit(
             "crypto_history_5m.json missing or empty under PAPER_STATE. "
             "Run: python scripts/fetch_history.py"
@@ -869,10 +874,13 @@ def main(argv: list[str] | None = None) -> int:
         print("discovery_worker: PAPER_DISCOVERY_INGEST_TOKEN is required (or pass --no-ingest)", flush=True)
         return 2
 
-    hist = state_root() / "crypto_history_5m.json"
-    if not hist.exists():
-        print(f"discovery_worker: missing {hist} — run scripts/fetch_history.py", flush=True)
-        return 2
+    # Claim mode downloads prod's shared tape. The JSON file is only the
+    # --local-plan / offline tape (ops used to drop a '{}' placeholder).
+    if local_plan:
+        hist = state_root() / "crypto_history_5m.json"
+        if not hist.exists():
+            print(f"discovery_worker: missing {hist} — run scripts/fetch_history.py", flush=True)
+            return 2
 
     base = _base_url(args.ingest_url, args.base_url or None)
     print(

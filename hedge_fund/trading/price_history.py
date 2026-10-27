@@ -9,12 +9,19 @@ is keyed by that pinned ``data_end``, not by file mtime.
 A worker that has installed a snapshot keeps the pin in a sidecar so
 re-hashing the truncated file does not walk back another day. The npz
 download is built once per pin and reused.
+
+When ``PAPERBOT_DATABASE_URL`` is set and the candle store covers the
+canonical tape through a recent closed bar, that store is the source the
+hash is built from. Until then, and whenever the URL is unset, the
+live-tape npy (then the JSON file) is the source. Workers never open the
+database; they download the npz this module serves.
 """
 from __future__ import annotations
 
 import hashlib
 import io
 import json
+import os
 import threading
 from pathlib import Path
 
@@ -118,7 +125,28 @@ def _array_from_json(root: Path, symbol: str) -> np.ndarray:
     return _rows_to_array(rows)
 
 
+def _use_candle_store() -> bool:
+    """True when the shared tape should be read from Postgres."""
+    if not os.environ.get("PAPERBOT_DATABASE_URL", "").strip():
+        return False
+    try:
+        from hedge_fund.data.candle_store import candle_store_selected
+
+        return bool(candle_store_selected())
+    except Exception as exc:
+        print(f"[price history] candle store unavailable, using files: {exc}", flush=True)
+        return False
+
+
 def _source_array(root: Path, symbol: str) -> tuple[np.ndarray, str]:
+    if _use_candle_store():
+        from hedge_fund.data.candle_store import clear_ready, load_tape
+
+        arr = load_tape(symbol)
+        if len(arr) == 0:
+            clear_ready()
+        else:
+            return arr, "candles"
     if _tape_ready(root):
         return load_array(symbol, root), "live_tape"
     return _array_from_json(root, symbol), HISTORY_JSON
@@ -141,6 +169,16 @@ def _json_raw_end(root: Path) -> int | None:
 
 def _raw_end(root: Path) -> tuple[int | None, str]:
     """Newest bar the two symbols share. Npy reads one row, not the file stat."""
+    if _use_candle_store():
+        from hedge_fund.data.candle_store import latest_open_ms
+
+        ends: list[int] = []
+        for symbol in QUAL_SYMBOLS:
+            ts = latest_open_ms(symbol)
+            if ts is None:
+                return None, "candles"
+            ends.append(int(ts))
+        return min(ends), "candles"
     if _tape_ready(root):
         ends: list[int] = []
         for symbol in QUAL_SYMBOLS:

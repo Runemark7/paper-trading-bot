@@ -1,5 +1,6 @@
 # Windows discovery farm (Alexander / jensa). Not the k8s live stack.
-# GPU is unused. Mount a local PAPER_STATE that already has crypto_history_5m.json.
+# GPU is unused. Claim mode downloads prod's shared tape and does not need
+# crypto_history_5m.json. --local-plan still reads that file from PAPER_STATE.
 #
 #   docker compose -f docker-compose.discovery.yml up --build
 #
