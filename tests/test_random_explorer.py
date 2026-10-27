@@ -26,6 +26,7 @@ from hedge_fund.trading.explorer import (
     DEPTH_WEIGHTS,
     _Taken,
     _one_atom_change,
+    allowed_depth_weights,
     draw_depth,
     load_explorer_cursor,
     load_pair_links,
@@ -38,7 +39,7 @@ from hedge_fund.trading.explorer import (
     split_counts,
     swap_on_axis,
 )
-from hedge_fund.trading.mint_quality import mint_block_reason
+from hedge_fund.trading.mint_quality import DEAD_DEPTH, mint_block_reason
 from hedge_fund.trading.refill import RECIPE_MAX_ATOMS, name_has_mom_gt_and_dip, name_is_parseable
 from hedge_fund.trading.universe import near_duplicate_key
 
@@ -191,16 +192,36 @@ class SamplerTests(unittest.TestCase):
                     self.assertEqual(load_explorer_cursor()["seed"], 20261027)
                 self.assertGreater(load_explorer_cursor()["draw_index"], index)
 
-    def test_depth_weights(self):
+    def test_depth_weights_follow_the_active_ban(self):
+        self.assertEqual(DEAD_DEPTH, 5)
+        active = allowed_depth_weights()
+        self.assertEqual(active, ((2, 30), (3, 30), (4, 20)))
         draws = 20_000
         counts = Counter(draw_depth(rng_for(20261027, i)) for i in range(draws))
         proposed = Counter(propose_random(20261027, i)[1] for i in range(draws))
-        total = sum(weight for _depth, weight in DEPTH_WEIGHTS)
-        for depth, weight in DEPTH_WEIGHTS:
+        total = sum(weight for _depth, weight in active)
+        for depth, weight in active:
             expected = weight / total
             self.assertAlmostEqual(counts[depth] / draws, expected, delta=0.02)
             self.assertAlmostEqual(proposed[depth] / draws, expected, delta=0.02)
-        self.assertEqual(sum(counts.values()), draws)
+        self.assertEqual(set(counts), {2, 3, 4})
+        self.assertEqual(set(proposed), {2, 3, 4})
+
+    def test_lifting_dead_depth_restores_the_full_table(self):
+        self.assertEqual(allowed_depth_weights(dead_depth=8), DEPTH_WEIGHTS)
+        self.assertEqual(
+            allowed_depth_weights(dead_depth=6),
+            ((2, 30), (3, 30), (4, 20), (5, 10)),
+        )
+        # A ban that covers every row still returns a defined table.
+        self.assertEqual(allowed_depth_weights(dead_depth=2), DEPTH_WEIGHTS)
+        draws = 20_000
+        with patch("hedge_fund.trading.explorer.DEAD_DEPTH", 8):
+            self.assertEqual(allowed_depth_weights(), DEPTH_WEIGHTS)
+            counts = Counter(draw_depth(rng_for(20261027, i)) for i in range(draws))
+        total = sum(weight for _depth, weight in DEPTH_WEIGHTS)
+        for depth, weight in DEPTH_WEIGHTS:
+            self.assertAlmostEqual(counts[depth] / draws, weight / total, delta=0.02)
 
     def test_accepted_sample_has_zero_ban_violations(self):
         names, _index = sample_random_names(400, seed=20261027, start_index=0)

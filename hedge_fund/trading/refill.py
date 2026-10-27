@@ -65,8 +65,10 @@ Still no named candlesticks. OOS gates unchanged.
 ``explorer.mix_refill`` draws about 70% of each batch from a seeded
 random atom sampler and about 30% from this stream (lift ranking
 unchanged), with about a third of that exploit share as a one-atom
-paired swap. Depths of 5 or more still die in ``mint_block_reason``.
-OOS gates unchanged.
+paired swap. The sampler proposes only depths below the existing
+``dead_depth`` ban (``DEAD_DEPTH``, stacks of 5 or more atoms) and
+renormalises the 2–7 weight table over what that ban still allows.
+The ban itself is unchanged. OOS gates unchanged.
 2026-10-07: densify #2b (h4 twins of that shape) measured FAIL
 (Sharpe about −0.56 to −1.04, all negative while B&H was up).
 #2c leads with h1 stacks on the paying ``mom_18b_gt2pc`` island

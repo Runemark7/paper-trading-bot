@@ -14,14 +14,16 @@ points of ``_canon_atom``) so two grid points do not collide with each
 other. A draw that fails a mint ban is thrown away and another index is
 drawn. The loop is capped.
 
-Depth weights (proposal, not the accepted stream):
+Depth weights, before the mint ban:
 
     2: 30%   3: 30%   4: 20%   5: 10%   6: 6%   7: 4%
 
 ``mint_block_reason`` rejects stacks of ``DEAD_DEPTH`` (5) or more atoms
-(``dead_depth``). Depths 5–7 are still proposed, then rejected and
-resampled, so accepted random names are depth 2–4. That rule is a mint
-ban, not a gate threshold, and it is not relaxed here.
+(``dead_depth``). The sampler draws only from the rows of that table
+that the ban still allows, and renormalises their weights. With the ban
+at 5 the draw is 2: 37.5%, 3: 37.5%, 4: 25%. Raising ``DEAD_DEPTH``
+above a row puts that row back into the draw with its table weight.
+The ban itself is unchanged.
 
 The generator also refuses to *propose* combinations that the bans make
 impossible: mom with dip, h4 with mom, and a 5m MA on an HTF moving-average
@@ -60,6 +62,7 @@ from hedge_fund.paths import state_root
 from hedge_fund.trading.discovery_guard import lookback_too_expensive_reason
 from hedge_fund.trading.holdout import seal
 from hedge_fund.trading.mint_quality import (
+    DEAD_DEPTH,
     DEAD_MOM_PCT,
     canonical_key_set,
     canonical_name,
@@ -84,8 +87,9 @@ DEFAULT_SEED = 20261027
 # the vocabulary cannot fill (the other side of the mix then covers it).
 MAX_ATTEMPTS_PER_NAME = 48
 
-# Proposal distribution. Sums to 100. See module docstring for why 5–7
-# almost never survive ``mint_block_reason``.
+# Full proposal table. Sums to 100. ``draw_depth`` keeps only the rows
+# ``dead_depth`` still allows (depth < ``DEAD_DEPTH``) and renormalises.
+# The table stays so a higher ``DEAD_DEPTH`` turns the deeper rows back on.
 DEPTH_WEIGHTS: tuple[tuple[int, int], ...] = (
     (2, 30),
     (3, 30),
@@ -94,7 +98,6 @@ DEPTH_WEIGHTS: tuple[tuple[int, int], ...] = (
     (6, 6),
     (7, 4),
 )
-_DEPTH_TOTAL = sum(weight for _depth, weight in DEPTH_WEIGHTS)
 
 # Fixed points of ``_round_period`` / the 6-bar and 2-percent canons.
 MA_PERIODS: tuple[int, ...] = (
@@ -233,15 +236,40 @@ def rng_for(seed: int, index: int) -> random.Random:
     return random.Random(mix_seed(seed, index))
 
 
+def allowed_depth_weights(
+    weights: Sequence[tuple[int, int]] | None = None,
+    *,
+    dead_depth: int | None = None,
+) -> tuple[tuple[int, int], ...]:
+    """Rows of the depth table that ``dead_depth`` does not reject.
+
+    The ban is ``len(atoms) >= DEAD_DEPTH`` in ``dead_zone_reason``. A
+    depth survives while it is strictly below that threshold. Weights are
+    not rescaled here; ``draw_depth`` divides by the surviving total.
+    If the ban covers every row, the full table is returned so the draw
+    still has a defined depth (the filter then rejects it).
+    """
+    table = tuple(weights) if weights is not None else DEPTH_WEIGHTS
+    limit = DEAD_DEPTH if dead_depth is None else int(dead_depth)
+    allowed = tuple(
+        (int(depth), int(weight))
+        for depth, weight in table
+        if int(weight) > 0 and int(depth) < limit
+    )
+    return allowed or table
+
+
 def draw_depth(rng: random.Random) -> int:
-    """One depth from ``DEPTH_WEIGHTS``."""
-    pick = rng.randrange(_DEPTH_TOTAL)
+    """One depth from the ban-filtered ``DEPTH_WEIGHTS``."""
+    table = allowed_depth_weights()
+    total = sum(weight for _depth, weight in table)
+    pick = rng.randrange(total)
     acc = 0
-    for depth, weight in DEPTH_WEIGHTS:
+    for depth, weight in table:
         acc += weight
         if pick < acc:
             return depth
-    return DEPTH_WEIGHTS[-1][0]
+    return table[-1][0]
 
 
 def legal_pcts(lookback: int) -> tuple[int, ...]:
