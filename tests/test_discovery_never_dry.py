@@ -237,7 +237,12 @@ class ClaimUndryTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            with patch.dict(os.environ, self._env(root)):
+            env = {
+                **self._env(root),
+                "DISCOVERY_RANDOM_SHARE": "0",
+                "DISCOVERY_PAIRED_SHARE": "0",
+            }
+            with patch.dict(os.environ, env):
                 append_discovery_evaluation(_eval(PASS, qualified=True))
                 append_discovery_evaluation(_eval(PASS_2, qualified=True))
                 with patch("hedge_fund.trading.leases.discovery_universe", return_value=[]):
@@ -273,14 +278,19 @@ class ClaimUndryTests(unittest.TestCase):
         self.assertEqual(len(body["names"]), 2)
         self.assertEqual(body["names"], universe[:2])
         self.assertGreaterEqual(len(body["refilled"]), 1)
-        self.assertEqual(body["refill"]["source"], "recipe")
+        self.assertEqual(body["refill"]["source"], "mixed")
         self.assertFalse(body["refill"]["exhausted"])
 
     def test_true_exhaustion_logs_a_warning(self):
         from hedge_fund.trading.leases import claim_discovery_batch
 
         with tempfile.TemporaryDirectory() as tmp:
-            with patch.dict(os.environ, self._env(Path(tmp))):
+            env = {
+                **self._env(Path(tmp)),
+                "DISCOVERY_RANDOM_SHARE": "0",
+                "DISCOVERY_PAIRED_SHARE": "0",
+            }
+            with patch.dict(os.environ, env):
                 with patch("hedge_fund.trading.leases.discovery_universe", return_value=[]):
                     with patch("hedge_fund.trading.leases.next_refill_batch", return_value=[]):
                         with self.assertLogs("hedge_fund.trading.leases", level=logging.WARNING) as logs:

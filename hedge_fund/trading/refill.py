@@ -61,6 +61,14 @@ paying ``h1_* & mom_18b_gt2pc & *_abv_30 & rsi_14_>50`` shape, plus
 sparse h4×mom×``*_abv_30`` and under-emitted 5–7 atom stacks (dual
 h1+h4, both mild MAs). Not another ``*_abv_40`` / ``rsi_>60`` lead.
 Still no named candlesticks. OOS gates unchanged.
+2026-10-27 later: the prod mint is no longer this recipe alone.
+``explorer.mix_refill`` draws about 70% of each batch from a seeded
+random atom sampler and about 30% from this stream (lift ranking
+unchanged), with about a third of that exploit share as a one-atom
+paired swap. The sampler proposes only depths below the existing
+``dead_depth`` ban (``DEAD_DEPTH``, stacks of 5 or more atoms) and
+renormalises the 2–7 weight table over what that ban still allows.
+The ban itself is unchanged. OOS gates unchanged.
 2026-10-07: densify #2b (h4 twins of that shape) measured FAIL
 (Sharpe about −0.56 to −1.04, all negative while B&H was up).
 #2c leads with h1 stacks on the paying ``mom_18b_gt2pc`` island
@@ -2110,11 +2118,16 @@ def maybe_refill_discovery(
     if int(eligible_count) >= int(cap):
         return []
     from hedge_fund.trading.atom_lift import lift_model_for_mint
+    from hedge_fund.trading.explorer import mix_refill
 
     taken = set(taken_names)
     taken.update(load_extended_names())
     taken.update(generate_universe())
-    added = next_refill_batch(taken_names=taken, n=batch_size, lift=lift_model_for_mint())
+    added, _meta = mix_refill(
+        taken_names=taken,
+        n=batch_size,
+        lift=lift_model_for_mint(),
+    )
     if added:
         append_extended_batch(added)
     return added
@@ -2134,6 +2147,11 @@ def warm_refill_caches() -> int:
         near_duplicate_key(name)
         unreachable_threshold_reason(name)
         count += 1
+    # Grid caps for the random sampler. Not part of the recipe count:
+    # the claim-latency guard compares this return value to the recipe.
+    from hedge_fund.trading.explorer import warm_explorer_caches
+
+    warm_explorer_caches()
     return count
 
 

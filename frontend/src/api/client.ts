@@ -7,6 +7,7 @@ import type {
   GraduatedStrategy,
   DiscoveryEvaluation,
   DiscoveryFarm,
+  BlockReport,
   DiscoverySummary,
   StatusSnapshot,
   ChampionsPayload,
@@ -119,6 +120,7 @@ export const api = {
     const q = opts?.compact ? "?compact=1" : "";
     return get<DiscoverySummary>(`/api/discovery/summary${q}`);
   },
+  discoveryBlocks: () => get<BlockReport>("/api/discovery/blocks"),
   status: () => get<StatusSnapshot>("/api/status"),
   health: () => get<{ ok: boolean }>("/healthz"),
 };
@@ -138,4 +140,8 @@ export function fetchDiscovery(): Promise<DiscoveryEvaluation[]> {
 
 export function fetchDiscoverySummary(opts?: { compact?: boolean }): Promise<DiscoverySummary> {
   return api.discoverySummary(opts);
+}
+
+export function fetchBlockReport(): Promise<BlockReport> {
+  return api.discoveryBlocks();
 }

@@ -420,6 +420,9 @@ def build_discovery_summary(*, lists: bool = True) -> dict:
             "generated_last": refill_state["generated_last"],
             "exhausted": refill_state["exhausted"],
             "strategy": peek_refill_strategy(),
+            "random": int(refill_state.get("random") or 0),
+            "paired": int(refill_state.get("paired") or 0),
+            "exploit": int(refill_state.get("exploit") or 0),
         },
         "last_tested_at": last_tested_at,
         "last_strategy": last_strategy,
@@ -437,8 +440,11 @@ def build_discovery_summary(*, lists: bool = True) -> dict:
             "Already tested · rejected is parked forever — not a cooldown "
             "retest queue. Skip/dedupe reads discovery_tested.json (uncapped); "
             "discovery_log.json stays a capped display. "
-            "Claim refills discovery_extended.json from the structure-AND recipe "
-            "and, when that runs short, densifies around qualified passes. "
+            "Claim refills discovery_extended.json from a seeded mix: about 70% "
+            "random atom stacks and about 30% the structure-AND recipe (then densify "
+            "when that runs short), with about a third of that exploit share as a "
+            "one-atom paired swap. GET /api/discovery/blocks is an exploratory "
+            "marginal-effect report and does not change the gate. "
             "refill.strategy is pending until a background lift snapshot exists, "
             "then lift_ucb or recipe_order. Summary and GET /api/discovery/lift "
             "do not fit that model on the request. "

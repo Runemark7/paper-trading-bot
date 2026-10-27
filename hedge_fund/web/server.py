@@ -18,6 +18,7 @@ A small, dependency-free HTTP server (stdlib only) that exposes:
   GET /api/discovery/results -> paged full records (?offset=&limit=&status=pass|fail);
                                 seeks one page, does not load the results log.
   GET /api/discovery/lift -> top and bottom atoms by net OOS P&L minus buy-and-hold (cached)
+  GET /api/discovery/blocks -> exploratory atom-block effects (cached; does not change the gate)
   GET /api/discovery/history -> canonical 5m tape hash + data_end (ingest token)
   GET /api/discovery/history/tape -> that tape as a compressed npz (ingest token)
   POST /api/discovery/ingest -> Windows worker: append evals + admit / force_admit (shared secret)
@@ -553,6 +554,14 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(lift_payload_for_request())
             except Exception as exc:
                 self._send_json({"error": str(exc)}, 500)
+        elif route == "/api/discovery/blocks":
+            # Read-only. Not on the summary poll. Does not mint, qualify, or touch the gate.
+            try:
+                from hedge_fund.trading.block_report import cached_block_report
+
+                self._send_json(cached_block_report())
+            except Exception as exc:
+                self._send_json({"error": str(exc), "paper_only": True, "exploratory": True}, 500)
         elif route == "/api/discovery/history":
             ok, err, code = self._discovery_ingest_authorized()
             if not ok:
