@@ -358,16 +358,22 @@ def arrays_to_history(arrays: dict[str, np.ndarray]) -> dict[str, list]:
     return out
 
 
-def load_canonical_history(state_dir: Path | None = None) -> dict | None:
-    """Shared npy tape only.
+# Sources that are the shared tape (not the legacy JSON parse path).
+SHARED_TAPE_SOURCES = ("live_tape", "candles")
 
-    ``crypto_history_5m.json`` stays on the original qualification parser
+
+def load_canonical_history(state_dir: Path | None = None) -> dict | None:
+    """Shared tape only: the live-tape npy files or the Postgres candle store.
+
+    Both are the canonical tape (``canonical_arrays`` picks the store once
+    it is caught up). ``crypto_history_5m.json`` stays on the original
+    qualification parser
     so a worker that has not refreshed still sees the JSON rows it already
     had. After a refresh the npy files are the history that gets evaluated.
     The rows already end on the pinned UTC day.
     """
     arrays, source, _pin = canonical_arrays(state_dir)
-    if source != "live_tape" or not any(len(arr) for arr in arrays.values()):
+    if source not in SHARED_TAPE_SOURCES or not any(len(arr) for arr in arrays.values()):
         return None
     history = arrays_to_history(arrays)
     if history:

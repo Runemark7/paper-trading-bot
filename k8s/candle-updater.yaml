@@ -50,9 +50,12 @@ spec:
                 - name: PAPER_ONLY
                   value: "1"
               resources:
+                # ccxt's Binance market load peaks near 300 MB RSS
+                # (measured 296 MB); 256Mi OOMKilled every run that
+                # had a new bar to fetch.
                 requests:
                   cpu: 50m
-                  memory: 128Mi
+                  memory: 256Mi
                 limits:
                   cpu: 500m
-                  memory: 256Mi
+                  memory: 512Mi
