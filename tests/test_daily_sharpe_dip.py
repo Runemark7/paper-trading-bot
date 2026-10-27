@@ -71,7 +71,13 @@ class DailySharpeDipTests(unittest.TestCase):
         self.assertEqual(QUAL_WARMUP_BARS, 4032)
 
     def test_family_follows_the_dense5_prefix(self):
-        dense = list(iter_dense6_names()) + list(iter_dense_ema150_names())
+        from hedge_fund.trading.refill import iter_dense7_names
+
+        dense = (
+            list(iter_dense7_names())
+            + list(iter_dense6_names())
+            + list(iter_dense_ema150_names())
+        )
         family = list(iter_daily_sharpe_dip_names())
         names = list(iter_recipe_names())[len(dense) :]
         self.assertEqual(family[0], LEAD)

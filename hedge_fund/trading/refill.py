@@ -101,6 +101,26 @@ share on ``near_swing_lo`` × ``sma_stack_20_50_200`` (the +2104
 near-miss spine, N≤96, plus that spine gated by h4 sma around 140),
 then the untested lt10 holes in the same dip box. Odd dip percents
 collapse and are not emitted. OOS gates unchanged.
+2026-10-27: #6 drained (eligible 0, untested 0, densify exhausted).
+Gate v4 changed the discovery window set (18 windows, holdout sealed,
+BTC-only). Nothing qualified on it: 0 of 176 current-window evals, and
+the 122 stored passes are the old 8- and 23-window tags. The near-miss
+band on that tape is trades >= 30 and net OOS P&L > 0, ranked by net
+P&L minus buy-and-hold (Sharpe only breaks ties):
+``near_swing_lo_96&sma_stack_20_50_200`` (46 tr, +1600, excess −15206),
+``near_swing_lo_84&sma_stack_20_50_200`` (35 tr, +1475),
+``near_swing_lo_90&sma_stack_20_50_200`` (46 tr, +1280),
+``near_swing_lo_36&sma_stack_20_50_200`` (44 tr, +550). Buy-and-hold
+on the same windows is +16807. The other step-6 Ns 42–78 of that
+200-stack already cleared the same band on the 23-window tag and are
+mined. An h4 gate on the spine cut trades under 30, so it is not
+re-minted. Densify #7 (``DENSE7_*``) leads: one axis off that spine,
+toward a slower MA (the 100→200 move is what put trades in the 30–300
+band). The ema twin first, then one stack period at a time (lengthen
+before shorten), then ``don_lo`` at the same Ns (structure N<=96),
+then the untested shorter swing Ns on the exact stack. No mom, no
+h4×mom, no 5m filler, no two-axis cross. Dip lookbacks such as
+``dip_234b`` are the dip atom, not structure. OOS gates unchanged.
 """
 from __future__ import annotations
 
@@ -684,6 +704,37 @@ DENSE6_SWING_NS: tuple[int, ...] = (72, 78, 84, 90, 96, 36)
 # would park it as the same family).
 DENSE6_GATE_CENTER: tuple[int, int] = (66, 140)
 DENSE6_GATE_NS: tuple[int, ...] = (66, 72, 60, 54, 78, 48, 84, 42, 90, 36)
+# 2026-10-27 densify #7. Current-tape near-misses (gate v4, 18 windows,
+# trades >= 30, net OOS P&L > 0), excess P&L order:
+#   near_swing_lo_96&sma_stack_20_50_200  46 tr / +1600 / excess -15206
+#   near_swing_lo_84&sma_stack_20_50_200  35 tr / +1475 / excess -15332
+#   near_swing_lo_90&sma_stack_20_50_200  46 tr / +1280 / excess -15527
+#   near_swing_lo_36&sma_stack_20_50_200  44 tr / +550  / excess -16257
+# (B&H +16807, bh daily Sharpe 0.558). The same sma stack at Ns
+# 72, 78, 66, 60, 54, 42, 48 cleared the band on the 23-window tag
+# and is already tested. One axis at a time off that spine. The ema
+# twin is the closest untested family. Stack periods then move toward
+# a slower MA (lower turnover) before the shorten side. ``don_lo`` is
+# the structure-tag axis at the same Ns. Shorter swing Ns exist only
+# on the exact stack, and they come last. No h4 gate (it cut this
+# spine under 30 trades). No mom. Structure N<=96. Periods stay
+# strictly fast < mid < slow so the stack predicate can be true.
+DENSE7_STACK: tuple[int, int, int] = (20, 50, 200)
+# Current-tape seeds first (excess order), then the other measured
+# Ns of this stack by their 23-window excess. All multiples of 6.
+DENSE7_SWING_NS: tuple[int, ...] = (96, 84, 90, 36, 72, 78, 66, 60, 54, 42, 48)
+# Untested shorter Ns of the exact stack. Higher turnover, emitted last.
+DENSE7_SWING_SHORT_NS: tuple[int, ...] = (30, 24, 18, 12, 6)
+# One period changed. Lengthen (slower MA) before shorten. Step is the
+# near_duplicate resolution: 10 at or above 40, 5 below 40. 100 is the
+# slow period of the already-tested high-turnover stack and is not a
+# step here. 40 stays below the mid period so the stack still rises.
+DENSE7_SLOW_LONG: tuple[int, ...] = (210, 220, 230, 240, 250, 260, 270, 280)
+DENSE7_MID_LONG: tuple[int, ...] = (60, 70, 80, 90, 100)
+DENSE7_FAST_LONG: tuple[int, ...] = (25, 30, 35, 40)
+DENSE7_SLOW_SHORT: tuple[int, ...] = (190, 180, 170, 160, 150, 140, 130, 120)
+DENSE7_MID_SHORT: tuple[int, ...] = (40, 30)
+DENSE7_FAST_SHORT: tuple[int, ...] = (15, 10)
 # Skip mom_12b on the undry prefix (research + Sharpe near-miss).
 UNDRY_MOM_PRIORITY: tuple[str, ...] = (
     "mom_18b_gt2pc",
@@ -1438,8 +1489,89 @@ def _dense6(blocked_keys: set[str]) -> Iterator[str]:
 
 
 def iter_dense6_names() -> Iterator[str]:
-    """Densify #6 names in emit order (the recipe prefix)."""
+    """Densify #6 names in emit order (after densify #7)."""
     yield from _regime_ands_parts()["dense6"]
+
+
+def _dense7_stack(kind: str, fast: int, mid: int, slow: int) -> str:
+    return f"{kind}_stack_{fast}_{mid}_{slow}"
+
+
+def _dense7_catalog() -> list[str]:
+    """One-axis names off the measured swing-low × 200-stack spine.
+
+    Highest EV first. Each raw name changes exactly one axis of
+    ``near_swing_lo_N & sma_stack_20_50_200``: the MA kind, one stack
+    period, the structure tag, or (exact stack only) a shorter swing N.
+    ``emit`` canonicalizes and drops anything the older recipe already
+    minted. Structure N stays <= 96. Periods stay strictly increasing.
+    """
+    fast0, mid0, slow0 = DENSE7_STACK
+    out: list[str] = []
+
+    def swing(kind: str, fast: int, mid: int, slow: int, ns: tuple[int, ...]) -> None:
+        if not fast < mid < slow:
+            return
+        stack = _dense7_stack(kind, fast, mid, slow)
+        for n in ns:
+            if n <= 0 or n > 96:
+                continue
+            out.append(f"near_swing_lo_{n}&{stack}")
+
+    swing("ema", fast0, mid0, slow0, DENSE7_SWING_NS)
+    for slow in DENSE7_SLOW_LONG:
+        swing("sma", fast0, mid0, slow, DENSE7_SWING_NS)
+    for mid in DENSE7_MID_LONG:
+        swing("sma", fast0, mid, slow0, DENSE7_SWING_NS)
+    for fast in DENSE7_FAST_LONG:
+        swing("sma", fast, mid0, slow0, DENSE7_SWING_NS)
+    for slow in DENSE7_SLOW_SHORT:
+        swing("sma", fast0, mid0, slow, DENSE7_SWING_NS)
+    for mid in DENSE7_MID_SHORT:
+        swing("sma", fast0, mid, slow0, DENSE7_SWING_NS)
+    for fast in DENSE7_FAST_SHORT:
+        swing("sma", fast, mid0, slow0, DENSE7_SWING_NS)
+    stack = _dense7_stack("sma", fast0, mid0, slow0)
+    for n in DENSE7_SWING_NS:
+        if 0 < n <= 96:
+            out.append(f"don_lo_{n}&{stack}")
+    swing("sma", fast0, mid0, slow0, DENSE7_SWING_SHORT_NS)
+    return out
+
+
+def _dense7(blocked_keys: set[str]) -> Iterator[str]:
+    """Densify #7: one axis off the current-tape swing × 200-stack near-misses.
+
+    Emit first, ahead of densify #6. ema twin of ``sma_stack_20_50_200``,
+    then one stack period at a time (slower MAs before faster), then
+    ``don_lo`` at the measured swing Ns, then shorter swing Ns on the
+    exact stack. No mom, no h4, no 5m filler, at most 2 atoms, structure
+    N<=96. ``blocked_keys`` are the near-duplicate keys of #6 and the
+    older recipe, so a cell already minted is not repeated.
+    """
+    from hedge_fund.trading.mint_quality import canonical_name, mint_block_reason
+
+    seen = set(blocked_keys)
+
+    def emit(raw: str) -> Iterator[str]:
+        name = canonical_name(raw) or raw
+        if name_has_mom_gt_and_dip(name) or not name_is_parseable(name):
+            return
+        if mint_block_reason(name):
+            return
+        key = near_duplicate_key(name)
+        if key in seen:
+            return
+        seen.add(key)
+        yield name
+
+    for name in _dense7_catalog():
+        yield from emit(name)
+
+
+def iter_dense7_names() -> Iterator[str]:
+    """Densify #7 names in emit order (the recipe prefix)."""
+    yield from _regime_ands_parts()["dense7"]
 
 
 def _lit_trend_dip(blocked_keys: set[str]) -> Iterator[str]:
@@ -1696,8 +1828,10 @@ def _regime_ands() -> Iterator[str]:
     undry #3 (``LITDIP_*``) led and drained. 2026-10-09 densify #4
     (``DSHARP_*``, the dip×h4 daily-Sharpe neighborhood) led next and
     drained. Densify #5 then led and drained. 2026-10-11 densify #6
-    (``DENSE6_*``, lt12 dip depth plus the swing-stack share) emits
-    first. No ``don_hi``. Cheap ``near_swing_hi``
+    led and drained. 2026-10-27 densify #7 (``DENSE7_*``, one axis off
+    the current-tape ``near_swing_lo`` × ``sma_stack_20_50_200``
+    near-misses) emits first. Densify #6 follows it. No ``don_hi``.
+    Cheap ``near_swing_hi``
     N≤48 only on depth-7 stacks (not minted without a dip extra).
     HTF False → no new long (flat). No named candlesticks.
     """
@@ -1760,7 +1894,10 @@ def _regime_ands_parts_raw() -> dict[str, list[str]]:
     dense = list(_dense_ema150(blocked))
     blocked.update(near_duplicate_key(name) for name in dense)
     depth = list(_dense6(blocked))
+    blocked.update(near_duplicate_key(name) for name in depth)
+    swing = list(_dense7(blocked))
     return {
+        "dense7": swing,
         "dense6": depth,
         "dense5": dense,
         "dsharp": sharp,
@@ -1773,7 +1910,16 @@ def _regime_ands_parts_raw() -> dict[str, list[str]]:
 
 def _regime_ands_raw() -> Iterator[str]:
     parts = _regime_ands_parts()
-    for fam in ("dense6", "dense5", "dsharp", "lit", "island_2c", "island_2b", "drained"):
+    for fam in (
+        "dense7",
+        "dense6",
+        "dense5",
+        "dsharp",
+        "lit",
+        "island_2c",
+        "island_2b",
+        "drained",
+    ):
         yield from parts[fam]
 
 
@@ -1807,10 +1953,14 @@ def _trend_participation_ands(n: int) -> Iterator[str]:
 def iter_recipe_names() -> Iterator[str]:
     """Deterministic bounded stream. Not a full cartesian of every atom.
 
+    Densify #7 (``DENSE7_*``: one axis off the current-tape
+    ``near_swing_lo`` × ``sma_stack_20_50_200`` near-misses — ema twin,
+    then one stack period toward a slower MA, then ``don_lo`` at the
+    same Ns, then shorter swing Ns on the exact stack) is first.
     Densify #6 (``DENSE6_*``: lt12 dip 198–264 × h4 120–200 around the
-    current-gate champions, plus a ~20–30% exploratory share on
+    previous champions, plus a ~20–30% exploratory share on
     ``near_swing_lo`` × ``sma_stack_20_50_200``, then the untested lt10
-    holes of that box) is first. Densify #5 (``DENSE5_*``: dip 186–246
+    holes of that box) follows it. Densify #5 (``DENSE5_*``: dip 186–246
     × h4 120–170 box around the ``dip×h4_ema_abv_150`` passes, plus a
     ~20% exploratory share) follows it. Densify #4 (``DSHARP_*``:
     one-axis neighborhood of the dip×h4 daily-Sharpe near-misses, no
