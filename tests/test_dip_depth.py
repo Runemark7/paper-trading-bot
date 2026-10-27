@@ -74,14 +74,18 @@ class DipDepthTests(unittest.TestCase):
         self.assertEqual(QUAL_WARMUP_BARS, 4032)
 
     def test_family_is_the_recipe_prefix(self):
+        from hedge_fund.trading.refill import iter_dense7_names
+
         family = list(iter_dense6_names())
+        ahead = list(iter_dense7_names())
         names = list(iter_recipe_names())
         self.assertEqual(family[0], LEAD)
-        self.assertEqual(names[: len(family)], family)
+        self.assertEqual(names[len(ahead) : len(ahead) + len(family)], family)
         self.assertEqual(len(family), 406)
         keys = {near_duplicate_key(n) for n in family}
         self.assertEqual(len(keys), len(family))
-        rest = {near_duplicate_key(n) for n in names[len(family) :]}
+        rest = {near_duplicate_key(n) for n in names[len(ahead) + len(family) :]}
+        rest.update(near_duplicate_key(n) for n in ahead)
         self.assertTrue(keys.isdisjoint(rest))
         for older in (
             iter_dense_ema150_names(),

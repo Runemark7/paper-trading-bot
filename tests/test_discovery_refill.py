@@ -103,8 +103,9 @@ from hedge_fund.trading.universe import (
 )
 
 
-# 2026-10-11: densify #6 (``DENSE6_*``) is the recipe prefix.
-# 2026-10-09 later: densify #5 (``DENSE5_*``) follows it.
+# 2026-10-27: densify #7 (``DENSE7_*``) is the recipe prefix.
+# 2026-10-11: densify #6 (``DENSE6_*``) follows it.
+# 2026-10-09 later: densify #5 (``DENSE5_*``) follows that.
 # 2026-10-09: densify #4 (``DSHARP_*``) follows that.
 # 2026-10-08: literature undry #3 (``LITDIP_*``) follows that.
 # Older amendment tests pin the pre-#3 stream, so they read the recipe
@@ -112,13 +113,15 @@ from hedge_fund.trading.universe import (
 from hedge_fund.trading.refill import (
     iter_daily_sharpe_dip_names as _iter_dsharp,
     iter_dense6_names as _iter_dense6,
+    iter_dense7_names as _iter_dense7,
     iter_dense_ema150_names as _iter_dense5,
     iter_lit_trend_dip_names as _iter_lit,
 )
 
 _LIT_NAMES = frozenset(_iter_lit())
 _PREFIX_NAMES = (
-    frozenset(_iter_dense6())
+    frozenset(_iter_dense7())
+    | frozenset(_iter_dense6())
     | frozenset(_iter_dense5())
     | frozenset(_iter_dsharp())
     | _LIT_NAMES

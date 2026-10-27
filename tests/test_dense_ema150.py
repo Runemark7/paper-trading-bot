@@ -69,7 +69,9 @@ class DenseEma150Tests(unittest.TestCase):
         self.assertEqual(QUAL_WARMUP_BARS, 4032)
 
     def test_family_follows_the_dense6_prefix(self):
-        prefix = list(iter_dense6_names())
+        from hedge_fund.trading.refill import iter_dense7_names
+
+        prefix = list(iter_dense7_names()) + list(iter_dense6_names())
         family = list(iter_dense_ema150_names())
         names = list(iter_recipe_names())[len(prefix) :]
         self.assertEqual(family[0], LEAD)
