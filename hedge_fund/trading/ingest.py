@@ -69,6 +69,13 @@ def _validate_eval(row: Any) -> dict | None:
     # the name is re-evaluated once the worker pulls the new rules.
     if row.get("gate_rules") != GATE_RULES:
         return None
+    # A qualified row without the v4 block was not measured under this gate.
+    # Reject it (no log row) so the lease can be retried by a current worker.
+    if bool(row.get("qualified")):
+        from hedge_fund.trading.gate_v4 import v4_attestation_ok
+
+        if not v4_attestation_ok(row):
+            return None
     reasons = row.get("fail_reasons")
     if reasons is not None and not isinstance(reasons, list):
         return None
@@ -104,6 +111,30 @@ def _admit_qualified(st: dict, record: dict, existing: set[str]) -> bool:
     if qual:
         # Ranking fields for the one-per-family rule (families.py).
         row["qual"] = qual
+    from hedge_fund.trading.forward_test import registration_for
+
+    row["forward_test"] = registration_for(record, admitted_at)
+    gate = record.get("gate_v4")
+    if isinstance(gate, dict):
+        # Compact summary. Holdout fields stay off sharpe / test_pnl.
+        row["gate_v4"] = {
+            key: gate.get(key)
+            for key in (
+                "passed",
+                "rules",
+                "dsr",
+                "pbo",
+                "n_trials",
+                "neighbours",
+                "neighbours_pass",
+                "cross_asset_sharpe",
+                "cross_asset_pass",
+                "cross_asset_note",
+                "backtest_max_dd",
+                "cost_sharpe",
+                "cost_daily_sharpe",
+            )
+        }
     st.setdefault("champions", []).append(row)
     existing.add(name)
     return True

@@ -12,12 +12,13 @@ from pathlib import Path
 from unittest.mock import patch
 
 from hedge_fund.trading.constants import GATE_RULES, QUAL_N_WINDOWS
+from hedge_fund.trading.gate_v4 import v4_pass_attestation
 
 OLD_RULES = "sltp_cap100_bhdsr_20261008"
 
 
 def _eval(name, *, qualified, rules=GATE_RULES):
-    return {
+    row = {
         "strategy": name,
         "tested_at": "2026-10-08T17:00:00+00:00",
         "qualified": qualified,
@@ -35,6 +36,9 @@ def _eval(name, *, qualified, rules=GATE_RULES):
         "risk_policy": "rm_v1",
         "gate_rules": rules,
     }
+    if qualified and rules == GATE_RULES:
+        row["gate_v4"] = v4_pass_attestation()
+    return row
 
 
 class RulesV3BatchTests(unittest.TestCase):
@@ -142,7 +146,10 @@ class OldRulesNeverFlipTests(unittest.TestCase):
 
         cur = {**row, "strategy": "dip_new_rules", "gate_rules": GATE_RULES}
         flipped, names = requalify_parked_log([cur], existing_names=set())
-        self.assertEqual(names, ["dip_new_rules"])
+        # Current tag on stored aggregates is still not a v4 attestation.
+        self.assertEqual(names, [])
+        self.assertEqual(flipped, [])
+        self.assertFalse(cur["qualified"])
 
 
 if __name__ == "__main__":

@@ -30,6 +30,7 @@ import {
   openLotsByPair,
   openLotsForChampion,
 } from "../status/format";
+import { ForwardStatusBadge, forwardStatusText } from "../status/forwardStatus";
 
 function findChampion(champs: Champion[], name: string): Champion | undefined {
   return champs.find((c) => c.name === name) ?? champs.find((c) => accountsMatch(c.name, name));
@@ -163,6 +164,7 @@ export default function ChampionDetail() {
               </div>
               <div className="flex flex-wrap items-center gap-2 min-w-0">
                 {champ ? <Badge tone="run">running now</Badge> : <Badge tone="wait">not on the book</Badge>}
+                {champ ? <ForwardStatusBadge status={champ.forward_status} /> : null}
                 <PairLotChips
                   btc={liveLotsKnown ? split.btc : "—"}
                   eth={liveLotsKnown ? split.eth : "—"}
@@ -186,6 +188,7 @@ export default function ChampionDetail() {
                     <span className="font-medium">{fmt(champ.pnl)}</span>
                   </Field>
                   <Field label="Champion since">{fmtChampionSince(champ.champion_since)}</Field>
+                  <Field label="Forward test">{forwardStatusText(champ.forward_status)}</Field>
                 </FieldGrid>
               ) : (
                 <p className="text-sm text-white/55">

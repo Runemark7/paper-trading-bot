@@ -477,6 +477,22 @@ def backfill_champion_since(st: dict) -> bool:
     return changed
 
 
+def _forward_status(row: dict) -> dict:
+    """Read-only kill-criteria flag. Never writes the pool or retires."""
+    try:
+        from hedge_fund.trading.forward_test import evaluate_forward_status
+
+        return evaluate_forward_status(row)
+    except Exception:
+        return {
+            "status": "unavailable",
+            "action": "flag_only",
+            "flagged": False,
+            "registered": False,
+            "reasons": ["forward status unavailable"],
+        }
+
+
 def pool_status(*, read_only: bool = False) -> dict:
     """Last-known pool. ``read_only`` skips sqlite MIN() backfill + json write.
 
@@ -492,6 +508,7 @@ def pool_status(*, read_only: bool = False) -> dict:
     for c in st["champions"]:
         row = dict(c)
         row["champion_since"] = c.get("champion_since") or None
+        row["forward_status"] = _forward_status(row)
         champs.append(row)
     grad = load_graduated()
     retired = load_retired()["retired"]

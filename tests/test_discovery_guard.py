@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch
 from hedge_fund.trading.constants import (
     MIN_BACKTEST_SHARPE,
     MIN_BACKTEST_TRADES,
+    DISCOVERY_N_WINDOWS,
     QUAL_N_WINDOWS,
     QUAL_TIMEFRAME,
     RISK_POLICY,
@@ -236,7 +237,7 @@ class WorkerLookbackAndTimeoutTests(unittest.TestCase):
                     return_value={"BTC/USDT": [1]},
                 ), patch(
                     "scripts.discovery_worker._window_slices",
-                    return_value=[{}] * QUAL_N_WINDOWS,
+                    return_value=[{}] * DISCOVERY_N_WINDOWS,
                 ), patch(
                     "scripts.discovery_worker._benchmark_oos",
                     return_value=(1.0, 1.0),
@@ -333,7 +334,7 @@ class WorkerLookbackAndTimeoutTests(unittest.TestCase):
                     return_value={"BTC/USDT": [1]},
                 ), patch(
                     "scripts.discovery_worker._window_slices",
-                    return_value=[{}] * QUAL_N_WINDOWS,
+                    return_value=[{}] * DISCOVERY_N_WINDOWS,
                 ), patch(
                     "scripts.discovery_worker._benchmark_oos",
                     return_value=(1.0, 1.0),

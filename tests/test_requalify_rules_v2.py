@@ -16,13 +16,14 @@ from pathlib import Path
 from unittest.mock import patch
 
 from hedge_fund.trading.constants import GATE_RULES, QUAL_N_WINDOWS
+from hedge_fund.trading.gate_v4 import v4_pass_attestation
 
 CHAMP = "don_hi_12"
 FRESH = ["don_hi_30", "don_hi_36", "don_hi_42"]
 
 
 def _eval(name, *, qualified):
-    return {
+    row = {
         "strategy": name,
         "tested_at": "2026-10-08T15:00:00+00:00",
         "qualified": qualified,
@@ -40,6 +41,9 @@ def _eval(name, *, qualified):
         "risk_policy": "rm_v1",
         "gate_rules": GATE_RULES,
     }
+    if qualified:
+        row["gate_v4"] = v4_pass_attestation()
+    return row
 
 
 class BundledNamesTests(unittest.TestCase):

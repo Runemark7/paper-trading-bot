@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from hedge_fund.trading.discovery_guard import is_ops_park_record
+from hedge_fund.trading.holdout import seal
 from hedge_fund.trading.mint_quality import parse_atom
 
 DISCOVERY_LIFT = "discovery_lift.json"
@@ -172,6 +173,7 @@ def _ranking_lift(est: AtomEstimate) -> float:
     return est.sharpe_lift
 
 
+@seal("lift")
 def estimate_lifts(rows: list) -> LiftModel:
     """Fit atom and family+param lifts. Ops-park rows are ignored.
 
@@ -630,6 +632,7 @@ def save_lift_cache(model: LiftModel) -> None:
     os.replace(tmp, path)
 
 
+@seal("lift")
 def training_rows() -> list[dict]:
     """Newest metrics per name, joined with full-record P&L. Ops parks left out.
 

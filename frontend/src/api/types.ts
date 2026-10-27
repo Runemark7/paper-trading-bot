@@ -109,6 +109,21 @@ export interface LearningCondition {
 // /api/learning returns a dict keyed "symbol|timeframe|condition" -> one row.
 export type LearningMap = Record<string, LearningCondition>;
 
+/** Pre-registered forward-test kill criteria. Flag only; never an auto-retire. */
+export interface ForwardStatus {
+  status: "not_registered" | "pending" | "ok" | "flagged" | "unavailable" | string;
+  action?: string;
+  flagged?: boolean;
+  reasons?: string[];
+  eligible?: boolean;
+  days_live?: number | null;
+  closed_trades?: number;
+  live_sharpe?: number | null;
+  live_max_dd?: number | null;
+  backtest_max_dd?: number | null;
+  registered?: boolean;
+}
+
 export interface Champion {
   name: string;
   closed: number;
@@ -119,6 +134,8 @@ export interface Champion {
   /** UTC ISO-8601 when this name joined the paper champion pool, or null if unknown. */
   champion_since?: string | null;
   source?: string;
+  /** Read-only status from the criteria stored at admission. */
+  forward_status?: ForwardStatus | null;
 }
 
 export interface GraduatedTrade {

@@ -19,7 +19,7 @@ from pathlib import Path
 
 from hedge_fund.paths import state_root
 from hedge_fund.trading.champions import load_graduated, load_pool, retired_names, save_pool
-from hedge_fund.trading.constants import GATE_RULES, QUAL_TIMEFRAME, RISK_POLICY
+from hedge_fund.trading.constants import GATE_RULES, QUAL_TIMEFRAME, RISK_POLICY, V3_GATE_RULES
 from hedge_fund.trading.requalify import load_requalify_state
 from hedge_fund.trading.store import paper_state_lock
 
@@ -80,7 +80,12 @@ def _save_marker(marker: dict) -> None:
 
 
 def _requalify_pass(meta: object, batch_id: str) -> dict | None:
-    """The stored verdict for ``batch_id`` if it is a pass on the current tag."""
+    """The stored verdict for ``batch_id`` if it is a pass on an accepted tag.
+
+    Current ``GATE_RULES`` always matches. The historical rules-v3 batch
+    also matches ``V3_GATE_RULES`` so a wiped marker still seats the
+    2026-10-09 decision and does not wait for a v4 re-run.
+    """
     if not isinstance(meta, dict):
         return None
     candidates = [meta]
@@ -94,7 +99,13 @@ def _requalify_pass(meta: object, batch_id: str) -> dict | None:
         result = entry.get("result")
         if not isinstance(result, dict) or not result.get("qualified"):
             continue
-        if result.get("gate_rules") != GATE_RULES:
+        rules = result.get("gate_rules")
+        # The 2026-10-09 one-shot was measured on the pre-holdout tag.
+        # A wiped marker must still match that stored verdict. It is not
+        # a v4 admit: the batch id is the historical rules-v3 batch.
+        if rules != GATE_RULES and not (
+            batch_id == "rules-v3-tiled-20261008" and rules == V3_GATE_RULES
+        ):
             continue
         return result
     return None

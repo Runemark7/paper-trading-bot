@@ -251,6 +251,12 @@ def requalify_parked_log(
         # is never re-decided into a pass under the current ones.
         if row.get("gate_rules") != GATE_RULES:
             continue
+        # Stored v3 aggregates are not a v4 pass. Promotion requires the
+        # worker's one-shot attestation (holdout, DSR, PBO, neighbours, cost).
+        from hedge_fund.trading.gate_v4 import v4_attestation_ok
+
+        if not v4_attestation_ok(row):
+            continue
         decision = qualification_from_record(row, expected_windows=expected_windows)
         if not decision["passed"]:
             continue

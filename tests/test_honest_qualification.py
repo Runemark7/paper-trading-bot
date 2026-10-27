@@ -186,10 +186,11 @@ class OosGateTests(unittest.TestCase):
         _assert_no_window_veto(d_dbl["reasons"])
 
         flipped, names = requalify_parked_log([row, dbl], existing_names=set())
-        self.assertEqual(names, ["window_veto_only"])
-        self.assertTrue(row["qualified"])
+        # Stored v3 aggregates are not a v4 pass. No attestation, no flip.
+        self.assertEqual(names, [])
+        self.assertEqual(flipped, [])
+        self.assertFalse(row["qualified"])
         self.assertFalse(dbl["qualified"])
-        self.assertEqual(flipped[0]["strategy"], "window_veto_only")
 
     def test_twenty_three_by_ninety_is_the_default_walk_forward(self):
         from hedge_fund.trading.constants import (

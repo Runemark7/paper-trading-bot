@@ -35,6 +35,7 @@ import {
   type ChampionSortKey,
 } from "../status/championFilters";
 import { championDetailPath } from "../status/championPath";
+import { ForwardStatusBadge } from "../status/forwardStatus";
 import {
   accountsMatch,
   certaintyLabel,
@@ -296,8 +297,11 @@ export default function Champions() {
                     className="block w-full text-left p-3 min-h-11 space-y-2 min-w-0 hover:bg-white/[0.04] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-indigo-400"
                   >
                     <MonoName className="block w-full text-sm font-medium text-white">{c.name}</MonoName>
-                    <div className="flex items-center justify-between gap-2 min-w-0">
-                      <Badge tone="run">running now</Badge>
+                    <div className="flex flex-wrap items-center justify-between gap-2 min-w-0">
+                      <span className="flex flex-wrap items-center gap-1">
+                        <Badge tone="run">running now</Badge>
+                        <ForwardStatusBadge status={c.forward_status} />
+                      </span>
                       <span aria-hidden className="shrink-0 text-white/40 text-sm leading-none">
                         ▸
                       </span>
@@ -353,6 +357,9 @@ export default function Champions() {
                           onClick={(e) => e.stopPropagation()}
                         >
                           <MonoName className="font-medium text-white">{c.name}</MonoName>
+                          <span className="mt-1 inline-flex">
+                            <ForwardStatusBadge status={c.forward_status} />
+                          </span>
                         </Link>
                       </td>
                       <td className="text-white/50">{fmtChampionSince(c.champion_since)}</td>

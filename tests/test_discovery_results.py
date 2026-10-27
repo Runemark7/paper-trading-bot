@@ -13,7 +13,7 @@ from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import urlopen
 
-from hedge_fund.trading.constants import DISCOVERY_LOG_CAP, GATE_RULES
+from hedge_fund.trading.constants import DISCOVERY_LOG_CAP, DISCOVERY_N_WINDOWS, GATE_RULES
 from hedge_fund.trading.densify import next_densify_batch, order_seeds
 from hedge_fund.trading.discovery import (
     append_discovery_evaluations,
@@ -218,7 +218,7 @@ class CapTests(unittest.TestCase):
             "recent_pass",
             qualified=True,
             tested_at="2026-10-08T12:00:00+00:00",
-            regimes_tested=23,
+            regimes_tested=DISCOVERY_N_WINDOWS,
             test_pnl=40.0,
             bh_oos_pnl=5.0,
         )

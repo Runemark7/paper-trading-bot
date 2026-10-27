@@ -464,7 +464,18 @@ def _claim_unlocked(
         "claimed_at": _iso(now),
         "leases_active": len(state["leases"]),
         "requalify": list(requal),
+        "trials": _trial_census_safe(),
     }
+
+
+def _trial_census_safe() -> dict:
+    """Trial count for the deflated Sharpe ratio. Never fails a claim."""
+    try:
+        from hedge_fund.trading.trials import trial_census
+
+        return trial_census()
+    except Exception:
+        return {"n_trials": None}
 
 
 def stale_rules_response(worker_id: str, n: int, gate_rules: object) -> dict:

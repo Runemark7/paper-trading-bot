@@ -34,7 +34,8 @@ from hedge_fund.trading.discovery_guard import (
     is_ops_park_record,
     lookback_too_expensive_reason,
 )
-from hedge_fund.trading.constants import MIN_BACKTEST_TRADES, QUAL_N_WINDOWS
+from hedge_fund.trading.constants import DISCOVERY_N_WINDOWS, MIN_BACKTEST_TRADES
+from hedge_fund.trading.holdout import seal
 from hedge_fund.trading.mint_quality import (
     canonical_key_set,
     canonical_name,
@@ -317,6 +318,7 @@ def _excess_pnl(row: dict) -> float | None:
     return excess
 
 
+@seal("densify")
 def order_seeds(
     index: dict[str, bool],
     metrics: dict | None = None,
@@ -327,11 +329,12 @@ def order_seeds(
     No metrics and no results → qualified names in the historical
     heuristic order (unit tests of the neighbor walk).
 
-    Otherwise seed only names whose result used the current window
-    count (``regimes_tested`` or ``len(windows)`` == ``QUAL_N_WINDOWS``)
-    and at least ``MIN_BACKTEST_TRADES`` trades, best net OOS P&L minus
-    buy-and-hold first. Sharpe breaks ties. Old 8-window passes stay in
-    the index and are not seeds.
+    Otherwise seed only names whose result used the sealed discovery
+    window count (``regimes_tested`` == ``DISCOVERY_N_WINDOWS``) and at
+    least ``MIN_BACKTEST_TRADES`` trades, best net OOS P&L minus
+    buy-and-hold first. Sharpe breaks ties. The pre-holdout 23-window
+    tag and older 8-window passes stay in the index and are not seeds:
+    those Sharpes were measured on bars the holdout now seals.
 
     When nothing was tested on the current window set, the near-miss
     band is trades ≥ 30 and net P&L > 0. Known other window counts are
@@ -350,10 +353,10 @@ def order_seeds(
         row = _row_for_seed(name, metrics, results)
         windows = _window_count(row)
         sharpe, trades = _metric_numbers(row)
-        if windows == QUAL_N_WINDOWS:
+        if windows == DISCOVERY_N_WINDOWS:
             any_current = True
         if (
-            windows == QUAL_N_WINDOWS
+            windows == DISCOVERY_N_WINDOWS
             and trades is not None
             and trades >= MIN_BACKTEST_TRADES
         ):
@@ -660,6 +663,7 @@ def candidate_allowed(
     return True
 
 
+@seal("densify")
 def next_densify_batch(
     *,
     taken_names: Iterable[str],
