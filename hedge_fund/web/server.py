@@ -26,6 +26,9 @@ A small, dependency-free HTTP server (stdlib only) that exposes:
   POST /api/discovery/release -> drop this worker's leases (same ingest token)
   POST /api/discovery/requalify -> queue a re-qualification batch (same ingest token)
   GET /api/discovery/requalify -> requalify results (separate from fail-once; never culls)
+  POST /api/discovery/rescore -> gate v5 B&H re-label (same ingest token).
+                                Dry-run unless the body sets apply=true.
+                                Does not admit or retire champions.
   POST /api/discovery/farm -> Start/Stop Windows farm (same ingest token)
   POST /api/champions/retain -> keep-list filter of champions.json (same ingest token)
   POST /api/champions/cull_undated -> drop missing champion_since (same ingest token)
@@ -703,6 +706,23 @@ class Handler(BaseHTTPRequestHandler):
                     payload.get("names") if "names" in payload else None,
                     status=payload.get("status"),
                 ))
+            except ValueError as exc:
+                self._send_json({"ok": False, "error": str(exc), "paper_only": True}, 400)
+            except Exception as exc:
+                self._send_json({"ok": False, "error": str(exc), "paper_only": True}, 500)
+        elif route == "/api/discovery/rescore":
+            ok, err, code = self._discovery_ingest_authorized()
+            if not ok:
+                self._send_json({"ok": False, "error": err, "paper_only": True}, code)
+                return
+            payload, err = self._read_json_body()
+            if err:
+                self._send_json({"ok": False, "error": err, "paper_only": True}, 400)
+                return
+            try:
+                from hedge_fund.trading.rescore_v5 import rescore_v5
+
+                self._send_json(rescore_v5(apply=payload.get("apply") is True))
             except ValueError as exc:
                 self._send_json({"ok": False, "error": str(exc), "paper_only": True}, 400)
             except Exception as exc:

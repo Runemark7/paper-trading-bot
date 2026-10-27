@@ -19,6 +19,7 @@ from pathlib import Path
 
 from hedge_fund.paths import state_root
 from hedge_fund.trading.champions import load_graduated, load_pool, retired_names, save_pool
+from hedge_fund.trading.forward_slots import forward_cap_block
 from hedge_fund.trading.constants import GATE_RULES, QUAL_TIMEFRAME, RISK_POLICY, V3_GATE_RULES
 from hedge_fund.trading.requalify import load_requalify_state
 from hedge_fund.trading.store import paper_state_lock
@@ -135,6 +136,7 @@ def ensure_approved_admits_unlocked(now: datetime) -> dict | None:
     retired = retired_names()
     admitted: list[str] = []
     skipped: list[dict] = []
+    deferred = False
     for spec in APPROVED_ADMITS:
         name = spec["name"]
         if name in retired:
@@ -142,6 +144,11 @@ def ensure_approved_admits_unlocked(now: datetime) -> dict | None:
             continue
         if name in pooled or name in graduated:
             skipped.append({"strategy": name, "reason": "already_pooled_or_graduated"})
+            continue
+        block = forward_cap_block(len(st.get("champions") or []))
+        if block:
+            skipped.append({"strategy": name, "reason": block})
+            deferred = True
             continue
         result = verdicts[name]
         provenance = {
@@ -168,6 +175,9 @@ def ensure_approved_admits_unlocked(now: datetime) -> dict | None:
         })
         pooled.add(name)
         admitted.append(name)
+    if deferred and not admitted:
+        log.info("approved admit deferred: forward champion cap")
+        return None
     if admitted:
         save_pool(st)
     marker["applied"].append(APPROVED_ADMIT_BATCH)

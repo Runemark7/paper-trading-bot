@@ -67,7 +67,7 @@ class DipDepthTests(unittest.TestCase):
         self._tmp.cleanup()
 
     def test_gate_is_frozen(self):
-        self.assertEqual(GATE_RULES, "gate_v4_btc_holdout_dsr_pbo_20261027")
+        self.assertEqual(GATE_RULES, "gate_v5_btc_holdout_dsr_pbo_20261027")
         self.assertEqual(MIN_BACKTEST_TRADES, 30)
         self.assertEqual(MIN_BACKTEST_SHARPE, 0.30)
         self.assertEqual(QUAL_N_WINDOWS, 23)

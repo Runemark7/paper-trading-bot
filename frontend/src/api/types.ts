@@ -159,6 +159,9 @@ export interface GraduatedStrategy {
   win_rate_pct: number;
   graduated_at: string;
   status: "GRADUATED_PAPER" | "REJECTED_NEGATIVE_PNL";
+  /** Informational. Graduation does not compare against this. */
+  buy_and_hold_pnl?: number | null;
+  buy_and_hold_role?: "informational" | string;
   trade_history: GraduatedTrade[];
 }
 
@@ -178,6 +181,10 @@ export interface DiscoveryEvaluation {
   all_windows_nonneg?: boolean | null;
   bh_oos_pnl?: number | null;
   sma_stack_oos_pnl?: number | null;
+  daily_sharpe?: number | null;
+  bh_daily_sharpe?: number | null;
+  /** Buy-and-hold figures are reported and are not a pass requirement. */
+  bh_role?: "informational" | string;
 }
 
 export interface DiscoveryWorker {
@@ -334,6 +341,11 @@ export interface DiscoverySummary {
   last_strategy: string | null;
   last_eval_age_seconds?: number | null;
   note: string;
+  gate?: {
+    rules: string;
+    criteria: string;
+    bh_role: string;
+  };
 }
 
 export interface CertaintyNote {
@@ -445,10 +457,38 @@ export interface StatusSnapshot {
   };
 }
 
+export interface ForwardCandidate {
+  rank: number;
+  strategy: string;
+  dsr: number | null;
+  daily_sharpe: number | null;
+  pbo: number | null;
+  sharpe?: number | null;
+  bh_daily_sharpe?: number | null;
+  bh_oos_pnl?: number | null;
+  bh_role?: string;
+  proposed: boolean;
+  admitted: boolean;
+}
+
+export interface ForwardCandidates {
+  paper_only: boolean;
+  cap: number;
+  active: number;
+  open_slots: number;
+  eligible: number;
+  proposed: ForwardCandidate[];
+  admitted: string[];
+  retired: string[];
+  note: string;
+}
+
 export interface ChampionsPayload {
   active_champions: Champion[];
   active_count: number;
   evaluation_limit: number;
+  forward_champion_cap?: number;
+  forward_candidates?: ForwardCandidates;
   graduated_count: number;
   graduated: GraduatedStrategy[];
   synced_until?: string | null;

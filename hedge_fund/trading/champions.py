@@ -1,13 +1,16 @@
 """Champion pool manager — continuous pipeline.
 
 Rules (hedge_fund.trading.constants — do not document different numbers):
-1. No live-slot cap. Every 5m-qualified name not already in the pool or
-   graduated.json is admitted. Universe size is the combinatorial bound.
+1. New admissions stop at FORWARD_CHAMPION_CAP (5) active forward champions.
+   The revoked 20-slot arena stays deleted. Names already on the book are
+   not retired to get under the cap. Universe size is still the mint bound.
 2. Evaluation threshold: TRADE_EVALUATION_LIMIT (80) closed paper trades.
-   Paper PnL greater than buy-and-hold of the same assets over the same
-   period (after fees) → GRADUATED_PAPER (graduated paper, not live trading).
-   Else REJECTED_NEGATIVE_PNL. Results go to graduated.json.
+   Net paper P&L > 0 after taker fee and slippage → GRADUATED_PAPER
+   (graduated paper, not live trading). Else REJECTED_NEGATIVE_PNL.
+   Buy-and-hold P&L is stored and is not the rule. Results go to graduated.json.
 3. 5m-qualified candidates fill the book — never a 4h admit bar.
+   Seating a name is still the owner's admit path; the forward-candidate
+   list does not admit.
 """
 from __future__ import annotations
 
@@ -19,11 +22,14 @@ from pathlib import Path
 from hedge_fund.paths import state_root
 from hedge_fund.trading.buy_and_hold import buy_and_hold_from_trades
 from hedge_fund.trading.constants import (
+    BH_METRIC_ROLE,
+    FORWARD_CHAMPION_CAP,
     GRADUATED_PAPER,
     PAPER_START_CASH,
     REJECTED_NEGATIVE_PNL,
     TRADE_EVALUATION_LIMIT,
 )
+from hedge_fund.trading.forward_slots import forward_cap_block, forward_candidates
 from hedge_fund.trading.open_lots import account_slug, attach_open_lots
 from hedge_fund.trading.store import TradeStore, connect_sqlite, paper_state_lock
 
@@ -41,6 +47,7 @@ __all__ = [
     "load_pool",
     "load_retired",
     "paper_beats_buy_and_hold",
+    "paper_buy_and_hold_pnl",
     "pool_status",
     "promote_candidates",
     "retain_champions",
@@ -213,16 +220,16 @@ def cull_undated_champions() -> dict:
     return out
 
 
-def paper_beats_buy_and_hold(
-    paper_pnl: float,
+def paper_buy_and_hold_pnl(
     trades: list[dict],
     db_path: Path | None = None,
     start_cash: float = PAPER_START_CASH,
-) -> tuple[bool, float | None]:
-    """True iff paper PnL strictly exceeds B&H of the same assets / period after fees.
+) -> float | None:
+    """Informational B&H P&L for the same assets and period, after fees.
 
     Prefers the live overlay on equity_snapshots; falls back to first-entry /
-    last-exit reconstruction from the closed-trade history.
+    last-exit reconstruction from the closed-trade history. Graduation does
+    not compare against this number.
     """
     bh_pnl: float | None = None
     if db_path and db_path.exists():
@@ -238,6 +245,17 @@ def paper_beats_buy_and_hold(
             bh_pnl = None
     if bh_pnl is None:
         bh_pnl = buy_and_hold_from_trades(trades, start_cash)
+    return bh_pnl
+
+
+def paper_beats_buy_and_hold(
+    paper_pnl: float,
+    trades: list[dict],
+    db_path: Path | None = None,
+    start_cash: float = PAPER_START_CASH,
+) -> tuple[bool, float | None]:
+    """Informational comparison. The graduation rule is net paper P&L > 0."""
+    bh_pnl = paper_buy_and_hold_pnl(trades, db_path=db_path, start_cash=start_cash)
     if bh_pnl is None:
         return False, None
     return paper_pnl > bh_pnl, bh_pnl
@@ -247,8 +265,8 @@ def collect_live_results() -> dict:
     """Sync closed paper trades from ALL per-strategy accounts.
 
     Graduates strategies with >= TRADE_EVALUATION_LIMIT closed trades and
-    removes them from the active testing pool. Graduation requires beating
-    buy-and-hold, not merely paper PnL > 0.
+    removes them from the active testing pool. Graduation requires net paper
+    P&L > 0 after taker fee and slippage. Buy-and-hold P&L is recorded only.
     """
     with paper_state_lock("discovery"):
         return _collect_live_results_unlocked()
@@ -335,18 +353,22 @@ def _collect_live_results_unlocked() -> dict:
                 except Exception:
                     pass
 
-            beats, bh_pnl = paper_beats_buy_and_hold(
-                float(c["pnl"]), strat_history, db_path=db_path if db_path.exists() else None,
+            bh_pnl = paper_buy_and_hold_pnl(
+                strat_history, db_path=db_path if db_path.exists() else None,
             )
+            # Stored trade P&L is already net of entry and exit fees. Slippage
+            # is inside the fill prices the live loop used to compute that P&L.
+            profitable = float(c["pnl"]) > 0.0
             grad_entry = {
                 "name": c["name"],
                 "closed_trades": c["closed"],
                 "total_pnl": round(c["pnl"], 2),
                 "buy_and_hold_pnl": None if bh_pnl is None else round(bh_pnl, 2),
+                "buy_and_hold_role": BH_METRIC_ROLE,
                 "wins": c["wins"],
                 "win_rate_pct": win_rate,
                 "graduated_at": datetime.now(timezone.utc).isoformat(),
-                "status": GRADUATED_PAPER if beats else REJECTED_NEGATIVE_PNL,
+                "status": GRADUATED_PAPER if profitable else REJECTED_NEGATIVE_PNL,
                 "trade_history": strat_history
             }
             if c["name"] not in existing_grad_names:
@@ -378,33 +400,45 @@ def _collect_live_results_unlocked() -> dict:
 
 
 def promote_candidates(candidates: list[dict]) -> dict:
-    """Admit every 5m-qualified name not already in the pool or graduated.json."""
+    """Admit 5m-qualified names until the forward cap. Does not retire anyone."""
     st = load_pool()
     grad_list = load_graduated()
     existing = {c["name"] for c in st["champions"]}.union({g["name"] for g in grad_list})
     existing |= retired_names()
 
     added = []
+    refused: list[dict] = []
     for cand in candidates:
         name = cand.get("strategy")
-        if name and name not in existing:
-            st["champions"].append({
-                "name": name,
-                "closed": 0,
-                "pnl": 0.0,
-                "wins": 0,
-                "source": cand.get("source") or "sweep_promotion",
-                "champion_since": datetime.now(timezone.utc).isoformat(),
-            })
-            existing.add(name)
-            added.append(name)
+        if not name or name in existing:
+            continue
+        block = forward_cap_block(len(st["champions"]))
+        if block:
+            refused.append({"strategy": name, "reason": block})
+            continue
+        st["champions"].append({
+            "name": name,
+            "closed": 0,
+            "pnl": 0.0,
+            "wins": 0,
+            "source": cand.get("source") or "sweep_promotion",
+            "champion_since": datetime.now(timezone.utc).isoformat(),
+        })
+        existing.add(name)
+        added.append(name)
 
-    backfill_champion_since(st)
-    save_pool(st)
-    from hedge_fund.trading.families import enforce_champion_families
+    if added:
+        backfill_champion_since(st)
+        save_pool(st)
+        from hedge_fund.trading.families import enforce_champion_families
 
-    enforce_champion_families()
-    return {"added": added, "active_count": len(load_pool()["champions"])}
+        enforce_champion_families()
+    return {
+        "added": added,
+        "refused": refused,
+        "active_count": len(load_pool()["champions"]),
+        "paper_only": True,
+    }
 
 
 def _load_discovery_log() -> list[dict]:
@@ -528,6 +562,8 @@ def pool_status(*, read_only: bool = False) -> dict:
         "active_champions": champs,
         "active_count": len(st["champions"]),
         "evaluation_limit": TRADE_EVALUATION_LIMIT,
+        "forward_champion_cap": FORWARD_CHAMPION_CAP,
+        "forward_candidates": forward_candidates(),
         "graduated_count": len(grad),
         "graduated": grad,
         "retired_count": len(retired),

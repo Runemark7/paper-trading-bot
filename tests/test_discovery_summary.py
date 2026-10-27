@@ -169,7 +169,10 @@ class DiscoverySummaryBucketTests(unittest.TestCase):
         self.assertIn("Worker not seen", s["farm"]["note"])
         self.assertFalse(s.get("compact"))
         self.assertNotIn("train_pnl", s["tested"][0])
-        self.assertNotIn("bh_oos_pnl", s["tested"][0])
+        self.assertIn("bh_oos_pnl", s["tested"][0])
+        self.assertEqual(s["tested"][0]["bh_role"], "informational")
+        self.assertEqual(s["gate"]["bh_role"], "informational")
+        self.assertIn("informational", s["gate"]["criteria"])
 
     def test_compact_omits_tested_queued_and_extended_lists(self):
         universe = ["keep_me", "tested_pass"]

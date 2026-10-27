@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import type { ForwardCandidate } from "../api/types";
 import { Link, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { fetchChampions, fetchGraduated, api } from "../api/client";
@@ -69,6 +70,8 @@ export default function Champions() {
 
   const champs = (qChamps.data?.active_champions ?? []).filter(hasName);
   const evalLimit = qChamps.data?.evaluation_limit ?? 80;
+  const forward = qChamps.data?.forward_candidates;
+  const forwardCap = forward?.cap ?? qChamps.data?.forward_champion_cap ?? 5;
   const graduated = (qGrad.data ?? []).filter(hasName);
   const run = status.data?.running_now;
   const prog = status.data?.in_progress;
@@ -140,7 +143,8 @@ export default function Champions() {
           lots split BTC vs ETH (same /api/live lots as Positions: two BTC + one ETH
           = BTC 2 · ETH 1, total 3). Tap a row for lots and the compact BTC/ETH
           chart. After <b>{evalLimit} closed entries</b> the account leaves this list.{" "}
-          <code>GRADUATED_PAPER</code> is graduated paper, not live money.
+          <code>GRADUATED_PAPER</code> is graduated paper (net P&amp;L &gt; 0 after fees), not live money.
+          Active forward champions are capped at {forwardCap}. Names already on the book stay.
           {run?.strategy.mode === "sma_stack_fallback" && (
             <> Pool empty — book is running <code>sma_stack</code> fallback.</>
           )}
@@ -411,13 +415,56 @@ export default function Champions() {
       </Card>
 
       <Card
+        title="Forward candidates"
+        aside={`${forward?.active ?? champs.length} active · ${forward?.open_slots ?? "…"} open of ${forwardCap}`}
+      >
+        <div className="text-sm text-white/60 mb-3">
+          Proposed only. Ranked by deflated Sharpe, then daily Sharpe, then lower PBO.
+          The top {forwardCap} are a suggestion for the owner. This list does not admit
+          or retire anyone. Buy-and-hold figures stay informational.
+        </div>
+        {!forward?.proposed?.length ? (
+          <Empty>No qualified names are waiting outside the active book.</Empty>
+        ) : (
+          <DesktopTable>
+            <table className="w-full text-xs">
+              <thead className="text-white/40 uppercase">
+                <tr>
+                  <th className="text-left py-1">Rank</th>
+                  <th className="text-left">Name</th>
+                  <th className="text-right">DSR</th>
+                  <th className="text-right">Daily Sharpe</th>
+                  <th className="text-right">PBO</th>
+                  <th className="text-right">B&amp;H daily (info)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(forward?.proposed ?? []).map((row: ForwardCandidate) => (
+                  <tr key={row.strategy} className="border-t border-white/5">
+                    <td className="py-1 font-mono">{row.rank}</td>
+                    <td><MonoName className="text-white">{row.strategy}</MonoName></td>
+                    <td className="text-right font-mono">{row.dsr != null ? row.dsr.toFixed(3) : "—"}</td>
+                    <td className="text-right font-mono">{row.daily_sharpe != null ? row.daily_sharpe.toFixed(3) : "—"}</td>
+                    <td className="text-right font-mono">{row.pbo != null ? row.pbo.toFixed(3) : "—"}</td>
+                    <td className="text-right font-mono text-white/50">
+                      {row.bh_daily_sharpe != null ? row.bh_daily_sharpe.toFixed(3) : "—"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </DesktopTable>
+        )}
+      </Card>
+
+      <Card
         title={`Graduated paper (${graduated.length})`}
         aside={`${evalLimit} closed trades, then ${"GRADUATED_PAPER"} or REJECTED_NEGATIVE_PNL`}
       >
         <div className="text-sm text-white/60 mb-3">
-          Off the live book. <code>GRADUATED_PAPER</code> is paper P&L greater than
-          buy-and-hold of the same assets over the same period after the evaluation
-          window — not authorization to trade real funds.
+          Off the live book. <code>GRADUATED_PAPER</code> is net paper P&amp;L greater
+          than zero after taker fee and slippage, once the evaluation window closes.
+          Buy-and-hold P&amp;L is informational. This is not authorization to trade real funds.
         </div>
 
         {!graduated.length ? (
@@ -449,6 +496,9 @@ export default function Champions() {
                           {fmt(g.total_pnl)}
                         </div>
                         <div className="text-xs text-white/60">Win Rate: {g.win_rate_pct ?? "—"}%</div>
+                        <div className="text-xs text-white/45">
+                          B&amp;H P&amp;L (informational): {g.buy_and_hold_pnl != null ? fmt(g.buy_and_hold_pnl) : "—"}
+                        </div>
                       </div>
                       <Badge tone={g.status === "GRADUATED_PAPER" ? "pos" : "neg"}>{g.status}</Badge>
                       <button

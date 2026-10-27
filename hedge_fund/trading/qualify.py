@@ -2,14 +2,14 @@
 
 Aggregate test PnL / Sharpe / trade count decide. A single skipped, empty,
 or negative walk-forward window is a diagnostic, not a fail reason.
-Beat buy-and-hold and sma_stack stay. Fail-once still parks names that
-fail those remaining gates.
+Beat sma_stack stays. Fail-once still parks names that fail the remaining
+gates.
 
-Amendment 2026-10-08: "beat buy-and-hold" compares the strategy's
-daily-equity Sharpe (OOS, same windows, after fees) with B&H's daily-equity
-Sharpe on the same span and capital base. Raw P&L vs B&H is no longer a
-gate (``bh_oos_pnl`` is still recorded). Rows without both daily Sharpes
-fail, so stored rows from the old engine cannot flip to qualified.
+Amendment 2026-10-08 compared the strategy's daily-equity Sharpe with
+buy-and-hold's daily-equity Sharpe. Amendment 2026-10-27 (Alexander, gate
+v5): that comparison is not a fail reason, and a missing B&H daily Sharpe
+is not a fail reason. ``daily_sharpe``, ``bh_daily_sharpe`` and
+``bh_oos_pnl`` are still computed and stored. Their role is informational.
 """
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 
 from hedge_fund.trading.buy_and_hold import daily_returns_sharpe
 from hedge_fund.trading.constants import (
+    BH_METRIC_ROLE,
     GATE_RULES,
     MIN_BACKTEST_SHARPE,
     MIN_BACKTEST_TRADES,
@@ -78,8 +79,11 @@ def aggregate_fail_reasons(
 ) -> list[str]:
     """Fail reasons from stored or just-computed OOS aggregates. No per-window veto.
 
-    ``bh_oos_pnl`` is accepted for the record but is not a gate any more.
+    ``bh_oos_pnl``, ``strategy_daily_sharpe`` and ``bh_daily_sharpe`` are
+    accepted for the record. They are informational and never a fail reason
+    (gate v5, Alexander 2026-10-27).
     """
+    del bh_oos_pnl, strategy_daily_sharpe, bh_daily_sharpe
     reasons: list[str] = []
     if n_windows != expected_windows:
         reasons.append(f"windows {n_windows} != expected {expected_windows}")
@@ -87,12 +91,6 @@ def aggregate_fail_reasons(
         reasons.append(f"oos_trades {tot_oos_trades} < {min_trades}")
     if avg_sharpe < min_sharpe:
         reasons.append(f"oos_sharpe {avg_sharpe:.2f} < {min_sharpe}")
-    if strategy_daily_sharpe is None or bh_daily_sharpe is None:
-        reasons.append("buy-and-hold daily sharpe missing")
-    elif strategy_daily_sharpe <= bh_daily_sharpe:
-        reasons.append(
-            f"daily_sharpe {strategy_daily_sharpe:.2f} <= bh_daily_sharpe {bh_daily_sharpe:.2f}"
-        )
     if sma_stack_oos_pnl is None:
         reasons.append("sma_stack missing")
     elif tot_test_pnl <= sma_stack_oos_pnl:
@@ -149,6 +147,7 @@ def qualification_decision(
         "all_windows_nonneg": all_windows_nonneg,
         "score": oos_admission_score(tot_test_pnl, avg_sharpe),
         "bh_oos_pnl": bh_oos_pnl,
+        "bh_role": BH_METRIC_ROLE,
         "sma_stack_oos_pnl": sma_stack_oos_pnl,
     }
 
@@ -214,6 +213,7 @@ def qualification_from_record(
         "sma_stack_oos_pnl": sma,
         "daily_sharpe": dsr,
         "bh_daily_sharpe": bh_dsr,
+        "bh_role": BH_METRIC_ROLE,
     }
 
 
@@ -227,7 +227,8 @@ def requalify_parked_log(
     """Flip newest parked rows that now pass on stored aggregates.
 
     Mutates matching log rows in place. Does not re-run walk-forwards.
-    Names that still fail Sharpe / trades / beat-B&H / sma stay parked.
+    Names that still fail Sharpe / trades / sma stay parked.
+    A buy-and-hold miss is not a fail reason under gate v5.
     Newest-first log: only the latest eval per name is considered.
     """
     stamp = now or datetime.now(timezone.utc).isoformat()

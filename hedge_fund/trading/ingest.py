@@ -3,8 +3,9 @@
 Fail-once: a name that already has any discovery_log row is skipped
 (no second walk-forward). Qualified names are admitted the same way as
 ``replenish_and_evaluate``. On ingest, parked rows that now pass on
-stored aggregates (Sharpe / trades / beat-B&H / sma) are flipped and
-admitted without re-running walk-forwards. Optional ``force_admit`` seats
+stored aggregates (Sharpe / trades / sma) are flipped and
+admitted without re-running walk-forwards. Buy-and-hold is not a fail
+reason. Optional ``force_admit`` seats
 a named existing log row even when those aggregates still fail (token
 gated). Champions are only removed by the one-per-family rule
 (``families.py``): a twin is parked to ``retired.json``. Paper only.
@@ -24,6 +25,7 @@ from hedge_fund.trading.discovery import (
     tested_discovery_names,
     write_in_flight,
 )
+from hedge_fund.trading.forward_slots import forward_cap_block
 from hedge_fund.trading.families import (
     admit_blocked_names,
     enforce_champion_families_unlocked,
@@ -172,6 +174,10 @@ def _apply_force_admit(
         if row is None:
             skipped.append({"strategy": name, "reason": "not_in_discovery_log"})
             continue
+        block = forward_cap_block(len(st.get("champions") or []))
+        if block:
+            skipped.append({"strategy": name, "reason": block})
+            continue
         row["qualified"] = True
         row["force_admitted_at"] = stamp
         row["force_admit_source"] = source
@@ -244,8 +250,12 @@ def ingest_discovery_payload(payload: dict) -> dict:
             append_discovery_evaluation(rec)
             already.add(name)
             ingested.append(name)
-            if rec["qualified"] and _admit_qualified(st, rec, existing):
-                admitted.append(name)
+            if rec["qualified"]:
+                block = forward_cap_block(len(st.get("champions") or []))
+                if block:
+                    skipped.append({"strategy": name, "reason": block})
+                elif _admit_qualified(st, rec, existing):
+                    admitted.append(name)
 
         if requalify_recorded:
             save_requalify_state(requal_state)
@@ -254,6 +264,10 @@ def ingest_discovery_payload(payload: dict) -> dict:
         requal_rows, requal_names = requalify_parked_log(log, existing_names=existing)
         if requal_names:
             for rec in requal_rows:
+                block = forward_cap_block(len(st.get("champions") or []))
+                if block:
+                    skipped.append({"strategy": rec["strategy"], "reason": block})
+                    continue
                 if _admit_qualified(st, rec, existing):
                     requalified.append(rec["strategy"])
                     if rec["strategy"] not in admitted:

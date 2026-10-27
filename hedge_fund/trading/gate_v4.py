@@ -1,10 +1,11 @@
-"""Gate v4 on top of the v3 aggregate OOS floors.
+"""Gate v4 checks that gate v5 still applies on top of the aggregate floors.
 
-A name that already passed Sharpe, trades, sma_stack, and daily-equity
-buy-and-hold (``qualification_decision``) is not admitted until:
+A name that already passed Sharpe, trades, and sma_stack
+(``qualification_decision``) is not admitted until:
 
-* one sealed holdout evaluation passes the same economic floors
-  (Sharpe, beat B&H, beat sma_stack) and the holdout trade floor,
+* one sealed holdout evaluation passes Sharpe, the holdout trade floor,
+  and beat sma_stack. Holdout buy-and-hold daily Sharpe is recorded and
+  is not a pass rule (gate v5),
 * the deflated Sharpe ratio of the walk-forward daily returns is
   at least ``DSR_MIN_PROBABILITY`` given the true trial count,
 * CSCV PBO on the walk-forward windows of this name and its parameter
@@ -12,7 +13,8 @@ buy-and-hold (``qualification_decision``) is not admitted until:
 * at least ``NEIGHBOR_PASS_MIN_FRACTION`` of those neighbours still
   meet the base Sharpe and trade floors,
 * the same walk-forward at 2× fees and +5 bps slippage still has
-  Sharpe >= 0.30 and still beats buy-and-hold.
+  Sharpe >= 0.30. Stressed buy-and-hold daily Sharpe is recorded and
+  is not a pass rule (gate v5).
 
 ETH/USDT Sharpe over the same discovery windows is recorded and must
 be > 0 to count as a pass of the soft check. It does not block
@@ -37,6 +39,7 @@ from hedge_fund.trading.constants import (
     COST_STRESS_EXTRA_SLIPPAGE,
     COST_STRESS_FEE_MULTIPLE,
     CROSS_ASSET_MIN_SHARPE,
+    BH_METRIC_ROLE,
     DSR_MIN_PROBABILITY,
     GATE_RULES,
     HOLDOUT_MIN_TRADES,
@@ -173,10 +176,6 @@ def _holdout_metrics(name: str, sample: dict, benchmarks: dict) -> dict:
         reasons.append(f"holdout_sharpe {sharpe:.2f} < {MIN_BACKTEST_SHARPE}")
     if trades < HOLDOUT_MIN_TRADES:
         reasons.append(f"holdout_trades {trades} < {HOLDOUT_MIN_TRADES}")
-    if dsr is None or bh is None:
-        reasons.append("holdout buy-and-hold daily sharpe missing")
-    elif dsr <= float(bh):
-        reasons.append(f"holdout_daily_sharpe {dsr:.2f} <= bh {float(bh):.2f}")
     if sma is None:
         reasons.append("holdout sma_stack missing")
     elif pnl <= float(sma):
@@ -189,6 +188,7 @@ def _holdout_metrics(name: str, sample: dict, benchmarks: dict) -> dict:
         "pnl": round(pnl, 2),
         "daily_sharpe": None if dsr is None else round(float(dsr), 4),
         "bh_daily_sharpe": None if bh is None else round(float(bh), 4),
+        "bh_role": BH_METRIC_ROLE,
         "sma_pnl": None if sma is None else round(float(sma), 2),
         "max_drawdown": round(dd, 4),
     }
@@ -284,15 +284,12 @@ def finish_gate_v4(
 
     stress_daily = daily_returns_sharpe(stress_daily_rets) if stress_daily_rets else 0.0
     stress_bh = _stressed_bh_daily(btc_slices, fee, slip)
-    cost_ok = stress_sharpe >= MIN_BACKTEST_SHARPE and (
-        stress_bh is not None and stress_daily > stress_bh
-    )
+    cost_ok = stress_sharpe >= MIN_BACKTEST_SHARPE
     cost_reason = None
     if not cost_ok:
-        bh_txt = "missing" if stress_bh is None else f"{stress_bh:.2f}"
         cost_reason = (
-            f"cost stress sharpe {stress_sharpe:.2f} / daily {stress_daily:.2f} "
-            f"vs bh {bh_txt} (2x fee + {COST_STRESS_EXTRA_SLIPPAGE * 1e4:.0f}bps)"
+            f"cost stress sharpe {stress_sharpe:.2f} < {MIN_BACKTEST_SHARPE} "
+            f"(2x fee + {COST_STRESS_EXTRA_SLIPPAGE * 1e4:.0f}bps)"
         )
         hard.append(cost_reason)
 
@@ -331,6 +328,7 @@ def finish_gate_v4(
         "cost_sharpe": round(stress_sharpe, 4),
         "cost_daily_sharpe": round(float(stress_daily), 4),
         "cost_bh_daily_sharpe": None if stress_bh is None else round(float(stress_bh), 4),
+        "cost_bh_role": BH_METRIC_ROLE,
         "cross_asset_sharpe": None if cross_sharpe is None else round(float(cross_sharpe), 4),
         "cross_asset_pass": cross_pass,
         "cross_asset_note": cross_note,

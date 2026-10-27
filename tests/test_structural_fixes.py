@@ -183,7 +183,7 @@ class GraduatedPaperTokenTests(unittest.TestCase):
                     tid = store.open_trade(
                         "BTC/USDT", "5m", "sma_stack_long", 0.6, 100.0, 0.01, 0.01, lot_id=i,
                     )
-                    # Flat tape: B&H after fees is slightly negative; paper PnL beats it.
+                    # Flat tape. Net paper P&L is positive, which is the graduation rule.
                     store.close_trade(tid, 100.0, "take_profit", 0.01, 1.0, 0.0, 1)
                 (root / "champions.json").write_text(
                     '{"champions": [{"name": "winner", "closed": 0, "pnl": 0.0, "wins": 0}], "synced_until": ""}'
