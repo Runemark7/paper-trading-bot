@@ -20,10 +20,17 @@ shorter than 2 × the per-name backstop. Timeout 0 (disabled) still uses the
 600s default so a lease cannot live forever.
 
 OOS gates are not involved here. Fail-once: a name in the durable
-tested-name index (not the capped display log) is never leased again.
-When the recipe cannot fill a claim, densify mints around qualified
-passes. If eligible work drops below twice the active lease capacity,
-claim tops the queue up before handing names out.
+tested-name index (not the capped display log) is never leased again,
+except one pending v4 discovery-window buy-and-hold retest. That lane
+is leased after requalify and before leftovers or a mint.
+
+When the unleased queue cannot fill this claim, the claim mints only
+enough names to fill it, and at most the old handful of 16 when that
+is the whole top-up. A thin queue (untested eligible below
+``max(cap, 4 × recent leased lanes)``) is topped up on a daemon thread
+after the claim releases the paper-state lock, in batches up to 64.
+That mint stays off the claim hot path. Bans and the holdout seal on
+``mix_refill`` / ``next_refill_batch`` are unchanged.
 """
 from __future__ import annotations
 
@@ -31,6 +38,7 @@ import json
 import logging
 import os
 import re
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -75,10 +83,19 @@ DISCOVERY_LEASES = "discovery_leases.json"
 DISCOVERY_REFILL_STATUS = "discovery_refill.json"
 MAX_CLAIM = 64
 LEASE_TTL_FACTOR = 2
-# Top up when never-tested work (including names already leased) falls
-# below this multiple of active lease capacity.
+# Old claim-path watermark (2 × lease capacity, counting names already
+# leased). The buffer below replaced it. Kept so the old name still
+# resolves; claim no longer mints from it.
 LEASE_WATERMARK_FACTOR = 2
+# Top up when unleased untested names are below max(cap, this × lanes).
+REFILL_LANE_MULTIPLE = 4
+# One background mint. The claim itself never asks for more than the
+# recipe handful (DISCOVERY_REFILL_BATCH_SIZE) except the names it
+# still needs to fill ``n``.
+REFILL_BATCH_MAX = 64
 WORKER_RETENTION = timedelta(days=7)
+_buffer_guard = threading.Lock()
+_buffer_running = False
 _WORKER_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 
 
@@ -265,12 +282,18 @@ def _blocked_names(log: list[dict]) -> set[str]:
 def _drop_expired_and_tested(state: dict, now: datetime, tested: set[str]) -> int:
     """Remove expired leases and any lease on an already-tested name.
 
-    Returns how many expired (not tested) leases were dropped.
+    A pending v4 buy-and-hold retest stays leased: the name is already
+    in the tested index, and fail-once is lifted only until one fresh
+    result is stored. Returns how many expired (not tested) leases were
+    dropped.
     """
+    from hedge_fund.trading.requeue_v4_bh import pending_retest_names
+
+    keep_tested = set(pending_retest_names())
     leases: dict = state["leases"]
     expired = 0
     for name in list(leases):
-        if name in tested:
+        if name in tested and name not in keep_tested:
             del leases[name]
             continue
         exp = parse_tested_at(leases[name].get("expires_at") if isinstance(leases[name], dict) else None)
@@ -280,7 +303,13 @@ def _drop_expired_and_tested(state: dict, now: datetime, tested: set[str]) -> in
     return expired
 
 
-def _touch(state: dict, worker_id: str, status: str, now: datetime) -> None:
+def _touch(
+    state: dict,
+    worker_id: str,
+    status: str,
+    now: datetime,
+    parallel: int | None = None,
+) -> None:
     workers = state.setdefault("workers", {})
     prev = workers.get(worker_id)
     if not isinstance(prev, dict):
@@ -288,7 +317,66 @@ def _touch(state: dict, worker_id: str, status: str, now: datetime) -> None:
     prev["worker_id"] = worker_id
     prev["last_seen"] = _iso(now)
     prev["status"] = status
+    # A later heartbeat that omits parallel must not wipe the lane width
+    # this host claimed with. Missing stays missing (counted as 1).
+    if parallel is not None and parallel >= 1:
+        prev["parallel"] = int(parallel)
     workers[worker_id] = prev
+
+
+def active_leased_lanes(state: dict, now: datetime) -> int:
+    """Sum of lane widths seen on recent heartbeats.
+
+    ``paused`` is excluded. ``idle`` and ``running`` inside
+    ``FARM_HEARTBEAT_STALE_SECONDS`` count, so a host between batches
+    does not drop the buffer. A stored ``parallel`` is the width; a
+    heartbeat that never sent one counts as one lane. Stale heartbeats
+    do not count.
+    """
+    workers = state.get("workers") or {}
+    if not isinstance(workers, dict):
+        return 0
+    now = now.astimezone(timezone.utc)
+    total = 0
+    for meta in workers.values():
+        if not isinstance(meta, dict) or meta.get("status") == "paused":
+            continue
+        seen = parse_tested_at(meta.get("last_seen"))
+        if seen is None:
+            continue
+        age = (now - seen).total_seconds()
+        if age > FARM_HEARTBEAT_STALE_SECONDS:
+            continue
+        raw = meta.get("parallel")
+        if isinstance(raw, bool) or not isinstance(raw, int) or raw < 1:
+            width = 1
+        else:
+            width = raw
+        total += width
+    return total
+
+
+def refill_trigger(cap: int, lanes: int) -> int:
+    """Unleased names we want on the queue before the next claims."""
+    return max(int(cap), REFILL_LANE_MULTIPLE * max(0, int(lanes)))
+
+
+def refill_batch_size(*, eligible: int, cap: int, lanes: int) -> int:
+    """How many names to mint when ``eligible`` is under the trigger.
+
+    Zero when the queue is already healthy. A quiet farm (no lanes)
+    stays on the recipe handful. Live lanes scale that by the lane
+    count, and the batch is never above ``REFILL_BATCH_MAX``.
+    """
+    trigger = refill_trigger(cap, lanes)
+    if int(eligible) >= trigger:
+        return 0
+    paced = DISCOVERY_REFILL_BATCH_SIZE
+    lane_n = max(0, int(lanes))
+    if lane_n > 0:
+        paced = min(REFILL_BATCH_MAX, max(paced, lane_n * DISCOVERY_REFILL_BATCH_SIZE))
+    gap = trigger - int(eligible)
+    return min(REFILL_BATCH_MAX, max(paced, gap))
 
 
 def _prune_workers(state: dict, now: datetime) -> None:
@@ -355,56 +443,135 @@ def _mint_unlocked(taken: set[str], n: int) -> tuple[list[str], dict]:
     return names, meta
 
 
-def _claimable_names(state: dict, n: int) -> tuple[list[str], list[str], dict]:
-    """Never-tested, not-leased names.
+def _book_names() -> set[str]:
+    """Active, graduated, and retired names. Tested names are not in this set."""
+    st = load_pool()
+    grads = load_graduated()
+    blocked = {c["name"] for c in (st.get("champions") or []) if isinstance(c, dict) and c.get("name")}
+    blocked |= {g["name"] for g in grads if isinstance(g, dict) and g.get("name")}
+    blocked |= retired_names()
+    return blocked
 
-    Refill when that pool cannot cover ``n`` or when never-tested work
-    (including active leases) is below ``2 ×`` lease capacity. The recipe
-    fills first; densify covers a shortfall. Existing claimable names stay
-    in front of anything just minted.
-    """
+
+def _queue_view(state: dict) -> dict:
+    """Unleased never-tested names. Does not mint."""
     log = load_discovery_log()
     blocked = _blocked_names(log)
     active = set(state["leases"])
     universe = discovery_universe()
-    # Queued violators become skipped, not tested and not failed.
     record_untested_mint_skips(universe, blocked)
     leftovers = untested_candidates(blocked, universe)
-    eligible = prioritize_leftovers(leftovers, log)
-    # Canonical form of an already-tested stack is not leased again.
-    # A later permutation in this same queue is skipped the same way.
+    ordered = prioritize_leftovers(leftovers, log)
     seen_canon = canonical_key_set(blocked)
     claimable: list[str] = []
-    for name in eligible:
+    for name in ordered:
         if name in active or mint_block_reason(name, seen_canon):
             continue
         claimable.append(name)
         key = canonical_name(name)
         if key:
             seen_canon.add(key)
-    pool = len(claimable) + len(active)
-    capacity = max(len(active), int(n), 1)
-    watermark = LEASE_WATERMARK_FACTOR * capacity
+    return {
+        "claimable": claimable,
+        "blocked": blocked,
+        "universe": set(universe),
+        "active": active,
+        "seen_canon": seen_canon,
+    }
+
+
+def _take_retests(
+    state: dict,
+    n: int,
+    worker_id: str,
+    expires: datetime,
+    now: datetime,
+) -> list[str]:
+    """Lease pending retests ahead of leftovers. Mint bans do not apply.
+
+    Book names (active, graduated, retired) are not leased. A name that
+    already has a lease stays with that worker.
+    """
+    if n <= 0:
+        return []
+    from hedge_fund.trading.requeue_v4_bh import pending_retest_names
+
+    pending = pending_retest_names()
+    if not pending:
+        return []
+    book = _book_names()
+    leases: dict = state["leases"]
+    chosen: list[str] = []
+    for name in pending:
+        if len(chosen) >= n:
+            break
+        if name in book or name in leases:
+            continue
+        leases[name] = {
+            "worker_id": worker_id,
+            "claimed_at": _iso(now),
+            "expires_at": _iso(expires),
+            "retest": True,
+        }
+        chosen.append(name)
+    return chosen
+
+
+def _append_minted(view: dict, added: list[str]) -> list[str]:
+    """Append minted names that are still leasable. Returns that list."""
+    kept: list[str] = []
+    active = view["active"]
+    blocked = view["blocked"]
+    seen_canon = view["seen_canon"]
+    claimable: list[str] = view["claimable"]
+    for name in added:
+        if name in active or name in blocked or mint_block_reason(name, seen_canon):
+            continue
+        claimable.append(name)
+        kept.append(name)
+        key = canonical_name(name)
+        if key:
+            seen_canon.add(key)
+    return kept
+
+
+def _claimable_names(
+    state: dict,
+    n: int,
+    *,
+    lanes: int,
+) -> tuple[list[str], list[str], dict, bool]:
+    """Never-tested, not-leased names, plus whether a buffer mint should follow.
+
+    The claim mints only when this pool cannot cover ``n``. That mint is
+    the shortfall, or the recipe handful when the whole top-up is that
+    small. A larger buffer (up to 64) is not minted here: the caller
+    schedules it after the paper-state lock is released.
+    """
+    view = _queue_view(state)
+    claimable: list[str] = view["claimable"]
+    eligible = len(claimable)
+    cap = max(int(n), len(view["active"]), 1)
+    batch = refill_batch_size(eligible=eligible, cap=cap, lanes=lanes)
+    short = max(0, int(n) - eligible)
+    sync_want = 0
+    if short > 0:
+        if 0 < batch <= DISCOVERY_REFILL_BATCH_SIZE:
+            sync_want = max(short, batch)
+        else:
+            sync_want = short
     refilled: list[str] = []
     meta = load_refill_status()
-    need_fill = int(n) > 0 and (len(claimable) < int(n) or pool < watermark)
-    if need_fill:
-        target = max(int(n), watermark, len(claimable) + DISCOVERY_REFILL_BATCH_SIZE)
-        want = max(0, target - len(claimable))
-        taken = set(universe) | blocked | active | set(claimable)
-        added, meta = _mint_unlocked(taken, want)
+    if sync_want > 0:
+        taken = view["universe"] | view["blocked"] | view["active"] | set(claimable)
+        added, meta = _mint_unlocked(taken, sync_want)
         if added:
             append_extended_batch(added)
             refilled = list(added)
-            for name in added:
-                if name in active or name in blocked or mint_block_reason(name, seen_canon):
-                    continue
-                claimable.append(name)
-                key = canonical_name(name)
-                if key:
-                    seen_canon.add(key)
+            _append_minted(view, added)
         save_refill_status(meta)
-    return claimable, refilled, meta
+    schedule = batch > sync_want
+    return claimable, refilled, meta, schedule
 
 
 def _claim_unlocked(
@@ -422,7 +589,7 @@ def _claim_unlocked(
     _drop_expired_and_tested(state, now, tested)
     ttl = lease_ttl_seconds(n, parallel)
     if not farm_enabled_unlocked():
-        _touch(state, worker_id, "paused", now)
+        _touch(state, worker_id, "paused", now, parallel)
         _prune_workers(state, now)
         save_lease_state(state)
         apply_heartbeat_unlocked("paused")
@@ -435,24 +602,37 @@ def _claim_unlocked(
             "n": n,
             "paused": True,
             "refilled": [],
+            "retest": [],
             "refill": paused_refill,
             "ttl_seconds": ttl,
             "expires_at": None,
             "claimed_at": _iso(now),
+            "_schedule_refill": False,
         }
+    # Count this claim's lanes before the thin check, including a host
+    # whose previous heartbeat has not landed yet.
+    _touch(state, worker_id, "running", now, parallel)
+    lanes = active_leased_lanes(state, now)
     # Requalify lane first: re-checks of champions / old passes on the
     # current gate. Kept in discovery_requalify.json, not in these leases.
     from hedge_fund.trading.requalify import lease_requalify_unlocked
 
     requal = lease_requalify_unlocked(worker_id, n, ttl, now)
     rest = n - len(requal)
+    expires = now + timedelta(seconds=ttl)
+    retest: list[str] = []
+    schedule = False
     if rest > 0:
-        claimable, refilled, refill_meta = _claimable_names(state, rest)
+        retest = _take_retests(state, rest, worker_id, expires, now)
+        rest -= len(retest)
+    if rest > 0:
+        claimable, refilled, refill_meta, schedule = _claimable_names(
+            state, rest, lanes=lanes,
+        )
     else:
         claimable, refilled, refill_meta = [], [], load_refill_status()
-    expires = now + timedelta(seconds=ttl)
     fresh = claimable[:max(0, rest)]
-    chosen = list(requal) + fresh
+    chosen = list(requal) + list(retest) + fresh
     for name in fresh:
         state["leases"][name] = {
             "worker_id": worker_id,
@@ -460,7 +640,7 @@ def _claim_unlocked(
             "expires_at": _iso(expires),
         }
     status = "running" if chosen else "idle"
-    _touch(state, worker_id, status, now)
+    _touch(state, worker_id, status, now, parallel)
     _prune_workers(state, now)
     save_lease_state(state)
     apply_heartbeat_unlocked(status)
@@ -472,6 +652,7 @@ def _claim_unlocked(
         "n": n,
         "paused": False,
         "refilled": refilled,
+        "retest": list(retest),
         "refill": refill_meta,
         "ttl_seconds": ttl,
         "expires_at": _iso(expires) if chosen else None,
@@ -479,6 +660,7 @@ def _claim_unlocked(
         "leases_active": len(state["leases"]),
         "requalify": list(requal),
         "trials": _trial_census_safe(),
+        "_schedule_refill": schedule,
     }
 
 
@@ -536,7 +718,103 @@ def claim_discovery_batch(
         return stale_rules_response(wid, count, gate_rules)
     clock = now or datetime.now(timezone.utc)
     with paper_state_lock("discovery"):
-        return _claim_unlocked(wid, count, parallel=par, now=clock)
+        body = _claim_unlocked(wid, count, parallel=par, now=clock)
+    if body.pop("_schedule_refill", False):
+        schedule_refill_buffer()
+    return body
+
+
+def _refill_buffer_holding(now: datetime) -> dict:
+    """Mint one buffer batch. Caller holds the paper-state lock."""
+    state = load_lease_state()
+    view = _queue_view(state)
+    lanes = active_leased_lanes(state, now)
+    eligible = len(view["claimable"])
+    cap = max(len(view["active"]), 1)
+    want = refill_batch_size(eligible=eligible, cap=cap, lanes=lanes)
+    if want <= 0:
+        return {
+            "ok": True,
+            "paper_only": True,
+            "refilled": [],
+            "wanted": 0,
+            "eligible": eligible,
+            "lanes": lanes,
+            "cap": cap,
+        }
+    taken = view["universe"] | view["blocked"] | view["active"] | set(view["claimable"])
+    added, meta = _mint_unlocked(taken, want)
+    if added:
+        append_extended_batch(added)
+        _append_minted(view, added)
+    save_refill_status(meta)
+    return {
+        "ok": True,
+        "paper_only": True,
+        "refilled": list(added),
+        "wanted": want,
+        "eligible": eligible,
+        "lanes": lanes,
+        "cap": cap,
+    }
+
+
+def refill_buffer_unlocked(
+    *,
+    now: datetime | None = None,
+    expect_root: str | None = None,
+) -> dict:
+    """Top up a thin discovery queue. Takes the paper-state lock.
+
+    ``expect_root`` drops the mint when ``PAPER_STATE`` moved after the
+    claim that scheduled this thread (tests delete that directory).
+    """
+    from hedge_fund.paths import state_root
+
+    clock = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    with paper_state_lock("discovery"):
+        if expect_root is not None and str(state_root()) != expect_root:
+            return {
+                "ok": True,
+                "paper_only": True,
+                "skipped": "state_moved",
+                "refilled": [],
+            }
+        return _refill_buffer_holding(clock)
+
+
+def _refill_buffer_thread(root: str) -> None:
+    global _buffer_running
+    try:
+        refill_buffer_unlocked(expect_root=root)
+    except Exception:
+        logger.exception("discovery refill buffer failed")
+    finally:
+        with _buffer_guard:
+            _buffer_running = False
+
+
+def schedule_refill_buffer() -> bool:
+    """Start one daemon mint. A second call while it runs does nothing.
+
+    The thread takes the paper-state lock itself, so this must be called
+    after the claim has released that lock.
+    """
+    global _buffer_running
+    from hedge_fund.paths import state_root
+
+    root = str(state_root())
+    with _buffer_guard:
+        if _buffer_running:
+            return False
+        _buffer_running = True
+    threading.Thread(
+        target=_refill_buffer_thread,
+        args=(root,),
+        name="discovery-refill-buffer",
+        daemon=True,
+    ).start()
+    return True
 
 
 def _release_unlocked(

@@ -16,6 +16,10 @@ of exiting so Start works without relaunching.
 
 GPU is unused (no CUDA rewrite). Default parallelism is 2 workers.
 ``--workers`` is capped at ``os.cpu_count()`` (minimum 1), not a hard 4.
+That many evals stay in flight: the next name starts when one finishes,
+instead of waiting out a wave. Each name keeps its own eval timeout
+(default 600s). One process pool and one loaded tape are reused across
+claims until prod's tape hash changes.
 
     python scripts/discovery_worker.py --workers 2
     python scripts\\discovery_worker.py --workers 2
@@ -35,6 +39,7 @@ already set in the environment win; the token is never printed):
 """
 from __future__ import annotations
 
+import atexit
 import argparse
 import json
 import multiprocessing
@@ -115,6 +120,8 @@ _ETH_SLICES = None
 _HOLDOUT = None
 _HOLDOUT_BH = None
 _N_TRIALS = None
+_N_TRIALS_RETEST = None
+_RETEST_NAMES: frozenset[str] = frozenset()
 
 
 def _init_pool(
@@ -127,9 +134,12 @@ def _init_pool(
     holdout=None,
     holdout_bh=None,
     n_trials: int | None = None,
+    retest_names: frozenset[str] | set[str] | list[str] | None = None,
+    n_trials_retest: int | None = None,
 ) -> None:
     global _SLICES, _BH, _SMA, _N_WINDOWS, _BH_DSR
     global _ETH_SLICES, _HOLDOUT, _HOLDOUT_BH, _N_TRIALS
+    global _N_TRIALS_RETEST, _RETEST_NAMES
     _SLICES = slices
     _BH = bh
     _SMA = sma
@@ -139,9 +149,28 @@ def _init_pool(
     _HOLDOUT = holdout
     _HOLDOUT_BH = holdout_bh
     _N_TRIALS = n_trials
+    _N_TRIALS_RETEST = n_trials_retest
+    _RETEST_NAMES = frozenset(retest_names or ())
 
 
-def _eval_name(name: str) -> dict | None:
+def _trials_for(name: str) -> int | None:
+    """Fresh names use N+1. A pending retest is already inside N."""
+    if name in _RETEST_NAMES:
+        return _N_TRIALS_RETEST
+    return _N_TRIALS
+
+
+def _eval_name(
+    name: str,
+    n_trials: int | None = None,
+    explicit_trials: bool = False,
+) -> dict | None:
+    """Qualify one name. Explicit trial counts win over the pool globals.
+
+    A reused pool is not re-initialised when the census changes between
+    claims, so the parent passes that name's N on the task.
+    """
+    trials = n_trials if explicit_trials else _trials_for(name)
     record = evaluate_strategy_record(
         name,
         _SLICES,
@@ -160,7 +189,7 @@ def _eval_name(name: str) -> dict | None:
             eth_slices=_ETH_SLICES,
             holdout_sample=_HOLDOUT,
             holdout_benchmarks=_HOLDOUT_BH,
-            n_trials=_N_TRIALS,
+            n_trials=trials,
         )
     return record
 
@@ -176,11 +205,16 @@ def _new_eval_pool(
     holdout=None,
     holdout_bh=None,
     n_trials: int | None = None,
+    retest_names: frozenset[str] | set[str] | list[str] | None = None,
+    n_trials_retest: int | None = None,
 ):
     return multiprocessing.Pool(
         processes=n_workers,
         initializer=_init_pool,
-        initargs=(slices, bh, sma, n_windows, bh_dsr, eth_slices, holdout, holdout_bh, n_trials),
+        initargs=(
+            slices, bh, sma, n_windows, bh_dsr, eth_slices, holdout, holdout_bh,
+            n_trials, retest_names, n_trials_retest,
+        ),
     )
 
 
@@ -191,11 +225,11 @@ def _collect_wave(
     sleeper=time.sleep,
     clock=time.monotonic,
 ) -> tuple[list[tuple[str, dict | None]], list[str]]:
-    """Wait for a wave of apply_async results.
+    """Wait for one already-submitted wave.
 
-    *timeout_s* <= 0 waits until every name finishes. Otherwise any name
-    still running after the wave deadline is returned as stuck (caller
-    fail-parks and recycles the pool).
+    ``run_batch`` does not call this. It keeps ``--workers`` names in
+    flight via ``_run_inflight``. The helper stays so a single shared
+    deadline can still be checked on its own.
     """
     deadline = (clock() + timeout_s) if timeout_s > 0 else None
     pending = {name: ar for name, ar in asyncs}
@@ -218,6 +252,319 @@ def _collect_wave(
         if pending:
             sleeper(0.05)
     return completed, []
+
+
+# One loaded tape and one process pool for the life of this process.
+# The tape is replaced only when its sha256 changes. The pool is replaced
+# with it, or when a per-name timeout forces terminate().
+_SESSION: dict = {"hist": None, "pool": None}
+
+
+def _state_key() -> str:
+    try:
+        return str(state_root().resolve())
+    except OSError:
+        return str(state_root())
+
+
+def _stamp_sha(stamp: dict | None) -> str | None:
+    if not isinstance(stamp, dict):
+        return None
+    sha = stamp.get("sha256")
+    if isinstance(sha, str) and sha:
+        return sha
+    return None
+
+
+def _pool_alive(pool) -> bool:
+    state = getattr(pool, "_state", None)
+    if state is None:
+        return True
+    try:
+        from multiprocessing.pool import RUN
+    except Exception:
+        return state == 0
+    return state == RUN
+
+
+def _drop_eval_pool() -> None:
+    """Terminate the cached pool. A missing pool is a no-op."""
+    pool = _SESSION.get("pool")
+    _SESSION["pool"] = None
+    _SESSION["pool_workers"] = None
+    _SESSION["pool_sha"] = None
+    _SESSION["pool_state"] = None
+    _SESSION["pool_windows"] = None
+    if pool is None:
+        return
+    try:
+        pool.terminate()
+    except Exception:
+        pass
+    try:
+        pool.join()
+    except Exception:
+        pass
+
+
+def _reset_eval_session() -> None:
+    """Drop the cached pool and tape. Tests use this between cases."""
+    _drop_eval_pool()
+    _SESSION["hist"] = None
+
+
+def _acquire_eval_pool(n_workers: int, bundle: dict, n_trials, retest_names, n_trials_retest):
+    """Return the live pool for this tape, creating it when the key differs."""
+    sha = bundle.get("sha")
+    state = bundle.get("state")
+    n_windows = bundle["n_windows"]
+    pool = _SESSION.get("pool")
+    if (
+        pool is not None
+        and sha
+        and _SESSION.get("pool_workers") == n_workers
+        and _SESSION.get("pool_sha") == sha
+        and _SESSION.get("pool_state") == state
+        and _SESSION.get("pool_windows") == n_windows
+        and _pool_alive(pool)
+    ):
+        return pool
+    _drop_eval_pool()
+    pool = _new_eval_pool(
+        n_workers,
+        bundle["slices"],
+        bundle["bh"],
+        bundle["sma"],
+        n_windows,
+        bundle["bh_dsr"],
+        bundle["eth_slices"],
+        bundle["holdout"],
+        bundle["holdout_bh"],
+        n_trials,
+        retest_names,
+        n_trials_retest,
+    )
+    _SESSION["pool"] = pool
+    _SESSION["pool_workers"] = n_workers
+    _SESSION["pool_sha"] = sha
+    _SESSION["pool_state"] = state
+    _SESSION["pool_windows"] = n_windows
+    return pool
+
+
+def _cached_bundle(history_stamp: dict | None, n_windows: int) -> dict | None:
+    sha = _stamp_sha(history_stamp)
+    cached = _SESSION.get("hist")
+    if not sha or not isinstance(cached, dict):
+        return None
+    if cached.get("sha") != sha or cached.get("state") != _state_key():
+        return None
+    if cached.get("n_windows") != n_windows:
+        return None
+    out = dict(cached)
+    out["history_stamp"] = history_stamp
+    return out
+
+
+def _store_bundle(bundle: dict) -> None:
+    sha = bundle.get("sha")
+    prev = _SESSION.get("hist")
+    if isinstance(prev, dict) and (
+        prev.get("sha") != sha
+        or prev.get("state") != bundle.get("state")
+        or prev.get("n_windows") != bundle.get("n_windows")
+    ):
+        _drop_eval_pool()
+    if not sha:
+        _SESSION["hist"] = None
+        _drop_eval_pool()
+        return
+    stored = dict(bundle)
+    stored.pop("history_stamp", None)
+    _SESSION["hist"] = stored
+
+
+def _load_eval_bundle(history_stamp: dict | None, n_windows: int, *, claim_mode: bool) -> dict:
+    """Load slices for this tape. Caller already decided the cache missed."""
+    data = _load_qual_history(keep_bars=qual_store_bars())
+    if not data:
+        if claim_mode:
+            raise SystemExit(
+                "shared price history is empty. Claim mode loads it from prod "
+                "and does not use crypto_history_5m.json."
+            )
+        raise SystemExit(
+            "crypto_history_5m.json missing or empty under PAPER_STATE. "
+            "Run: python scripts/fetch_history.py"
+        )
+    btc_rows = _symbol_rows(data, TRADE_SYMBOLS[0], purpose="walkforward")
+    if not btc_rows:
+        raise SystemExit("BTC/USDT tape missing; discovery is BTC-only")
+    eth_rows = _symbol_rows(data, CROSS_ASSET_SYMBOL, purpose="walkforward")
+    holdout = _holdout_sample(data)
+    try:
+        slices = _window_slices(
+            {TRADE_SYMBOLS[0]: btc_rows},
+            QUAL_WINDOW_BARS,
+            n_windows,
+            QUAL_STRIDE,
+            tiled=True,
+            discovery=True,
+        )
+    except ValueError as exc:
+        raise SystemExit(f"history does not cover the tiled OOS segments: {exc}") from exc
+    eth_slices = None
+    if eth_rows:
+        try:
+            eth_slices = _window_slices(
+                {CROSS_ASSET_SYMBOL: eth_rows},
+                QUAL_WINDOW_BARS,
+                n_windows,
+                QUAL_STRIDE,
+                tiled=True,
+                discovery=True,
+            )
+        except ValueError:
+            eth_slices = None
+    holdout_bh = None
+    if holdout:
+        try:
+            from hedge_fund.trading.gate_v4 import holdout_benchmarks
+
+            holdout_bh = holdout_benchmarks(holdout)
+        except Exception:
+            holdout_bh = None
+    del data
+    if len(slices) != n_windows:
+        raise SystemExit("history too short for qualification windows")
+    return {
+        "slices": slices,
+        "bh": None,
+        "sma": None,
+        "bh_dsr": None,
+        "bh_ready": False,
+        "eth_slices": eth_slices,
+        "holdout": holdout,
+        "holdout_bh": holdout_bh,
+        "n_windows": n_windows,
+        "history_stamp": history_stamp,
+        "sha": _stamp_sha(history_stamp),
+        "state": _state_key(),
+    }
+
+
+def _prepare_eval_context(
+    *,
+    sync_base: str | None,
+    sync_token: str | None,
+    claim_mode: bool,
+    n_windows: int,
+) -> dict:
+    """Resolve the tape stamp, and reuse slices when that hash is unchanged."""
+    history_stamp: dict | None = None
+    if sync_base and sync_token:
+        history_stamp = ensure_shared_history(sync_base, sync_token)
+    else:
+        try:
+            from hedge_fund.trading.price_history import manifest_for
+
+            history_stamp = manifest_for()
+            history_stamp["provenance"] = "unverified"
+        except Exception:
+            history_stamp = None
+    cached = _cached_bundle(history_stamp, n_windows)
+    if cached is not None:
+        return cached
+    bundle = _load_eval_bundle(history_stamp, n_windows, claim_mode=claim_mode)
+    _store_bundle(bundle)
+    return bundle
+
+
+def _run_inflight(
+    names: list[str],
+    *,
+    n_workers: int,
+    timeout_s: float,
+    finish,
+    pool_factory,
+    trial_for,
+    sleeper=None,
+    clock=None,
+) -> None:
+    """Keep up to *n_workers* evals in flight.
+
+    The next name is submitted as soon as a slot frees. Each name's
+    deadline is *timeout_s* seconds from its own submit (``timeout_s`` <= 0
+    waits). Only a name that crosses its own deadline is fail-parked.
+    ``pool.terminate`` is process-wide, so any other in-flight name is
+    submitted again with a fresh deadline and is not parked. *finish* runs
+    as each result is ready.
+    """
+    if sleeper is None:
+        sleeper = time.sleep
+    if clock is None:
+        clock = time.monotonic
+    width = max(1, int(n_workers))
+    queue = list(names)
+    inflight: dict[str, tuple[object, float]] = {}
+    pool = None
+
+    def launch() -> None:
+        nonlocal pool
+        if pool is None:
+            pool = pool_factory()
+        while queue and len(inflight) < width:
+            name = queue.pop(0)
+            trials = trial_for(name)
+            started = clock()
+            ar = pool.apply_async(_eval_name, (name, trials, True))
+            inflight[name] = (ar, started)
+
+    launch()
+    while inflight:
+        now = clock()
+        stuck: list[str] = []
+        if timeout_s > 0:
+            for name, (_ar, started) in inflight.items():
+                if now - started >= timeout_s:
+                    stuck.append(name)
+        ready: list[tuple[str, dict | None]] = []
+        for name, (ar, _started) in list(inflight.items()):
+            if name in stuck or not ar.ready():
+                continue
+            try:
+                rec = ar.get()
+            except Exception as exc:
+                print(f"discovery_worker: {name} failed: {exc}", flush=True)
+                rec = None
+            ready.append((name, rec))
+        for name, rec in ready:
+            del inflight[name]
+            finish(name, rec)
+            if not stuck:
+                launch()
+        if stuck:
+            reason = eval_timeout_reason(timeout_s)
+            killed = [name for name in inflight if name not in stuck]
+            inflight.clear()
+            _drop_eval_pool()
+            pool = None
+            for name in stuck:
+                finish(name, ops_fail_record(name, reason))
+            # Killed siblings start over. The deadline starts over with them.
+            if killed:
+                print(
+                    f"discovery_worker: resubmitting {len(killed)} name(s) after eval timeout",
+                    flush=True,
+                )
+            queue = killed + queue
+            launch()
+            continue
+        if not ready:
+            sleeper(0.05)
+
+
+atexit.register(_drop_eval_pool)
 
 
 def _http_json(url: str, *, token: str | None = None, data: dict | None = None, timeout: int = 60):
@@ -681,66 +1028,23 @@ def run_batch(
     sync_base: str | None = None,
     sync_token: str | None = None,
     n_trials: int | None = None,
+    retest_names: list[str] | None = None,
+    n_trials_retest: int | None = None,
 ) -> dict:
-    history_stamp: dict | None = None
-    if sync_base and sync_token:
-        history_stamp = ensure_shared_history(sync_base, sync_token)
-    else:
-        try:
-            from hedge_fund.trading.price_history import manifest_for
-
-            history_stamp = manifest_for()
-            history_stamp["provenance"] = "unverified"
-        except Exception:
-            history_stamp = None
-    data = _load_qual_history(keep_bars=qual_store_bars())
-    if not data:
-        if claim_mode:
-            raise SystemExit(
-                "shared price history is empty. Claim mode loads it from prod "
-                "and does not use crypto_history_5m.json."
-            )
-        raise SystemExit(
-            "crypto_history_5m.json missing or empty under PAPER_STATE. "
-            "Run: python scripts/fetch_history.py"
-        )
-    btc_rows = _symbol_rows(data, TRADE_SYMBOLS[0], purpose="walkforward")
-    if not btc_rows:
-        raise SystemExit("BTC/USDT tape missing; discovery is BTC-only")
-    eth_rows = _symbol_rows(data, CROSS_ASSET_SYMBOL, purpose="walkforward")
-    holdout = _holdout_sample(data)
-    try:
-        slices = _window_slices(
-            {TRADE_SYMBOLS[0]: btc_rows},
-            QUAL_WINDOW_BARS,
-            n_windows,
-            QUAL_STRIDE,
-            tiled=True,
-            discovery=True,
-        )
-    except ValueError as exc:
-        raise SystemExit(f"history does not cover the tiled OOS segments: {exc}") from exc
-    eth_slices = None
-    if eth_rows:
-        try:
-            eth_slices = _window_slices(
-                {CROSS_ASSET_SYMBOL: eth_rows},
-                QUAL_WINDOW_BARS,
-                n_windows,
-                QUAL_STRIDE,
-                tiled=True,
-                discovery=True,
-            )
-        except ValueError:
-            eth_slices = None
-    holdout_bh = None
-    if holdout:
-        try:
-            from hedge_fund.trading.gate_v4 import holdout_benchmarks
-
-            holdout_bh = holdout_benchmarks(holdout)
-        except Exception:
-            holdout_bh = None
+    bundle = _prepare_eval_context(
+        sync_base=sync_base,
+        sync_token=sync_token,
+        claim_mode=claim_mode,
+        n_windows=n_windows,
+    )
+    slices = bundle["slices"]
+    eth_slices = bundle["eth_slices"]
+    holdout = bundle["holdout"]
+    holdout_bh = bundle["holdout_bh"]
+    history_stamp = bundle["history_stamp"]
+    bh = bundle["bh"]
+    sma = bundle["sma"]
+    bh_dsr = bundle["bh_dsr"]
     # Claim mode must use the prod census. A missing count fails DSR closed.
     # A local empty index would otherwise report N=1 and skip the haircut.
     if n_trials is None and not claim_mode:
@@ -750,7 +1054,6 @@ def run_batch(
             n_trials = int(trial_census()["n_trials"])
         except Exception:
             n_trials = None
-    del data
     if len(slices) != n_windows:
         raise SystemExit("history too short for qualification windows")
 
@@ -788,8 +1091,23 @@ def run_batch(
             clear_in_flight()
         return {"evaluated": 0, "qualified": 0, "planned": [], "refilled": added}
 
-    bh, sma = _benchmark_oos(slices)
-    bh_dsr = _benchmark_bh_daily_sharpe(slices)
+    if bundle.get("bh_ready"):
+        bh = bundle["bh"]
+        sma = bundle["sma"]
+        bh_dsr = bundle["bh_dsr"]
+    else:
+        bh, sma = _benchmark_oos(slices)
+        bh_dsr = _benchmark_bh_daily_sharpe(slices)
+        bundle["bh"] = bh
+        bundle["sma"] = sma
+        bundle["bh_dsr"] = bh_dsr
+        bundle["bh_ready"] = True
+        cached = _SESSION.get("hist")
+        if isinstance(cached, dict) and cached.get("sha") == bundle.get("sha") and bundle.get("sha"):
+            cached["bh"] = bh
+            cached["sma"] = sma
+            cached["bh_dsr"] = bh_dsr
+            cached["bh_ready"] = True
     if not claim_mode:
         write_in_flight(
             planned,
@@ -870,50 +1188,56 @@ def run_batch(
         else:
             cheap.append(name)
 
-    n_workers = max(1, min(int(workers), len(cheap) or 1))
+    flight = max(1, min(int(workers), len(cheap) or 1))
+    pool_size = max(1, int(workers))
+    retain_pool = bool(bundle.get("sha"))
     try:
         if not cheap:
             pass
-        elif n_workers == 1 and timeout_s <= 0:
+        elif flight == 1 and timeout_s <= 0:
             _init_pool(
                 slices, bh, sma, n_windows, bh_dsr,
                 eth_slices, holdout, holdout_bh, n_trials,
+                retest_names, n_trials_retest,
             )
             for name in cheap:
                 finish(name, _eval_name(name))
         else:
-            pool = _new_eval_pool(
-                n_workers, slices, bh, sma, n_windows, bh_dsr,
-                eth_slices, holdout, holdout_bh, n_trials,
-            )
+            retest = frozenset(retest_names or ())
+
+            def trial_for(name: str) -> int | None:
+                if name in retest:
+                    return n_trials_retest
+                return n_trials
+
+            def pool_factory():
+                return _acquire_eval_pool(
+                    pool_size,
+                    bundle,
+                    n_trials,
+                    retest_names,
+                    n_trials_retest,
+                )
+
             try:
-                i = 0
-                while i < len(cheap):
-                    wave = cheap[i : i + n_workers]
-                    asyncs = [(n, pool.apply_async(_eval_name, (n,))) for n in wave]
-                    done, stuck = _collect_wave(asyncs, timeout_s)
-                    for name, record in done:
-                        finish(name, record)
-                    if stuck:
-                        reason = eval_timeout_reason(timeout_s)
-                        for name in stuck:
-                            finish(name, ops_fail_record(name, reason))
-                        pool.terminate()
-                        pool.join()
-                        if i + len(wave) < len(cheap):
-                            pool = _new_eval_pool(
-                                n_workers, slices, bh, sma, n_windows, bh_dsr,
-                                eth_slices, holdout, holdout_bh, n_trials,
-                            )
-                    i += len(wave)
-            finally:
-                try:
-                    pool.terminate()
-                    pool.join()
-                except Exception:
-                    pass
+                _run_inflight(
+                    cheap,
+                    n_workers=flight,
+                    timeout_s=timeout_s,
+                    finish=finish,
+                    pool_factory=pool_factory,
+                    trial_for=trial_for,
+                )
+            except BaseException:
+                _drop_eval_pool()
+                raise
     finally:
+        if not retain_pool:
+            _drop_eval_pool()
         if claim_mode:
+            # Posted rows clear their lease on ingest. Release every name
+            # that was not posted: never started, killed on shutdown, or
+            # an eval that returned no row.
             pending = [n for n in planned if n not in acked]
             clear_in_flight()
             if pending:
@@ -1047,6 +1371,7 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         if not local_plan:
             _release_remote_safe(base, token, worker_id, status="idle")
+        _drop_eval_pool()
         _restore_exit_signals(prev_signals)
 
 
@@ -1167,6 +1492,11 @@ def _run_loop(
                 continue
             try:
                 trials = claimed.get("trials") if isinstance(claimed.get("trials"), dict) else {}
+                from hedge_fund.trading.trials import n_trials_for_retest
+
+                retest_names = [
+                    n for n in (claimed.get("retest") or []) if isinstance(n, str)
+                ]
                 result = run_batch(
                     workers=workers,
                     max_names=max_names,
@@ -1178,6 +1508,8 @@ def _run_loop(
                     sync_base=base,
                     sync_token=token,
                     n_trials=trials.get("n_trials"),
+                    retest_names=retest_names,
+                    n_trials_retest=n_trials_for_retest(trials),
                 )
             except HistoryUnavailable as exc:
                 print(

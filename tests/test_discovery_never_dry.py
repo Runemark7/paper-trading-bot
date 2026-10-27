@@ -77,7 +77,8 @@ class TestedIndexTests(unittest.TestCase):
                     "hedge_fund.trading.leases.discovery_universe",
                     return_value=[old, fresh],
                 ):
-                    body = claim_discovery_batch("linux-1", 1, parallel=1)
+                    with patch("hedge_fund.trading.leases.schedule_refill_buffer"):
+                        body = claim_discovery_batch("linux-1", 1, parallel=1)
                 self.assertEqual(body["names"], [fresh])
                 self.assertNotIn(old, body["names"])
                 # Requalify flips the flag without dropping the trimmed name.
@@ -247,7 +248,8 @@ class ClaimUndryTests(unittest.TestCase):
                 append_discovery_evaluation(_eval(PASS_2, qualified=True))
                 with patch("hedge_fund.trading.leases.discovery_universe", return_value=[]):
                     with patch("hedge_fund.trading.leases.next_refill_batch", return_value=[]):
-                        body = claim_discovery_batch("linux-1", 4, parallel=2)
+                        with patch("hedge_fund.trading.leases.schedule_refill_buffer"):
+                            body = claim_discovery_batch("linux-1", 4, parallel=2)
                 self.assertEqual(len(body["names"]), 4)
                 self.assertEqual(body["refill"]["source"], "densify")
                 self.assertFalse(body["refill"]["exhausted"])
@@ -274,12 +276,15 @@ class ClaimUndryTests(unittest.TestCase):
                     "hedge_fund.trading.leases.discovery_universe",
                     return_value=universe,
                 ):
-                    body = claim_discovery_batch("linux-1", 2, parallel=2)
+                    with patch("hedge_fund.trading.leases.schedule_refill_buffer") as scheduled:
+                        body = claim_discovery_batch("linux-1", 2, parallel=2)
+        # Three untested names fill this claim. The buffer mint is not on
+        # the claim response. parallel=2 is a live lane, so the buffer is
+        # scheduled (trigger is 4 × lanes) instead of minted here.
         self.assertEqual(len(body["names"]), 2)
         self.assertEqual(body["names"], universe[:2])
-        self.assertGreaterEqual(len(body["refilled"]), 1)
-        self.assertEqual(body["refill"]["source"], "mixed")
-        self.assertFalse(body["refill"]["exhausted"])
+        self.assertEqual(body["refilled"], [])
+        scheduled.assert_called_once()
 
     def test_true_exhaustion_logs_a_warning(self):
         from hedge_fund.trading.leases import claim_discovery_batch

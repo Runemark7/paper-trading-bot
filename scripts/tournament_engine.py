@@ -6,10 +6,11 @@
    >= 30 OOS trades, OOS Sharpe >= 0.30, OOS beats buy-and-hold and
    sma_stack after fees. A single skipped/empty/negative window is a
    diagnostic (all_windows_nonneg), not a fail reason. Risk policy: rm_v1.
-3. No live-slot cap: every 5m-qualified name not already pooled or
-   graduated is admitted. Static universe size (~40–120) is the compiled
-   list bound; auto-refill appends a handful of never-tested names to
-   discovery_extended.json when leftovers run dry (pending queue sidecar).
+3. A 5m-qualified name is logged and proposed. It is not seated.
+   Seating is an explicit admit (``force_admit`` / ``promote_candidates``)
+   and stops at the forward cap. Static universe size (~40–120) is the
+   compiled list bound; auto-refill appends a handful of never-tested
+   names to discovery_extended.json when leftovers run dry.
 4. Graduation: TRADE_EVALUATION_LIMIT (80) closed paper trades vs B&H.
 5. When invoked (Windows worker, or live_cycle with DISCOVERY_ON_CYCLE=1)
    evaluates a leftover *slice* (max names + wall-clock budget, rotating
@@ -41,7 +42,7 @@ from hedge_fund.trading.buy_and_hold import (
     daily_returns_sharpe,
     equity_returns,
 )
-from hedge_fund.trading.champions import load_graduated, load_pool, retired_names, save_pool
+from hedge_fund.trading.champions import load_graduated, load_pool, retired_names
 from hedge_fund.trading.discovery import (
     append_discovery_evaluation,
     clear_in_flight,
@@ -740,10 +741,12 @@ def replenish_and_evaluate(
     batch_size: int | None = None,
     **discover_kwargs,
 ) -> dict:
-    """Qualify leftover untested names; admit every new name not already pooled or graduated.
+    """Qualify leftover untested names. A pass is proposed, not seated.
 
-    Default takes one cycle budget of leftovers (not a 30-name sample and not
-    the entire leftover list). ``batch_size`` is a leftover-prefix test hook.
+    Seating is ``force_admit`` / ``promote_candidates``. This function does
+    not write ``champions.json``. Default takes one cycle budget of
+    leftovers (not a 30-name sample and not the entire leftover list).
+    ``batch_size`` is a leftover-prefix test hook.
     """
     st = load_pool()
     grad_list = load_graduated()
@@ -753,39 +756,20 @@ def replenish_and_evaluate(
     existing_names |= retired_names()
 
     qualified, all_eval = discover_and_qualify(batch_size=batch_size, **discover_kwargs)
-    admitted = []
+    proposed: list[str] = []
     for q in qualified:
-        name = q["strategy"]
-        if name not in existing_names:
-            admitted_at = datetime.now(timezone.utc).isoformat()
-            st["champions"].append({
-                "name": name,
-                "closed": 0,
-                "pnl": 0.0,
-                "wins": 0,
-                "sharpe_qual": q["sharpe"],
-                "winrate_qual": q["win_rate_pct"],
-                "admitted_at": admitted_at,
-                "champion_since": admitted_at,
-                "source": "5m_qualification_filter",
-                "timeframe": QUAL_TIMEFRAME,
-                "risk_policy": RISK_POLICY,
-            })
-            existing_names.add(name)
-            admitted.append(q)
-
-    save_pool(st)
-    if admitted:
-        from hedge_fund.trading.families import enforce_champion_families
-
-        enforce_champion_families()
-        st = load_pool()
+        name = q.get("strategy")
+        if isinstance(name, str) and name and name not in existing_names:
+            proposed.append(name)
     return {
         "active_champions_count": len(st["champions"]),
         "evaluation_limit": TRADE_EVALUATION_LIMIT,
         "total_tested_in_batch": len(all_eval),
-        "admitted_new_count": len(admitted),
-        "admitted": admitted,
+        "admitted_new_count": 0,
+        "admitted": [],
+        "proposed": proposed,
+        "admission": "manual",
+        "paper_only": True,
     }
 
 

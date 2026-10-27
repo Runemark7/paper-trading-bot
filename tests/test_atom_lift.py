@@ -444,7 +444,8 @@ class IndexAndApiTests(unittest.TestCase):
                         return_value=["don_hi_12"],
                     ):
                         with patch("hedge_fund.trading.atom_lift.estimate_lifts", side_effect=AssertionError("fit")):
-                            claim_discovery_batch("linux-1", 1, parallel=1)
+                            with patch("hedge_fund.trading.leases.schedule_refill_buffer"):
+                                claim_discovery_batch("linux-1", 1, parallel=1)
                 finally:
                     httpd.shutdown()
                     thread.join(timeout=3)

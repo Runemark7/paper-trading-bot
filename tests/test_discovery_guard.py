@@ -282,10 +282,11 @@ class WorkerLookbackAndTimeoutTests(unittest.TestCase):
         self.assertIsNone(flight)
 
     def test_timeout_parks_and_continues_next_name(self):
-        from scripts.discovery_worker import run_batch
+        from scripts.discovery_worker import _reset_eval_session, run_batch
 
         planned = ["slow_one", "sma_stack"]
         eval_calls = []
+        clock = {"t": 0.0}
 
         def track_eval(name, *args, **kwargs):
             eval_calls.append(name)
@@ -299,7 +300,7 @@ class WorkerLookbackAndTimeoutTests(unittest.TestCase):
                     ar.ready.return_value = False
                     return ar
                 ar.ready.return_value = True
-                ar.get.side_effect = lambda timeout=None, _fn=fn, _n=name: _fn(_n)
+                ar.get.side_effect = lambda timeout=None, _fn=fn, _args=args: _fn(*_args)
                 return ar
 
             def terminate(self):
@@ -308,62 +309,63 @@ class WorkerLookbackAndTimeoutTests(unittest.TestCase):
             def join(self):
                 return None
 
-        def fake_collect(asyncs, timeout_s, **kwargs):
-            names = [n for n, _ in asyncs]
-            if "slow_one" in names:
-                others = []
-                for name, ar in asyncs:
-                    if name == "slow_one":
-                        continue
-                    others.append((name, ar.get()))
-                return others, ["slow_one"]
-            done = [(name, ar.get()) for name, ar in asyncs]
-            return done, []
+        def monotonic():
+            return clock["t"]
 
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            (root / "crypto_history_5m.json").write_text("{}")
-            env = {
-                "PAPER_STATE": str(root),
-                "DISCOVERY_EVAL_TIMEOUT_SECONDS": "1",
-                "DISCOVERY_STRUCTURE_LOOKBACK_MAX": "96",
-            }
-            with patch.dict(os.environ, env):
-                with patch(
-                    "scripts.discovery_worker._load_qual_history",
-                    return_value={"BTC/USDT": [1]},
-                ), patch(
-                    "scripts.discovery_worker._window_slices",
-                    return_value=[{}] * DISCOVERY_N_WINDOWS,
-                ), patch(
-                    "scripts.discovery_worker._benchmark_oos",
-                    return_value=(1.0, 1.0),
-                ), patch(
-                    "scripts.discovery_worker._plan_batch",
-                    return_value=(planned, planned, []),
-                ), patch(
-                    "scripts.discovery_worker.evaluate_strategy_record",
-                    side_effect=track_eval,
-                ), patch(
-                    "scripts.discovery_worker._new_eval_pool",
-                    return_value=FakePool(),
-                ), patch(
-                    "scripts.discovery_worker._collect_wave",
-                    side_effect=fake_collect,
-                ):
-                    result = run_batch(
-                        workers=1,
-                        max_names=2,
-                        ingest_url=None,
-                        token=None,
-                    )
-                    from hedge_fund.trading.discovery import (
-                        load_discovery_log,
-                        read_in_flight,
-                    )
+        def sleep(_n):
+            clock["t"] += 0.5
 
-                    log = load_discovery_log()
-                    flight = read_in_flight()
+        _reset_eval_session()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                (root / "crypto_history_5m.json").write_text("{}")
+                env = {
+                    "PAPER_STATE": str(root),
+                    "DISCOVERY_EVAL_TIMEOUT_SECONDS": "1",
+                    "DISCOVERY_STRUCTURE_LOOKBACK_MAX": "96",
+                }
+                with patch.dict(os.environ, env):
+                    with patch(
+                        "scripts.discovery_worker._load_qual_history",
+                        return_value={"BTC/USDT": [1]},
+                    ), patch(
+                        "scripts.discovery_worker._window_slices",
+                        return_value=[{}] * DISCOVERY_N_WINDOWS,
+                    ), patch(
+                        "scripts.discovery_worker._benchmark_oos",
+                        return_value=(1.0, 1.0),
+                    ), patch(
+                        "scripts.discovery_worker._plan_batch",
+                        return_value=(planned, planned, []),
+                    ), patch(
+                        "scripts.discovery_worker.evaluate_strategy_record",
+                        side_effect=track_eval,
+                    ), patch(
+                        "scripts.discovery_worker._new_eval_pool",
+                        return_value=FakePool(),
+                    ), patch(
+                        "scripts.discovery_worker.time.monotonic",
+                        monotonic,
+                    ), patch(
+                        "scripts.discovery_worker.time.sleep",
+                        sleep,
+                    ):
+                        result = run_batch(
+                            workers=1,
+                            max_names=2,
+                            ingest_url=None,
+                            token=None,
+                        )
+                        from hedge_fund.trading.discovery import (
+                            load_discovery_log,
+                            read_in_flight,
+                        )
+
+                        log = load_discovery_log()
+                        flight = read_in_flight()
+        finally:
+            _reset_eval_session()
 
         by_name = {r["strategy"]: r for r in log}
         self.assertFalse(by_name["slow_one"]["qualified"])

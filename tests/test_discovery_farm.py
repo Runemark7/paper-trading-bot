@@ -98,7 +98,7 @@ class LiveCycleGateTests(unittest.TestCase):
 
 
 class IngestMergeTests(unittest.TestCase):
-    def test_appends_fail_and_admits_qualified_without_cull(self):
+    def test_appends_fail_and_proposes_qualified_without_cull(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "champions.json").write_text(json.dumps({
@@ -125,9 +125,11 @@ class IngestMergeTests(unittest.TestCase):
                 log = load_discovery_log()
                 extended = load_extended_names()
         self.assertEqual(out["ingested"], ["fresh_fail", "fresh_pass"])
-        self.assertEqual(out["admitted"], ["fresh_pass"])
+        self.assertEqual(out["admitted"], [])
+        self.assertEqual(out["proposed"], ["fresh_pass"])
+        self.assertEqual(out["admission"], "manual")
         self.assertIn("keep_me", names)
-        self.assertIn("fresh_pass", names)
+        self.assertNotIn("fresh_pass", names)
         self.assertNotIn("fresh_fail", names)
         self.assertEqual({r["strategy"] for r in log}, {"fresh_fail", "fresh_pass"})
         self.assertIn("dip_6b_lt2pc&don_lo_48", out["extended_added"])
@@ -391,7 +393,9 @@ class IngestHttpTests(unittest.TestCase):
                     raw = urlopen(good, timeout=3)
                     body = json.loads(raw.read().decode())
                     self.assertEqual(raw.status, 200)
-                    self.assertEqual(body["admitted"], ["http_pass"])
+                    self.assertEqual(body["admitted"], [])
+                    self.assertEqual(body["proposed"], ["http_pass"])
+                    self.assertEqual(body["admission"], "manual")
                     self.assertTrue(body["paper_only"])
         finally:
             self._stop(httpd, thread)

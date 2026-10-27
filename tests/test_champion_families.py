@@ -212,10 +212,18 @@ class IngestTests(_StateCase):
             return ingest_discovery_payload({"evaluations": list(evals)})
 
     def test_new_worse_pass_in_family_is_parked(self):
+        from hedge_fund.trading.ingest import ingest_discovery_payload
+
         _seed(self.root, [_champ(A140, _m(0.561))])
         out = self._ingest(_eval(A130, 0.48))
-        self.assertEqual(out["admitted"], [A130])
-        self.assertEqual(out["family_parked"], {A130: A140})
+        self.assertEqual(out["admitted"], [])
+        self.assertEqual(out["proposed"], [A130])
+        self.assertEqual(out["family_parked"], {})
+        self.assertEqual(self.pool(), [A140])
+        with patch("hedge_fund.trading.families._open_lots", lambda n: 0):
+            seated = ingest_discovery_payload({"evaluations": [], "force_admit": [A130]})
+        self.assertEqual(seated["force_admitted"], [A130])
+        self.assertEqual(seated["family_parked"], {A130: A140})
         self.assertEqual(self.pool(), [A140])
         self.assertEqual(self.retired()[A130]["family_winner"], A140)
 
@@ -225,7 +233,14 @@ class IngestTests(_StateCase):
             A130: {"name": A130, "role": "parked_twin", "family_winner": A140, "reason": "x", "record": {}},
         })
         out = self._ingest(_eval(better, 0.842, sharpe=0.30, pnl=2905.26))
-        self.assertEqual(out["family_parked"], {A140: better})
+        self.assertEqual(out["admitted"], [])
+        self.assertEqual(out["proposed"], [better])
+        self.assertEqual(self.pool(), [A140])
+        from hedge_fund.trading.ingest import ingest_discovery_payload
+
+        with patch("hedge_fund.trading.families._open_lots", lambda n: 0):
+            seated = ingest_discovery_payload({"evaluations": [], "force_admit": [better]})
+        self.assertEqual(seated["family_parked"], {A140: better})
         self.assertEqual(self.pool(), [better])
         retired = self.retired()
         self.assertEqual(retired[A140]["family_winner"], better)
@@ -237,7 +252,15 @@ class IngestTests(_StateCase):
     def test_unrelated_pass_is_untouched(self):
         _seed(self.root, [_champ(A140, _m(0.561))])
         out = self._ingest(_eval(OTHER, 0.609, sharpe=0.31))
+        self.assertEqual(out["admitted"], [])
+        self.assertEqual(out["proposed"], [OTHER])
         self.assertEqual(out["family_parked"], {})
+        self.assertEqual(self.pool(), [A140])
+        from hedge_fund.trading.ingest import ingest_discovery_payload
+
+        with patch("hedge_fund.trading.families._open_lots", lambda n: 0):
+            seated = ingest_discovery_payload({"evaluations": [], "force_admit": [OTHER]})
+        self.assertEqual(seated["family_parked"], {})
         self.assertEqual(sorted(self.pool()), sorted([A140, OTHER]))
 
     def test_parked_twin_blocked_while_winner_active(self):

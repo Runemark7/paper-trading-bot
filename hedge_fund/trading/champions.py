@@ -8,9 +8,10 @@ Rules (hedge_fund.trading.constants — do not document different numbers):
    Net paper P&L > 0 after taker fee and slippage → GRADUATED_PAPER
    (graduated paper, not live trading). Else REJECTED_NEGATIVE_PNL.
    Buy-and-hold P&L is stored and is not the rule. Results go to graduated.json.
-3. 5m-qualified candidates fill the book — never a 4h admit bar.
-   Seating a name is still the owner's admit path; the forward-candidate
-   list does not admit.
+3. 5m-qualified candidates are proposed — never a 4h admit bar.
+   Ingest of a new pass does not seat it. Seating is the owner's
+   explicit path (``force_admit`` or ``promote_candidates``). The
+   forward-candidate list does not admit.
 """
 from __future__ import annotations
 
@@ -400,7 +401,12 @@ def _collect_live_results_unlocked() -> dict:
 
 
 def promote_candidates(candidates: list[dict]) -> dict:
-    """Admit 5m-qualified names until the forward cap. Does not retire anyone."""
+    """Explicit owner seat. Admits named 5m candidates until the forward cap.
+
+    Ingest does not call this. A qualified pass stays on the proposal
+    list until an owner runs this or ``force_admit``. Does not retire
+    anyone.
+    """
     st = load_pool()
     grad_list = load_graduated()
     existing = {c["name"] for c in st["champions"]}.union({g["name"] for g in grad_list})

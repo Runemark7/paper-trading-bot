@@ -48,6 +48,17 @@ _CORE = (
 # Provenance is not part of _CORE. A deploy must not rewrite every
 # historical line just to stamp worker_id / data_end / data_hash.
 _PROVENANCE_UNKNOWN = "unknown"
+# A retest writes a new line when these change, even if the scored
+# core matches. Absent on every historical row, so a backfill that
+# does not carry them does not rewrite the file.
+_RETEST_FIELDS = (
+    "retest",
+    "retest_reason",
+    "retest_batch",
+    "retest_from_rules",
+    "requeued_at",
+    "prior_fail_reasons",
+)
 
 _lock = threading.Lock()
 _backfill_once = threading.Lock()
@@ -204,6 +215,25 @@ def _provenance_fields(row: dict) -> dict:
     }
 
 
+def _retest_fields(row: dict) -> dict:
+    """Provenance for one v4 buy-and-hold retest. Omitted when absent."""
+    if row.get("retest") is not True:
+        return {}
+    out: dict = {"retest": True}
+    for key in ("retest_reason", "retest_batch", "retest_from_rules", "requeued_at"):
+        value = row.get(key)
+        if isinstance(value, str) and value:
+            out[key] = value
+    prior = row.get("prior_fail_reasons")
+    if isinstance(prior, list):
+        out["prior_fail_reasons"] = [item for item in prior if isinstance(item, str)]
+    return out
+
+
+def _same_retest(left: dict, right: dict) -> bool:
+    return all(left.get(key) == right.get(key) for key in _RETEST_FIELDS)
+
+
 def _seed_item(row: dict) -> dict:
     """Fields densify needs. Window payloads are not copied."""
     item: dict = {}
@@ -265,6 +295,7 @@ def _record_from_row(row: dict, *, gate: str) -> dict:
             record[key] = val
     if isinstance(row.get("gate_rules"), str):
         record["gate_rules"] = row["gate_rules"]
+    record.update(_retest_fields(row))
     return record
 
 
@@ -439,7 +470,7 @@ def _apply_rows(
         record = _record_from_row(row, gate=_gate_for(row, name, fresh_names, prev))
         if index is not None and name in index:
             record["qualified"] = bool(index[name])
-        if prev is not None and _same_core(prev, record):
+        if prev is not None and _same_core(prev, record) and _same_retest(prev, record):
             continue
         pending.append(record)
     if index is not None:

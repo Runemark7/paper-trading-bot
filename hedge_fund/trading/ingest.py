@@ -1,14 +1,15 @@
 """Merge Windows-worker discovery evaluations into prod paper state.
 
 Fail-once: a name that already has any discovery_log row is skipped
-(no second walk-forward). Qualified names are admitted the same way as
-``replenish_and_evaluate``. On ingest, parked rows that now pass on
-stored aggregates (Sharpe / trades / sma) are flipped and
-admitted without re-running walk-forwards. Buy-and-hold is not a fail
-reason. Optional ``force_admit`` seats
-a named existing log row even when those aggregates still fail (token
-gated). Champions are only removed by the one-per-family rule
-(``families.py``): a twin is parked to ``retired.json``. Paper only.
+(no second walk-forward), except one pending v4 buy-and-hold retest
+(``requeue_v4_bh``). A qualified pass is logged and proposed. It is not
+seated. On ingest, parked rows that now pass on stored aggregates
+(Sharpe / trades / sma) are flipped the same way and stay proposals.
+Buy-and-hold is not a fail reason. Seating is the explicit
+``force_admit`` list (token gated) or ``promote_candidates``. Both
+refuse past the forward cap. Champions are only removed by the
+one-per-family rule (``families.py``): a twin is parked to
+``retired.json``. Paper only.
 """
 from __future__ import annotations
 
@@ -35,6 +36,11 @@ from hedge_fund.trading.families import (
 from hedge_fund.trading.farm import apply_heartbeat_unlocked
 from hedge_fund.trading.leases import clear_leases_unlocked, touch_worker_unlocked
 from hedge_fund.trading.qualify import requalify_parked_log
+from hedge_fund.trading.requeue_v4_bh import (
+    complete_retest_unlocked,
+    retest_entry,
+    stamp_retest_result,
+)
 from hedge_fund.trading.refill import append_extended_batch, load_extended_names
 from hedge_fund.trading.requalify import (
     load_requalify_state,
@@ -183,15 +189,19 @@ def _apply_force_admit(
         row["force_admit_source"] = source
         if _admit_qualified(st, row, existing):
             admitted.append(name)
+            complete_retest_unlocked(name, tested_at=stamp)
     return admitted
 
 
 def ingest_discovery_payload(payload: dict) -> dict:
     """Apply a worker batch. Caller must already have checked the ingest token.
 
-    Returns counts. Parks family twins (families.py); never deletes. May flip a parked log row to
-    qualified when stored aggregates now pass (all-windows veto dropped),
-    or when ``force_admit`` names an existing log row.
+    Returns counts. A qualified pass is listed under ``proposed`` and is
+    not seated. ``force_admit`` is the explicit seat and still enforces
+    the forward cap. Parks family twins of names that were seated
+    (families.py); never deletes. May flip a parked log row to qualified
+    when stored aggregates now pass (all-windows veto dropped). That flip
+    is also a proposal.
     """
     if not isinstance(payload, dict):
         raise ValueError("payload must be an object")
@@ -209,6 +219,7 @@ def ingest_discovery_payload(payload: dict) -> dict:
     ingested: list[str] = []
     skipped: list[dict] = []
     admitted: list[str] = []
+    proposed: list[str] = []
     rejected_invalid: list[str] = []
     requalified: list[str] = []
     force_admitted: list[str] = []
@@ -245,17 +256,24 @@ def ingest_discovery_payload(payload: dict) -> dict:
                 skipped.append({"strategy": name, "reason": "already_pooled_or_graduated"})
                 continue
             if name in already:
-                skipped.append({"strategy": name, "reason": "already_tested"})
+                entry = retest_entry(name)
+                if entry is None:
+                    skipped.append({"strategy": name, "reason": "already_tested"})
+                    continue
+                # One fresh v5 row. The name stays a single census entry.
+                # A pass is proposed, not seated.
+                stamp_retest_result(rec, entry)
+                append_discovery_evaluation(rec)
+                complete_retest_unlocked(name, tested_at=rec.get("tested_at"))
+                ingested.append(name)
+                if rec["qualified"]:
+                    proposed.append(name)
                 continue
             append_discovery_evaluation(rec)
             already.add(name)
             ingested.append(name)
             if rec["qualified"]:
-                block = forward_cap_block(len(st.get("champions") or []))
-                if block:
-                    skipped.append({"strategy": name, "reason": block})
-                elif _admit_qualified(st, rec, existing):
-                    admitted.append(name)
+                proposed.append(name)
 
         if requalify_recorded:
             save_requalify_state(requal_state)
@@ -263,15 +281,11 @@ def ingest_discovery_payload(payload: dict) -> dict:
         log = load_discovery_log()
         requal_rows, requal_names = requalify_parked_log(log, existing_names=existing)
         if requal_names:
+            # The flip is a proposal. It does not seat.
             for rec in requal_rows:
-                block = forward_cap_block(len(st.get("champions") or []))
-                if block:
-                    skipped.append({"strategy": rec["strategy"], "reason": block})
-                    continue
-                if _admit_qualified(st, rec, existing):
-                    requalified.append(rec["strategy"])
-                    if rec["strategy"] not in admitted:
-                        admitted.append(rec["strategy"])
+                requalified.append(rec["strategy"])
+                if rec["strategy"] not in proposed:
+                    proposed.append(rec["strategy"])
 
         if raw_force:
             force_source = str(payload.get("source") or "manual_force_admit")
@@ -353,6 +367,8 @@ def ingest_discovery_payload(payload: dict) -> dict:
         "ingested": ingested,
         "skipped": skipped,
         "admitted": admitted,
+        "proposed": proposed,
+        "admission": "manual",
         "requalified": requalified,
         "requalify_recorded": requalify_recorded,
         "force_admitted": force_admitted,
