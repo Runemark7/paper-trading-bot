@@ -332,4 +332,10 @@ def load_canonical_history(state_dir: Path | None = None) -> dict | None:
     if source != "live_tape" or not any(len(arr) for arr in arrays.values()):
         return None
     history = arrays_to_history(arrays)
+    if history:
+        # Mint/densify/lift/refill scopes must not observe sealed bars.
+        # Outside those scopes this is a no-op (workers load the full tape).
+        from hedge_fund.trading.holdout import note_history_load
+
+        note_history_load(history)
     return history or None

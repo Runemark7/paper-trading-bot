@@ -19,7 +19,7 @@ from pathlib import Path
 from unittest.mock import patch
 from urllib.request import urlopen
 
-from hedge_fund.trading.constants import GATE_RULES
+from hedge_fund.trading.constants import GATE_RULES, V3_GATE_RULES
 
 NOW = datetime(2026, 10, 9, 6, 0, tzinfo=timezone.utc)
 NAME = "dip_204b_lt8pc&h4_ema_abv_150"
@@ -152,6 +152,13 @@ class ApprovedAdmitTests(unittest.TestCase):
                              "recorded_at": "2026-10-08T20:41:00+00:00"}}
         _seed(self.root, meta=meta)
         self.assertEqual(self._run()["admitted"], [NAME])
+
+    def test_historical_v3_tag_still_seats_the_20261009_batch(self):
+        _seed(self.root, meta=_done(_result(gate_rules=V3_GATE_RULES)))
+        out = self._run()
+        self.assertEqual(out["admitted"], [NAME])
+        prov = _pool(self.root)[1]["provenance"]
+        self.assertEqual(prov["gate_rules"], V3_GATE_RULES)
 
     def test_refuses_without_a_current_pass(self):
         cases = {

@@ -129,6 +129,9 @@ def _load_qual_history(keep_bars: int | None = None) -> dict | None:
                 rows = shared[sym]
                 if len(rows) > keep:
                     shared[sym] = rows[-keep:]
+        from hedge_fund.trading.holdout import note_history_load
+
+        note_history_load(shared)
         return shared
     path = _hist_qual()
     if not path.exists():
@@ -154,6 +157,10 @@ def _load_qual_history(keep_bars: int | None = None) -> dict | None:
             rows = rows[-keep:]
         out[sym] = rows
     data.clear()
+    if out:
+        from hedge_fund.trading.holdout import note_history_load
+
+        note_history_load(out)
     return out or None
 
 
@@ -185,6 +192,8 @@ def _tiled_slices(
     train_bars: int = QUAL_TRAIN_BARS,
     warmup_bars: int = QUAL_WARMUP_BARS,
     tf_ms: int = TF_MS_5M,
+    close_last: bool = False,
+    seal_holdout: bool = False,
 ) -> list[dict]:
     """Tiled OOS segments anchored to ``oos_start_ms`` (amendment 2026-10-08 18:08).
 
@@ -212,10 +221,20 @@ def _tiled_slices(
         if ts[-1] < last_start:
             raise ValueError(f"{sym}: tape ends before the last OOS segment")
         stamps[sym] = ts
+    from hedge_fund.trading.constants import HOLDOUT_START_MS
+    from hedge_fund.trading.holdout import HoldoutLeak, assert_no_holdout
+
     slices = []
     for k in range(n):
         start = int(oos_start_ms) + k * int(segment_ms)
-        end = None if k == n - 1 else start + int(segment_ms)
+        if close_last or k != n - 1:
+            end = start + int(segment_ms)
+        else:
+            end = None
+        if seal_holdout and (end is None or end > HOLDOUT_START_MS):
+            raise HoldoutLeak(
+                f"discovery segment {k} ends at {end}, which is not strictly before the holdout"
+            )
         w_sample = {}
         for sym, rows in data.items():
             ts = stamps[sym]
@@ -223,6 +242,8 @@ def _tiled_slices(
             i_train = bisect.bisect_left(ts, start - train_ms)
             i_oos = bisect.bisect_left(ts, start)
             i_end = len(ts) if end is None else bisect.bisect_left(ts, end)
+            if seal_holdout:
+                assert_no_holdout(rows[i_oos:i_end], purpose="walkforward")
             closes, highs, lows = _ohlc(rows[i_lead:i_end])
             w_sample[sym] = (closes, highs, lows, i_train - i_lead, i_oos - i_lead)
         slices.append(w_sample)
@@ -237,6 +258,7 @@ def _window_slices(
     warmup_bars: int | None = None,
     *,
     tiled: bool = False,
+    discovery: bool = False,
 ) -> list[dict]:
     """Walk-forward slices. ``tiled=True`` is the production layout.
 
@@ -250,6 +272,13 @@ def _window_slices(
     isolated-window slices (no pad).
     """
     if tiled:
+        if discovery:
+            return _tiled_slices(
+                data,
+                n_windows,
+                close_last=True,
+                seal_holdout=True,
+            )
         return _tiled_slices(data, n_windows)
     # New list identities; drop caches so id() reuse cannot serve stale series.
     bs.clear_qual_caches()
@@ -323,7 +352,14 @@ def _split_tape(tape, train: bool) -> tuple[list[float], list[float], list[float
     return split
 
 
-def _eval_slice(pred, sample: dict, train: bool) -> list:
+def _eval_slice(
+    pred,
+    sample: dict,
+    train: bool,
+    *,
+    taker_fee: float | None = None,
+    slippage: float | None = None,
+) -> list:
     results = []
     for _sym, tape in sample.items():
         parts = _tape_bounds(tape)
@@ -341,6 +377,7 @@ def _eval_slice(pred, sample: dict, train: bool) -> list:
                 bs.backtest(
                     closes, highs, lows, pred,
                     score_from=score_from, score_to=score_to,
+                    taker_fee=taker_fee, slippage=slippage,
                 )
             )
         except Exception:
@@ -368,12 +405,18 @@ def _book_daily_returns(results: list) -> list[float]:
     return equity_returns(book)
 
 
-def evaluate_windows(pred, window_slices: list[dict]) -> list[dict]:
+def evaluate_windows(
+    pred,
+    window_slices: list[dict],
+    *,
+    taker_fee: float | None = None,
+    slippage: float | None = None,
+) -> list[dict]:
     """Run train/test backtests per window. Empty/failed windows are marked skipped."""
     scores = []
     for w_sample in window_slices:
-        train_results = _eval_slice(pred, w_sample, train=True)
-        test_results = _eval_slice(pred, w_sample, train=False)
+        train_results = _eval_slice(pred, w_sample, train=True, taker_fee=taker_fee, slippage=slippage)
+        test_results = _eval_slice(pred, w_sample, train=False, taker_fee=taker_fee, slippage=slippage)
         if not train_results or not test_results:
             scores.append({
                 "train_pnl": 0.0,
@@ -394,6 +437,7 @@ def evaluate_windows(pred, window_slices: list[dict]) -> list[dict]:
         w_trades = w_test_trades  # OOS only in the window record
         w_wins = sum(r.wins for r in test_results)
         w_sharpe = sum(r.sharpe for r in test_results) / len(test_results)
+        w_dd = max(float(getattr(r, "max_drawdown", 0.0) or 0.0) for r in test_results)
         skipped = w_test_trades < 1
         scores.append({
             "train_pnl": w_train_pnl,
@@ -402,6 +446,7 @@ def evaluate_windows(pred, window_slices: list[dict]) -> list[dict]:
             "trades": w_trades,
             "wins": w_wins,
             "sharpe": w_sharpe,
+            "max_drawdown": w_dd,
             "skipped": skipped,
             "failed": skipped,
             "daily_returns": _book_daily_returns(test_results),

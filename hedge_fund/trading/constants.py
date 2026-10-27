@@ -17,7 +17,11 @@ from hedge_fund.data.binance import DEFAULT_TIMEFRAME, SUPPORTED_SYMBOLS
 # Live TradingLoop / CcxtSource / PROTOCOL: 5m bars. 4h history may remain
 # on disk unused; it must not admit champions.
 QUAL_TIMEFRAME = DEFAULT_TIMEFRAME  # "5m"
-QUAL_SYMBOLS = SUPPORTED_SYMBOLS  # BTC/USDT, ETH/USDT
+# History tape still carries both symbols (cross-asset check, shared store).
+# Discovery, qualification, and new live entries use BTC/USDT only.
+QUAL_SYMBOLS = SUPPORTED_SYMBOLS  # BTC/USDT, ETH/USDT — tape, not the book
+TRADE_SYMBOLS = ("BTC/USDT",)
+CROSS_ASSET_SYMBOL = "ETH/USDT"
 # ~90 calendar days of 5m per window (90 * 24 * 12). 2500 was ~1.4y of 4h
 # and would be only ~9 days of 5m — too short for OOS to mean anything.
 QUAL_WINDOW_DAYS = 90
@@ -58,7 +62,14 @@ RISK_POLICY = "rm_v1"
 # contiguous, non-overlapping and tile the tape end to end, anchored to a
 # fixed start so a new day only extends the last segment. Bumped so a
 # worker still on end-aligned windows is paused and its rows are refused.
-GATE_RULES = "sltp_cap100_bhdsr_tiled87_20261008"
+# Amendment 2026-10-27 (Alexander): gate v4. Same v3 floors, plus a sealed
+# holdout, BTC-only entries, deflated Sharpe, CSCV PBO, parameter
+# neighbours, and a fee stress. Workers on the 2026-10-08 tag are paused.
+GATE_RULES = "gate_v4_btc_holdout_dsr_pbo_20261027"
+# Historical full-tape grid (23 x 87d, last segment open). Discovery no
+# longer scores that grid: the holdout and everything after it are sealed.
+# Kept so the tiled-layout tests and the pre-v4 segment dates stay honest.
+V3_GATE_RULES = "sltp_cap100_bhdsr_tiled87_20261008"
 # Prior bars fed into each window so EMA/SMA/HTF/ATR are warm when scored
 # bars begin. Binding HTF: parser-allowed ``h4_ema_abv_N`` with N=70 needs
 # 70 completed 4h closes = 70×48=3360 five-minute bars, plus up to 47 for
@@ -93,6 +104,41 @@ QUAL_TAPE_START_MS = 1_612_224_000_000  # 2021-02-02 00:00 UTC
 QUAL_OOS_START_MS = QUAL_TAPE_START_MS + (QUAL_TRAIN_BARS + QUAL_WARMUP_BARS) * TF_MS_5M
 # 2021-04-20 00:00 UTC. Last segment starts 2026-07-17 00:00 UTC.
 QUAL_LAST_SEGMENT_START_MS = QUAL_OOS_START_MS + (QUAL_N_WINDOWS - 1) * QUAL_SEGMENT_MS
+
+# Sealed holdout (Alexander, 2026-10-27). Fixed, not rolling.
+# Last 12 months before 2026-10-01: [2025-10-01, 2026-10-01).
+# Discovery / mint / densify / lift / refill never score these bars.
+# Bars at or after HOLDOUT_END_MS are forward/live only.
+HOLDOUT_START_MS = 1_759_276_800_000  # 2025-10-01 00:00 UTC
+HOLDOUT_END_MS = 1_790_812_800_000  # 2026-10-01 00:00 UTC
+# Full 87d segments that end at or before the holdout. 18 x 87d ends
+# 2025-08-03; the leftover 59d (through 2025-09-30) is not a segment and
+# is not scored. It is also not part of the holdout.
+DISCOVERY_N_WINDOWS = (HOLDOUT_START_MS - QUAL_OOS_START_MS) // QUAL_SEGMENT_MS
+
+# Gate v4 thresholds. v3 floors (Sharpe, trades, sma_stack, daily B&H)
+# are not lowered. These are extra.
+# Bailey & Lopez de Prado 2014: DSR is the probability the true Sharpe
+# clears the expected maximum of N trials. 0.95 is their usual confidence.
+DSR_MIN_PROBABILITY = 0.95
+# Bailey, Borwein, Lopez de Prado, Zhu 2017: PBO is the probability the
+# in-sample winner is below the OOS median. 0.5 is a coin flip; 0.20 is
+# the pre-registered ceiling (at most one CSCV split in five overfits).
+PBO_MAX = 0.20
+NEIGHBOR_RELATIVE_STEPS = (0.10, 0.20)
+NEIGHBOR_PASS_MIN_FRACTION = 0.70
+COST_STRESS_FEE_MULTIPLE = 2.0
+COST_STRESS_EXTRA_SLIPPAGE = 0.0005  # +5 bps per side on top of the 2 bps model
+# Soft: recorded, does not block admission. ETH is not a pass requirement.
+CROSS_ASSET_MIN_SHARPE = 0.0
+# Holdout trade floor. v3 asks for 30 trades over 18 x 87d (~4.29y),
+# about 7 trades per year. One holdout year at 8 trades is not a lower
+# annual rate than that floor.
+HOLDOUT_MIN_TRADES = 8
+FORWARD_MIN_DAYS = 90
+FORWARD_MIN_CLOSED_TRADES = 20
+FORWARD_MAX_DD_MULTIPLE = 1.5
+FORWARD_SHARPE_FLOOR = 0.0
 # Store keeps this much tape before QUAL_TAPE_START_MS so gaps never cut
 # into segment 0's lead-in.
 QUAL_STORE_MARGIN_BARS = 7 * 24 * 12

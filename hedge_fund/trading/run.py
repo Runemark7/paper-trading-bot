@@ -1,7 +1,7 @@
 """PaperBot entrypoint — run one or more trading cycles and emit the dashboard.
 
 Usage:
-    .venv/bin/python -m hedge_fund.trading.run          # one cycle, BTC+ETH
+    .venv/bin/python -m hedge_fund.trading.run          # one cycle, BTC/USDT entries
     .venv/bin/python -m hedge_fund.trading.run --cycles 3
 
 Everything is paper. State (sqlite + calibration JSON) lives under state/.
@@ -23,9 +23,12 @@ from hedge_fund.risk.managed import RiskManager
 from hedge_fund.trading.loop import TradingLoop
 from hedge_fund.trading.store import TradeStore
 from hedge_fund.trading.champions import load_pool
+from hedge_fund.trading.constants import TRADE_SYMBOLS
 from hedge_fund.trading.live_tape import refresh_cycle_market
 
-SYMBOLS = ["BTC/USDT", "ETH/USDT"]
+# New entries are BTC/USDT only. Heartbeat still prices ETH so existing
+# ETH lots can hit their stop or take-profit.
+SYMBOLS = list(TRADE_SYMBOLS)
 START_CASH = 10_000.0
 # Strategy the live loop runs. Default is the A/B backtest winner (sma_stack),
 # but the SELF-LEARNED CHAMPION above overrides it when present.

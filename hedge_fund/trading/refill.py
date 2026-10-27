@@ -114,6 +114,7 @@ from typing import Iterable, Iterator
 
 from hedge_fund.paths import state_root
 from hedge_fund.trading.constants import DISCOVERY_REFILL_BATCH_SIZE
+from hedge_fund.trading.holdout import seal
 from hedge_fund.trading.universe import generate_universe, near_duplicate_key
 
 DISCOVERY_EXTENDED = "discovery_extended.json"
@@ -1865,6 +1866,7 @@ def _iter_recipe_families() -> Iterator[str]:
         yield from _leftover_trend_ands(n)
 
 
+@seal("refill")
 def next_refill_batch(
     *,
     taken_names: Iterable[str],

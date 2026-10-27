@@ -54,12 +54,14 @@ if str(ROOT) not in sys.path:
 from hedge_fund.paths import state_root
 from hedge_fund.trading.champions import load_graduated, load_pool, retired_names, save_graduated, save_pool
 from hedge_fund.trading.constants import (
+    CROSS_ASSET_SYMBOL,
     DISCOVER_CYCLE_MAX_NAMES,
+    DISCOVERY_N_WINDOWS,
     DISCOVERY_REFILL_BATCH_SIZE,
     GATE_RULES,
-    QUAL_N_WINDOWS,
     QUAL_STRIDE,
     QUAL_WINDOW_BARS,
+    TRADE_SYMBOLS,
     qual_keep_bars,
     qual_store_bars,
 )
@@ -108,20 +110,39 @@ _SLICES = None
 _BH = None
 _SMA = None
 _BH_DSR = None
-_N_WINDOWS = QUAL_N_WINDOWS
+_N_WINDOWS = DISCOVERY_N_WINDOWS
+_ETH_SLICES = None
+_HOLDOUT = None
+_HOLDOUT_BH = None
+_N_TRIALS = None
 
 
-def _init_pool(slices, bh, sma, n_windows: int, bh_dsr: float | None = None) -> None:
+def _init_pool(
+    slices,
+    bh,
+    sma,
+    n_windows: int,
+    bh_dsr: float | None = None,
+    eth_slices=None,
+    holdout=None,
+    holdout_bh=None,
+    n_trials: int | None = None,
+) -> None:
     global _SLICES, _BH, _SMA, _N_WINDOWS, _BH_DSR
+    global _ETH_SLICES, _HOLDOUT, _HOLDOUT_BH, _N_TRIALS
     _SLICES = slices
     _BH = bh
     _SMA = sma
     _N_WINDOWS = n_windows
     _BH_DSR = bh_dsr
+    _ETH_SLICES = eth_slices
+    _HOLDOUT = holdout
+    _HOLDOUT_BH = holdout_bh
+    _N_TRIALS = n_trials
 
 
 def _eval_name(name: str) -> dict | None:
-    return evaluate_strategy_record(
+    record = evaluate_strategy_record(
         name,
         _SLICES,
         n_windows=_N_WINDOWS,
@@ -129,13 +150,37 @@ def _eval_name(name: str) -> dict | None:
         sma_stack_oos_pnl=_SMA,
         bh_daily_sharpe=_BH_DSR,
     )
+    if record and record.get("qualified") and not record.get("ops_park"):
+        from hedge_fund.trading.gate_v4 import finish_gate_v4
+
+        record = finish_gate_v4(
+            name,
+            record,
+            btc_slices=_SLICES,
+            eth_slices=_ETH_SLICES,
+            holdout_sample=_HOLDOUT,
+            holdout_benchmarks=_HOLDOUT_BH,
+            n_trials=_N_TRIALS,
+        )
+    return record
 
 
-def _new_eval_pool(n_workers: int, slices, bh, sma, n_windows: int, bh_dsr: float | None = None):
+def _new_eval_pool(
+    n_workers: int,
+    slices,
+    bh,
+    sma,
+    n_windows: int,
+    bh_dsr: float | None = None,
+    eth_slices=None,
+    holdout=None,
+    holdout_bh=None,
+    n_trials: int | None = None,
+):
     return multiprocessing.Pool(
         processes=n_workers,
         initializer=_init_pool,
-        initargs=(slices, bh, sma, n_windows, bh_dsr),
+        initargs=(slices, bh, sma, n_windows, bh_dsr, eth_slices, holdout, holdout_bh, n_trials),
     )
 
 
@@ -583,18 +628,59 @@ def _post_ingest(
     return _http_json(url, token=token, data=payload, timeout=90)
 
 
+def _looks_like_bars(rows: object) -> bool:
+    return isinstance(rows, list) and bool(rows) and isinstance(rows[0], (list, tuple)) and len(rows[0]) >= 5
+
+
+def _symbol_rows(data: dict, symbol: str, *, purpose: str) -> list | None:
+    """Pre-holdout rows for one symbol. Non-bar fixtures pass through."""
+    rows = data.get(symbol)
+    if not rows:
+        return None
+    if not _looks_like_bars(rows):
+        return rows
+    from hedge_fund.trading.holdout import assert_no_holdout, discovery_rows
+
+    kept = discovery_rows(rows)
+    assert_no_holdout(kept, purpose=purpose)
+    return kept
+
+
+def _holdout_sample(data: dict) -> dict | None:
+    """One BTC holdout span. Refused while a mint scope is active."""
+    from hedge_fund.trading.constants import QUAL_WARMUP_BARS
+    from hedge_fund.trading.holdout import read_bars
+
+    rows = data.get(TRADE_SYMBOLS[0])
+    if not _looks_like_bars(rows):
+        return None
+    sealed = read_bars(rows, purpose="holdout")
+    pre = [r for r in rows if int(r[0]) < sealed[0][0]] if sealed else []
+    if len(sealed) < 30 or len(pre) < 14:
+        return None
+    warm = pre[-QUAL_WARMUP_BARS:]
+    chunk = warm + sealed
+    from scripts.tournament_engine import _ohlc
+
+    closes, highs, lows = _ohlc(chunk)
+    warm_len = len(warm)
+    # cut == warmup so the scored span is the holdout, not a 70/30 split.
+    return {TRADE_SYMBOLS[0]: (closes, highs, lows, warm_len, warm_len)}
+
+
 def run_batch(
     *,
     workers: int,
     max_names: int,
     ingest_url: str | None,
     token: str | None,
-    n_windows: int = QUAL_N_WINDOWS,
+    n_windows: int = DISCOVERY_N_WINDOWS,
     names: list[str] | None = None,
     claim_mode: bool = False,
     worker_id: str | None = None,
     sync_base: str | None = None,
     sync_token: str | None = None,
+    n_trials: int | None = None,
 ) -> dict:
     history_stamp: dict | None = None
     if sync_base and sync_token:
@@ -613,10 +699,52 @@ def run_batch(
             "crypto_history_5m.json missing or empty under PAPER_STATE. "
             "Run: python scripts/fetch_history.py"
         )
+    btc_rows = _symbol_rows(data, TRADE_SYMBOLS[0], purpose="walkforward")
+    if not btc_rows:
+        raise SystemExit("BTC/USDT tape missing; discovery is BTC-only")
+    eth_rows = _symbol_rows(data, CROSS_ASSET_SYMBOL, purpose="walkforward")
+    holdout = _holdout_sample(data)
     try:
-        slices = _window_slices(data, QUAL_WINDOW_BARS, n_windows, QUAL_STRIDE, tiled=True)
+        slices = _window_slices(
+            {TRADE_SYMBOLS[0]: btc_rows},
+            QUAL_WINDOW_BARS,
+            n_windows,
+            QUAL_STRIDE,
+            tiled=True,
+            discovery=True,
+        )
     except ValueError as exc:
         raise SystemExit(f"history does not cover the tiled OOS segments: {exc}") from exc
+    eth_slices = None
+    if eth_rows:
+        try:
+            eth_slices = _window_slices(
+                {CROSS_ASSET_SYMBOL: eth_rows},
+                QUAL_WINDOW_BARS,
+                n_windows,
+                QUAL_STRIDE,
+                tiled=True,
+                discovery=True,
+            )
+        except ValueError:
+            eth_slices = None
+    holdout_bh = None
+    if holdout:
+        try:
+            from hedge_fund.trading.gate_v4 import holdout_benchmarks
+
+            holdout_bh = holdout_benchmarks(holdout)
+        except Exception:
+            holdout_bh = None
+    # Claim mode must use the prod census. A missing count fails DSR closed.
+    # A local empty index would otherwise report N=1 and skip the haircut.
+    if n_trials is None and not claim_mode:
+        try:
+            from hedge_fund.trading.trials import trial_census
+
+            n_trials = int(trial_census()["n_trials"])
+        except Exception:
+            n_trials = None
     del data
     if len(slices) != n_windows:
         raise SystemExit("history too short for qualification windows")
@@ -742,11 +870,17 @@ def run_batch(
         if not cheap:
             pass
         elif n_workers == 1 and timeout_s <= 0:
-            _init_pool(slices, bh, sma, n_windows, bh_dsr)
+            _init_pool(
+                slices, bh, sma, n_windows, bh_dsr,
+                eth_slices, holdout, holdout_bh, n_trials,
+            )
             for name in cheap:
                 finish(name, _eval_name(name))
         else:
-            pool = _new_eval_pool(n_workers, slices, bh, sma, n_windows, bh_dsr)
+            pool = _new_eval_pool(
+                n_workers, slices, bh, sma, n_windows, bh_dsr,
+                eth_slices, holdout, holdout_bh, n_trials,
+            )
             try:
                 i = 0
                 while i < len(cheap):
@@ -763,7 +897,8 @@ def run_batch(
                         pool.join()
                         if i + len(wave) < len(cheap):
                             pool = _new_eval_pool(
-                                n_workers, slices, bh, sma, n_windows, bh_dsr
+                                n_workers, slices, bh, sma, n_windows, bh_dsr,
+                                eth_slices, holdout, holdout_bh, n_trials,
                             )
                     i += len(wave)
             finally:
@@ -1023,6 +1158,7 @@ def _run_loop(
                 time.sleep(max(5, args.idle_sleep))
                 continue
             try:
+                trials = claimed.get("trials") if isinstance(claimed.get("trials"), dict) else {}
                 result = run_batch(
                     workers=workers,
                     max_names=max_names,
@@ -1033,6 +1169,7 @@ def _run_loop(
                     worker_id=worker_id,
                     sync_base=base,
                     sync_token=token,
+                    n_trials=trials.get("n_trials"),
                 )
             except HistoryUnavailable as exc:
                 print(

@@ -313,6 +313,7 @@ class StaleWorkerIngestTests(unittest.TestCase):
                     "evaluations": [
                         self._row("stale_pass"),
                         self._row("stale_old_stamp", gate_rules="pre-20261008"),
+                        self._row("current_no_v4", gate_rules=GATE_RULES),
                         self._row("fresh_fail", qualified=False, gate_rules=GATE_RULES,
                                   fail_reasons=["oos_sharpe 0.10 < 0.3"]),
                     ],
@@ -321,7 +322,10 @@ class StaleWorkerIngestTests(unittest.TestCase):
                 from hedge_fund.trading.discovery import load_discovery_log
 
                 logged = {r["strategy"] for r in load_discovery_log()}
-        self.assertEqual(sorted(out["rejected_invalid"]), ["stale_old_stamp", "stale_pass"])
+        self.assertEqual(
+            sorted(out["rejected_invalid"]),
+            ["current_no_v4", "stale_old_stamp", "stale_pass"],
+        )
         self.assertEqual(out["admitted"], [])
         self.assertEqual(logged, {"fresh_fail"})
 

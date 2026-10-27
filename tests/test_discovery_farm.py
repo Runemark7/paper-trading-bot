@@ -13,6 +13,7 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from hedge_fund.trading.constants import GATE_RULES, QUAL_N_WINDOWS
+from hedge_fund.trading.gate_v4 import v4_pass_attestation
 from hedge_fund.trading.discovery_mode import discovery_on_cycle, tokens_match
 from hedge_fund.trading.ingest import ingest_discovery_payload
 
@@ -32,6 +33,8 @@ def _eval(name, *, qualified, tested_at="2026-09-12T10:00:00+00:00", **extra):
         "risk_policy": "rm_v1",
         "gate_rules": GATE_RULES,
     }
+    if qualified:
+        row["gate_v4"] = v4_pass_attestation()
     row.update(extra)
     return row
 
@@ -222,15 +225,13 @@ class IngestMergeTests(unittest.TestCase):
                 log = load_discovery_log()
         by_name = {r["strategy"]: r for r in log}
         names = [c["name"] for c in pool["champions"]]
-        self.assertIn("window_veto_only", out["admitted"])
-        self.assertIn("window_veto_only", out["requalified"])
-        self.assertNotIn("dbl_bot_120", out["admitted"])
-        self.assertNotIn("dbl_bot_120", out["requalified"])
-        self.assertTrue(by_name["window_veto_only"]["qualified"])
+        # v3 aggregates without a v4 attestation stay parked.
+        self.assertEqual(out["admitted"], [])
+        self.assertEqual(out["requalified"], [])
+        self.assertFalse(by_name["window_veto_only"]["qualified"])
         self.assertFalse(by_name["dbl_bot_120"]["qualified"])
-        self.assertIn("window_veto_only", names)
+        self.assertNotIn("window_veto_only", names)
         self.assertNotIn("dbl_bot_120", names)
-        self.assertEqual(by_name["window_veto_only"]["fail_reasons"], [])
 
     def test_force_admit_seats_parked_beat_bh_fail(self):
         parked = _eval(

@@ -25,10 +25,12 @@ from hedge_fund.risk.managed import RiskManager
 from hedge_fund.trading.loop import TradingLoop
 from hedge_fund.trading.store import TradeStore
 from hedge_fund.trading.champions import load_pool
-from hedge_fund.trading.constants import QUAL_SYMBOLS, live_signal_eval_bars
+from hedge_fund.trading.constants import TRADE_SYMBOLS, live_signal_eval_bars
 from hedge_fund.trading.live_tape import CachedMarket, refresh_cycle_market
 
-SYMBOLS = list(QUAL_SYMBOLS)
+# New entries are BTC/USDT only. Existing ETH lots still exit on stop/TP
+# because the heartbeat keeps pricing ETH/USDT.
+SYMBOLS = list(TRADE_SYMBOLS)
 START_CASH = 10_000.0
 LIVE_STRATEGY = os.environ.get("PAPER_STRATEGY", "sma_stack")
 

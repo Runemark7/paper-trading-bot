@@ -21,6 +21,7 @@ from hedge_fund.trading.constants import (
     MIN_BACKTEST_TRADES,
     QUAL_N_WINDOWS,
 )
+from hedge_fund.trading.gate_v4 import v4_pass_attestation
 from hedge_fund.trading.store import TradeStore
 
 NOW = datetime(2026, 10, 9, 6, 30, tzinfo=timezone.utc)
@@ -78,6 +79,7 @@ def _eval(name: str, dsr: float, sharpe: float = 0.4, pnl: float = 1500.0) -> di
         "bh_daily_sharpe": 0.407,
         "gate_rules": GATE_RULES,
         "regimes_tested": 23,
+        "gate_v4": v4_pass_attestation(),
     }
 
 

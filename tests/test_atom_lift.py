@@ -261,7 +261,7 @@ class SteerTests(unittest.TestCase):
 
 class SeedAndDensifyTests(unittest.TestCase):
     def test_seeds_prefer_net_pnl_over_sharpe_on_the_current_window(self):
-        from hedge_fund.trading.constants import QUAL_N_WINDOWS
+        from hedge_fund.trading.constants import DISCOVERY_N_WINDOWS
 
         high_pnl = "h1_ema_abv_50&mom_18b_gt4pc"
         high_sharpe = "h1_ema_abv_40&mom_18b_gt2pc"
@@ -274,14 +274,14 @@ class SeedAndDensifyTests(unittest.TestCase):
                 "trades": 40,
                 "test_pnl": 80.0,
                 "bh_oos_pnl": 10.0,
-                "regimes_tested": QUAL_N_WINDOWS,
+                "regimes_tested": DISCOVERY_N_WINDOWS,
             },
             high_sharpe: {
                 "sharpe": 2.0,
                 "trades": 40,
                 "test_pnl": 12.0,
                 "bh_oos_pnl": 10.0,
-                "regimes_tested": QUAL_N_WINDOWS,
+                "regimes_tested": DISCOVERY_N_WINDOWS,
             },
             old: {
                 "sharpe": 3.0,
@@ -295,15 +295,24 @@ class SeedAndDensifyTests(unittest.TestCase):
                 "trades": 10,
                 "test_pnl": 40.0,
                 "bh_oos_pnl": 1.0,
-                "regimes_tested": QUAL_N_WINDOWS,
+                "regimes_tested": DISCOVERY_N_WINDOWS,
+            },
+            "h1_ema_abv_70&mom_18b_gt2pc": {
+                "sharpe": 4.0,
+                "trades": 80,
+                "test_pnl": 900.0,
+                "bh_oos_pnl": 1.0,
+                "regimes_tested": 23,
             },
         }
+        index["h1_ema_abv_70&mom_18b_gt2pc"] = True
         seeds = order_seeds(index, None, results)
         self.assertEqual(seeds[0], high_pnl)
         self.assertIn(high_sharpe, seeds)
         self.assertLess(seeds.index(high_pnl), seeds.index(high_sharpe))
         self.assertNotIn(old, seeds)
         self.assertNotIn(thin, seeds)
+        self.assertNotIn("h1_ema_abv_70&mom_18b_gt2pc", seeds)
         self.assertTrue(index[old])
         plain = order_seeds(index, None)
         self.assertIn(high_sharpe, plain)
@@ -340,7 +349,7 @@ class SeedAndDensifyTests(unittest.TestCase):
         self.assertEqual(again, steered)
 
     def test_results_put_the_higher_net_pnl_seed_first(self):
-        from hedge_fund.trading.constants import QUAL_N_WINDOWS
+        from hedge_fund.trading.constants import DISCOVERY_N_WINDOWS
 
         high = "h1_ema_abv_60&mom_18b_gt2pc"
         low = "h1_ema_abv_50&mom_18b_gt2pc"
@@ -351,14 +360,14 @@ class SeedAndDensifyTests(unittest.TestCase):
                 "trades": 40,
                 "test_pnl": 90.0,
                 "bh_oos_pnl": 10.0,
-                "regimes_tested": QUAL_N_WINDOWS,
+                "regimes_tested": DISCOVERY_N_WINDOWS,
             },
             low: {
                 "sharpe": 2.0,
                 "trades": 40,
                 "test_pnl": 11.0,
                 "bh_oos_pnl": 10.0,
-                "regimes_tested": QUAL_N_WINDOWS,
+                "regimes_tested": DISCOVERY_N_WINDOWS,
             },
         }
         steered, _ = next_densify_batch(

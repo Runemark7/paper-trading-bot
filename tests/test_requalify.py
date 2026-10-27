@@ -10,10 +10,11 @@ from pathlib import Path
 from unittest.mock import patch
 
 from hedge_fund.trading.constants import GATE_RULES, QUAL_N_WINDOWS
+from hedge_fund.trading.gate_v4 import v4_pass_attestation
 
 
 def _eval(name, *, qualified=False, regimes=QUAL_N_WINDOWS, pnl=100.0, bh=500.0):
-    return {
+    row = {
         "strategy": name,
         "tested_at": "2026-10-08T10:00:00+00:00",
         "qualified": qualified,
@@ -28,6 +29,9 @@ def _eval(name, *, qualified=False, regimes=QUAL_N_WINDOWS, pnl=100.0, bh=500.0)
         "risk_policy": "rm_v1",
         "gate_rules": GATE_RULES,
     }
+    if qualified:
+        row["gate_v4"] = v4_pass_attestation()
+    return row
 
 
 CHAMPS = ["don_hi_12", "dip_36b_lt5pc"]
