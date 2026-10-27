@@ -193,7 +193,7 @@ class BhDailySharpeGateTests(unittest.TestCase):
             }
             for _ in range(3)
         ]
-        # Strategy PnL loses to B&H PnL, but daily Sharpe wins → pass B&H leg.
+        # Strategy PnL loses to B&H PnL, and daily Sharpe wins. Neither is a fail.
         d = qualification_decision(
             windows,
             expected_windows=3,
@@ -203,9 +203,10 @@ class BhDailySharpeGateTests(unittest.TestCase):
             bh_daily_sharpe=0.30,
         )
         self.assertTrue(d["passed"], d["reasons"])
-        self.assertFalse(any("oos_pnl" in r and "bh" in r for r in d["reasons"]))
+        self.assertFalse(any("bh" in r for r in d["reasons"]))
+        self.assertEqual(d["bh_role"], "informational")
 
-        # Daily Sharpe loses → fail even if PnL beats B&H.
+        # Daily Sharpe loses. Gate v5 still passes when the other floors pass.
         d2 = qualification_decision(
             windows,
             expected_windows=3,
@@ -214,10 +215,11 @@ class BhDailySharpeGateTests(unittest.TestCase):
             strategy_daily_sharpe=0.10,
             bh_daily_sharpe=0.30,
         )
-        self.assertFalse(d2["passed"])
-        self.assertTrue(any("daily_sharpe" in r for r in d2["reasons"]))
+        self.assertTrue(d2["passed"], d2["reasons"])
+        self.assertFalse(any("daily_sharpe" in r or "bh" in r for r in d2["reasons"]))
+        self.assertEqual(d2["bh_daily_sharpe"], 0.30)
 
-    def test_aggregate_fail_reasons_require_daily_sharpe_fields(self):
+    def test_missing_buy_and_hold_daily_sharpe_is_not_a_fail(self):
         reasons = aggregate_fail_reasons(
             tot_test_pnl=100.0,
             tot_oos_trades=40,
@@ -229,7 +231,7 @@ class BhDailySharpeGateTests(unittest.TestCase):
             strategy_daily_sharpe=None,
             bh_daily_sharpe=None,
         )
-        self.assertTrue(any("buy-and-hold" in r for r in reasons))
+        self.assertEqual(reasons, [])
 
     def test_buy_and_hold_daily_sharpe_uses_per_symbol_cash(self):
         # Two symbols, same uptrend — Sharpe scale-free; capital base matches strategy.
@@ -260,8 +262,8 @@ class BhDailySharpeGateTests(unittest.TestCase):
             "fail_reasons": ["oos_pnl -2704.00 <= bh 1692.00"],
         }
         d = qualification_from_record(row)
-        self.assertFalse(d["passed"])
-        self.assertIn("buy-and-hold daily sharpe missing", d["reasons"])
+        self.assertTrue(d["passed"], d["reasons"])
+        self.assertFalse(any("buy-and-hold" in r for r in d["reasons"]))
         flipped, names = requalify_parked_log([row], existing_names=set())
         self.assertEqual(names, [])
         self.assertFalse(row["qualified"])

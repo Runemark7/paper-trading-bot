@@ -155,7 +155,10 @@ class ProductionConstantsTests(unittest.TestCase):
         self.assertEqual(C.QUAL_LAST_SEGMENT_START_MS, 1_784_246_400_000)  # 2026-07-17
         self.assertEqual(C.qual_segment_bounds(0), (C.QUAL_OOS_START_MS, C.QUAL_OOS_START_MS + C.QUAL_SEGMENT_MS))
         self.assertEqual(C.qual_segment_bounds(22), (C.QUAL_LAST_SEGMENT_START_MS, None))
-        self.assertEqual(C.GATE_RULES, "gate_v4_btc_holdout_dsr_pbo_20261027")
+        self.assertEqual(C.GATE_RULES, "gate_v5_btc_holdout_dsr_pbo_20261027")
+        self.assertEqual(C.V4_GATE_RULES, "gate_v4_btc_holdout_dsr_pbo_20261027")
+        self.assertEqual(C.FORWARD_CHAMPION_CAP, 5)
+        self.assertFalse(hasattr(C, "MAX_ACTIVE_CHAMPIONS"))
         self.assertEqual(C.V3_GATE_RULES, "sltp_cap100_bhdsr_tiled87_20261008")
         # Frozen thresholds.
         self.assertEqual(C.MIN_BACKTEST_TRADES, 30)

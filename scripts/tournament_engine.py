@@ -506,6 +506,8 @@ def evaluate_strategy_record(
         "sma_stack_oos_pnl": None if sma_stack_oos_pnl is None else round(sma_stack_oos_pnl, 2),
         "daily_sharpe": None if dsr is None else round(dsr, 3),
         "bh_daily_sharpe": None if bh_daily_sharpe is None else round(bh_daily_sharpe, 3),
+        "bh_daily_sharpe_role": "informational",
+        "bh_oos_pnl_role": "informational",
         "avg_hold_hours": None if avg_hold_hours is None else round(avg_hold_hours, 2),
         "gate_rules": GATE_RULES,
         "fail_reasons": decision["reasons"],

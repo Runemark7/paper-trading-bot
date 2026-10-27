@@ -138,6 +138,15 @@ class ApprovedAdmitTests(unittest.TestCase):
         self.assertEqual(json.loads((self.root / "champions.json").read_text())["synced_until"],
                          "2026-10-07T17:48:50+00:00")
 
+    def test_forward_cap_defers_and_leaves_no_marker(self):
+        champs = [{"name": f"n{i}", "closed": 0, "pnl": 0.0, "wins": 0} for i in range(5)]
+        _seed(self.root, meta=_done(), champions=champs)
+        self.assertIsNone(self._run())
+        names = [c["name"] for c in _pool(self.root)]
+        self.assertEqual(names, [f"n{i}" for i in range(5)])
+        self.assertNotIn(NAME, names)
+        self.assertFalse((self.root / "approved_admits.json").exists())
+
     def test_idempotent_marker(self):
         _seed(self.root, meta=_done())
         self.assertIsNotNone(self._run())
