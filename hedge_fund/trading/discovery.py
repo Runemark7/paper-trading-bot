@@ -377,6 +377,7 @@ def append_discovery_evaluations(
     *,
     cap: int = DISCOVERY_LOG_CAP,
     after_commit=None,
+    still_valid=None,
 ) -> list[dict]:
     """Prepend records (newest-first) and cap the display log.
 
@@ -393,6 +394,13 @@ def append_discovery_evaluations(
     write the bytes, and only if neither file changed. ``after_commit``
     runs inside that write, before the lock is released, so a retest can
     leave the pending set in the same critical section as the index write.
+
+    ``still_valid`` (optional) is re-checked under the lock before the
+    snapshot and before a locked fallback write. When it returns False the
+    rows are not appended (a concurrent ingest already wrote this name),
+    and ``None`` is returned. Every append changes the display-log
+    fingerprint, so a duplicate landing between the snapshot and the
+    write forces a retry that re-runs the check.
     """
     if not eval_records:
         return load_discovery_log()
@@ -401,6 +409,8 @@ def append_discovery_evaluations(
 
     if paper_lock_held():
         with paper_state_lock("discovery"):
+            if still_valid is not None and not still_valid():
+                return None
             saved = _commit_append_locked(eval_records, cap=cap)
             if after_commit is not None:
                 after_commit()
@@ -408,6 +418,8 @@ def append_discovery_evaluations(
         saved = None
         for _attempt in range(8):
             with paper_state_lock("discovery"):
+                if still_valid is not None and not still_valid():
+                    return None
                 prepared = _prepare_append(eval_records, cap)
             from hedge_fund.trading.handler_timing import io_timer
 
@@ -441,6 +453,8 @@ def append_discovery_evaluations(
                 break
         if saved is None:
             with paper_state_lock("discovery"):
+                if still_valid is not None and not still_valid():
+                    return None
                 saved = _commit_append_locked(eval_records, cap=cap)
                 if after_commit is not None:
                     after_commit()
@@ -460,9 +474,12 @@ def append_discovery_evaluation(
     *,
     cap: int = DISCOVERY_LOG_CAP,
     after_commit=None,
-) -> list[dict]:
+    still_valid=None,
+) -> list[dict] | None:
     """Append one finished evaluation now. Crash-safe mid-batch progress."""
-    return append_discovery_evaluations([record], cap=cap, after_commit=after_commit)
+    return append_discovery_evaluations(
+        [record], cap=cap, after_commit=after_commit, still_valid=still_valid
+    )
 
 
 def save_discovery_log(log: list[dict]) -> None:

@@ -390,17 +390,36 @@ def ingest_discovery_payload(payload: dict) -> dict:
         if requalify_recorded:
             save_requalify_state(requal_state)
 
+    # The fail-once check above ran under an earlier lock. Re-check it under
+    # the append lock so a concurrent ingest (e.g. a retried post) of the
+    # same name cannot write a second row.
     t_append = time.perf_counter()
     for rec, retest_name in to_append:
+        name = rec["strategy"]
         if retest_name is None:
-            append_discovery_evaluation(rec)
+
+            def _still_untested(name=name):
+                return name not in tested_discovery_names(load_discovery_log())
+
+            wrote = append_discovery_evaluation(rec, still_valid=_still_untested)
         else:
             tested_at = rec.get("tested_at")
 
             def _close_retest(name=retest_name, stamp=tested_at):
                 complete_retest_unlocked(name, tested_at=stamp)
 
-            append_discovery_evaluation(rec, after_commit=_close_retest)
+            def _still_pending(name=retest_name):
+                return retest_entry(name) is not None
+
+            wrote = append_discovery_evaluation(
+                rec, after_commit=_close_retest, still_valid=_still_pending
+            )
+        if wrote is None:
+            if name in ingested:
+                ingested.remove(name)
+            if name in proposed:
+                proposed.remove(name)
+            skipped.append({"strategy": name, "reason": "already_tested"})
     mark("append", t_append)
 
     with paper_state_lock("discovery"):
