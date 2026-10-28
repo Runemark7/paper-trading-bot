@@ -529,42 +529,132 @@ def candle_store_selected() -> bool:
         return True
 
 
+# One symbol of the canonical tape is ~605k bars. A chunk is small enough
+# that the driver does not hold the whole result as Python rows, and large
+# enough that the round-trip count stays in the dozens.
+TAPE_LOAD_CHUNK = 50_000
+# This read is the only statement allowed to outlive the session 60s cap.
+# SET LOCAL dies with the transaction, so the pooled connection goes back
+# to 60s. A throttled web process needs the extra room; other queries do not.
+TAPE_STATEMENT_TIMEOUT = "10min"
+
+
+def _tape_where(
+    symbol: str,
+    *,
+    since_ms: int | None,
+    until_ms: int | None,
+) -> tuple[str, list]:
+    clauses = "exchange = %s AND symbol = %s AND timeframe = %s"
+    params: list = [EXCHANGE, symbol, QUAL_TIMEFRAME]
+    if since_ms is not None:
+        clauses += " AND open_time >= %s"
+        params.append(ms_to_dt(int(since_ms)))
+    if until_ms is not None:
+        clauses += " AND open_time <= %s"
+        params.append(ms_to_dt(int(until_ms)))
+    return clauses, params
+
+
+def _tape_select_sql(where: str) -> str:
+    """Epoch ms and float8 in SQL, so the client never sees timestamps or decimals."""
+    return f"""
+        SELECT (EXTRACT(EPOCH FROM open_time) * 1000)::bigint,
+               open::float8,
+               high::float8,
+               low::float8,
+               close::float8,
+               COALESCE(volume, 0)::float8
+        FROM candles
+        WHERE {where}
+        ORDER BY open_time ASC
+    """
+
+
+def write_tape_chunk(arr: np.ndarray, offset: int, rows) -> int:
+    """Copy one driver batch into ``arr`` at ``offset``. Returns the new offset.
+
+    ``rows`` is a short chunk (see ``TAPE_LOAD_CHUNK``), not the whole tape.
+    The caller drops it before fetching the next chunk.
+    """
+    n = len(rows)
+    if n <= 0:
+        return offset
+    end = offset + n
+    if end > len(arr):
+        raise ValueError(f"tape chunk exceeds allocation ({end} > {len(arr)})")
+    # One C-level conversion per chunk instead of a Python store per row.
+    arr[offset:end] = np.array([tuple(row) for row in rows], dtype=arr.dtype)
+    return end
+
+
+def fill_tape_from_chunks(count: int, chunks, *, dtype) -> np.ndarray:
+    """Preallocate ``count`` rows and fill them from successive chunks."""
+    arr = np.empty(max(0, int(count)), dtype=dtype)
+    offset = 0
+    for rows in chunks:
+        n = len(rows)
+        if n <= 0:
+            continue
+        if offset + n > len(arr):
+            grown = np.empty(offset + n, dtype=dtype)
+            if offset:
+                grown[:offset] = arr[:offset]
+            arr = grown
+        offset = write_tape_chunk(arr, offset, rows)
+    if offset != len(arr):
+        arr = arr[:offset]
+    return arr
+
+
 def load_tape(
     symbol: str,
     *,
     since_ms: int | None = None,
     until_ms: int | None = None,
 ) -> np.ndarray:
-    """Ascending tape array for one symbol. Empty when the symbol has no rows."""
+    """Ascending tape array for one symbol. Empty when the symbol has no rows.
+
+    The SELECT casts time and prices in SQL. A server-side cursor fetches
+    about 50k rows at a time into a preallocated array, then drops the
+    chunk. ``statement_timeout`` is raised for this transaction only.
+    """
     from hedge_fund.trading.live_tape import TAPE_DTYPE
 
     _check_symbol(symbol)
     migrate()
-    sql = """
-        SELECT open_time, open, high, low, close, volume
-        FROM candles
-        WHERE exchange = %s AND symbol = %s AND timeframe = %s
-    """
-    params: list = [EXCHANGE, symbol, QUAL_TIMEFRAME]
-    if since_ms is not None:
-        sql += " AND open_time >= %s"
-        params.append(ms_to_dt(int(since_ms)))
-    if until_ms is not None:
-        sql += " AND open_time <= %s"
-        params.append(ms_to_dt(int(until_ms)))
-    sql += " ORDER BY open_time ASC"
+    where, params = _tape_where(symbol, since_ms=since_ms, until_ms=until_ms)
+    count_sql = f"SELECT COUNT(*)::bigint FROM candles WHERE {where}"
+    select_sql = _tape_select_sql(where)
     with _pool().connection() as conn:
-        rows = conn.execute(sql, params).fetchall()
-    arr = np.empty(len(rows), dtype=TAPE_DTYPE)
-    for i, (opened, o, h, low, c, vol) in enumerate(rows):
-        arr[i] = (
-            dt_to_ms(opened),
-            float(o),
-            float(h),
-            float(low),
-            float(c),
-            float(vol or 0.0),
+        conn.execute(f"SET LOCAL statement_timeout = '{TAPE_STATEMENT_TIMEOUT}'")
+        # The client converts each chunk between fetches; under CPU throttling
+        # that gap must not trip the session's 60s idle-in-transaction cap.
+        conn.execute(
+            f"SET LOCAL idle_in_transaction_session_timeout = '{TAPE_STATEMENT_TIMEOUT}'"
         )
+        counted = conn.execute(count_sql, params).fetchone()
+        total = 0 if counted is None or counted[0] is None else int(counted[0])
+        if total <= 0:
+            return np.empty(0, dtype=TAPE_DTYPE)
+        arr = np.empty(total, dtype=TAPE_DTYPE)
+        offset = 0
+        # Named cursor: the server holds the result; the client sees one chunk.
+        with conn.cursor(name=f"paperbot_tape_{symbol.replace('/', '_')}") as cur:
+            cur.itersize = TAPE_LOAD_CHUNK
+            cur.execute(select_sql, params)
+            while offset < total:
+                rows = cur.fetchmany(TAPE_LOAD_CHUNK)
+                if not rows:
+                    break
+                if offset + len(rows) > len(arr):
+                    grown = np.empty(offset + len(rows), dtype=TAPE_DTYPE)
+                    grown[:offset] = arr[:offset]
+                    arr = grown
+                offset = write_tape_chunk(arr, offset, rows)
+                del rows
+        if offset != len(arr):
+            arr = arr[:offset]
     return arr
 
 
@@ -601,10 +691,49 @@ def tail_candles(symbol: str, n: int) -> list:
     ]
 
 
+def cached_health_snapshot() -> dict:
+    """Last quality numbers already in memory. Does not open the database.
+
+    ``/health`` calls this. A probe must not take the candle pool or wait
+    on a tape rebuild.
+    """
+    if not configured():
+        return {
+            "configured": False,
+            "ready": False,
+            "last_candle_time": None,
+            "gap_count": None,
+            "known_gap_count": None,
+            "monotonic": None,
+            "duplicates": None,
+        }
+    snap = _quality[1] if _quality is not None else None
+    if not isinstance(snap, dict):
+        return {
+            "configured": True,
+            "ready": bool(_ready),
+            "last_candle_time": None,
+            "gap_count": None,
+            "known_gap_count": None,
+            "monotonic": None,
+            "duplicates": None,
+        }
+    return {
+        "configured": True,
+        "ready": bool(_ready),
+        "last_candle_time": snap.get("last_candle_time"),
+        "gap_count": snap.get("gap_count"),
+        "known_gap_count": snap.get("known_gap_count"),
+        "monotonic": snap.get("monotonic"),
+        "duplicates": snap.get("duplicates"),
+    }
+
+
 def health_snapshot() -> dict:
     """Last candle time and gap counts. Never raises for a missing URL.
 
-    Database errors are returned in ``error`` so ``/health`` can stay ok.
+    Database errors are returned in ``error`` so a caller can stay ok.
+    The liveness probe uses :func:`cached_health_snapshot` instead.
     """
     if not configured():
         return {

@@ -6,6 +6,7 @@ import json
 import os
 import tempfile
 import threading
+import time
 import unittest
 from datetime import datetime, timezone
 from http.server import ThreadingHTTPServer
@@ -205,13 +206,21 @@ class SharedHistoryHttpTests(unittest.TestCase):
         try:
             with tempfile.TemporaryDirectory() as tmp:
                 prod = Path(tmp) / "prod"
-                _write_tape(prod)
+                _write_span(prod, _ms(2026, 10, 7, 22, 0), _ms(2026, 10, 8, 1, 0))
                 clear_manifest_cache()
                 env = {
                     "PAPER_STATE": str(prod),
                     "PAPER_DISCOVERY_INGEST_TOKEN": "paper-secret-token",
                 }
                 with patch.dict(os.environ, env):
+                    from hedge_fund.trading.price_history import (
+                        clear_served_tape,
+                        publish_shared_tape,
+                    )
+
+                    published = publish_shared_tape(prod)
+                    self.assertIsNotNone(published)
+                    clear_served_tape(prod)
                     bare = Request(f"http://127.0.0.1:{port}/api/discovery/history")
                     try:
                         urlopen(bare, timeout=3)
@@ -335,3 +344,364 @@ class SharedHistoryHttpTests(unittest.TestCase):
         self.assertEqual(sleeps, [HISTORY_BACKOFF_SECONDS])
         self.assertEqual(calls["n"], 2)
         self.assertGreaterEqual(HISTORY_BACKOFF_SECONDS, 60)
+
+
+class PersistedTapeTests(unittest.TestCase):
+    def tearDown(self):
+        clear_manifest_cache()
+
+    def _root(self, tmp: str) -> Path:
+        root = Path(tmp) / "state"
+        _write_span(root, _ms(2026, 10, 7, 22, 0), _ms(2026, 10, 8, 1, 0))
+        return root
+
+    def test_cold_start_with_a_file_serves_without_rebuilding(self):
+        from hedge_fund.trading.price_history import (
+            clear_served_tape,
+            publish_shared_tape,
+            served_history,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._root(tmp)
+            clear_manifest_cache()
+            expected = manifest_for(root)
+            publish_shared_tape(root)
+            clear_manifest_cache()
+            clear_served_tape(root)
+            with patch(
+                "hedge_fund.trading.price_history.canonical_arrays",
+                side_effect=AssertionError("request rebuilt the tape"),
+            ):
+                started = time.perf_counter()
+                manifest, blob = served_history(root)
+                elapsed = time.perf_counter() - started
+            self.assertEqual(manifest["sha256"], expected["sha256"])
+            self.assertEqual(manifest["data_end"], _ms(2026, 10, 8))
+            self.assertGreater(len(blob), 0)
+            self.assertLess(elapsed, 0.5)
+
+    def test_cold_start_without_a_file_is_503_and_schedules_one_build(self):
+        from hedge_fund.web.server import Handler
+        from hedge_fund.trading.price_history import clear_served_tape
+
+        calls = {"n": 0}
+
+        def schedule(state_dir=None):
+            calls["n"] += 1
+
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+        port = httpd.server_address[1]
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                clear_served_tape(root)
+                env = {
+                    "PAPER_STATE": str(root),
+                    "PAPER_DISCOVERY_INGEST_TOKEN": "paper-secret-token",
+                }
+                with patch.dict(os.environ, env), patch(
+                    "hedge_fund.trading.price_history.schedule_tape_build",
+                    side_effect=schedule,
+                ):
+                    req = Request(
+                        f"http://127.0.0.1:{port}/api/discovery/history",
+                        headers={"X-Discovery-Token": "paper-secret-token"},
+                    )
+                    started = time.perf_counter()
+                    try:
+                        urlopen(req, timeout=3)
+                        self.fail("expected 503")
+                    except HTTPError as err:
+                        elapsed = time.perf_counter() - started
+                        body = json.loads(err.read().decode())
+                        retry = err.headers.get("Retry-After")
+                        self.assertEqual(err.code, 503)
+                        self.assertEqual(retry, "30")
+                        self.assertEqual(body["error"], "tape not ready")
+                        self.assertEqual(body["retry_after"], 30)
+                        self.assertLess(elapsed, 0.5)
+                    tape_req = Request(
+                        f"http://127.0.0.1:{port}/api/discovery/history/tape",
+                        headers={"X-Discovery-Token": "paper-secret-token"},
+                    )
+                    try:
+                        urlopen(tape_req, timeout=3)
+                        self.fail("expected 503")
+                    except HTTPError as err2:
+                        self.assertEqual(err2.code, 503)
+                        self.assertEqual(err2.headers.get("Retry-After"), "30")
+                self.assertEqual(calls["n"], 2)
+        finally:
+            httpd.shutdown()
+            thread.join(timeout=3)
+            httpd.server_close()
+
+    def test_rollover_keeps_the_previous_manifest_until_the_new_one_is_ready(self):
+        from hedge_fund.trading.price_history import (
+            _build_pin,
+            clear_served_tape,
+            publish_shared_tape,
+            served_history,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._root(tmp)
+            clear_manifest_cache()
+            publish_shared_tape(root)
+            clear_served_tape(root)
+            current, _blob = served_history(root)
+            self.assertEqual(current["data_end"], _ms(2026, 10, 8))
+            next_pin = _ms(2026, 10, 9)
+            # Prebuild the next day while today is still the active pin.
+            _build_pin(root, next_pin, active_pin=_ms(2026, 10, 8))
+            with patch(
+                "hedge_fund.trading.price_history.canonical_arrays",
+                side_effect=AssertionError("rollover rebuilt on the read"),
+            ):
+                still, _blob = served_history(root)
+            self.assertEqual(still["sha256"], current["sha256"])
+            self.assertEqual(still["data_end"], _ms(2026, 10, 8))
+            # A restart must not prefer that early file over the complete day.
+            clear_served_tape(root)
+            with patch(
+                "hedge_fund.trading.price_history.canonical_arrays",
+                side_effect=AssertionError("restart rebuilt the tape"),
+            ):
+                restarted, _blob = served_history(root)
+            self.assertEqual(restarted["data_end"], _ms(2026, 10, 8))
+            _append_bar(root, _ms(2026, 10, 9, 0, 0))
+            clear_manifest_cache()
+            _build_pin(root, next_pin, active_pin=next_pin)
+            rolled, _blob = served_history(root)
+            self.assertEqual(rolled["data_end"], next_pin)
+            self.assertNotEqual(rolled["sha256"], current["sha256"])
+
+    def test_a_torn_or_mismatched_pair_is_not_served(self):
+        from hedge_fund.trading.price_history import (
+            _blob_file,
+            _manifest_file,
+            clear_served_tape,
+            publish_shared_tape,
+            read_tape_cache,
+            served_manifest,
+            TapeNotReady,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._root(tmp)
+            clear_manifest_cache()
+            built = publish_shared_tape(root)
+            pin = _ms(2026, 10, 8)
+            ok = read_tape_cache(root, pin)
+            self.assertIsNotNone(ok)
+            self.assertNotIn("_tape_cache", ok[0])
+            self.assertEqual(ok[0]["sha256"], built["sha256"])
+            blob_path = _blob_file(root, pin)
+            data = blob_path.read_bytes()
+            # Truncated npz (crash mid-copy): length no longer matches.
+            blob_path.write_bytes(data[: len(data) // 2])
+            self.assertIsNone(read_tape_cache(root, pin))
+            clear_served_tape(root)
+            with patch("hedge_fund.trading.price_history.schedule_tape_build") as sched:
+                with self.assertRaises(TapeNotReady):
+                    served_manifest(root)
+            self.assertEqual(sched.call_count, 1)
+            # Same length, different bytes: sha256 catches it.
+            blob_path.write_bytes(bytes(len(data)))
+            self.assertIsNone(read_tape_cache(root, pin))
+            # Leftover temp files are never read as a tape.
+            (_manifest_file(root, pin).parent / f".{pin}.npz.1.tmp").write_bytes(b"x")
+            blob_path.write_bytes(data)
+            self.assertIsNotNone(read_tape_cache(root, pin))
+
+    def test_a_day_missing_its_first_bar_is_final_once_the_source_moved_on(self):
+        from hedge_fund.trading.price_history import (
+            _build_pass,
+            _read_manifest_file,
+            _tape_final,
+            clear_served_tape,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "state"
+            # No 00:00 bar on Oct 8: data jumps from 23:55 to 00:05.
+            _write_span(root, _ms(2026, 10, 7, 22, 0), _ms(2026, 10, 7, 23, 55))
+            _append_bar(root, _ms(2026, 10, 8, 0, 5))
+            clear_manifest_cache()
+            clear_served_tape(root)
+            pin = _ms(2026, 10, 8)
+            stable: dict = {}
+            with patch("hedge_fund.trading.price_history.time.time", return_value=(pin + 3600_000) / 1000):
+                _build_pass(root, stable)
+            head = _read_manifest_file(root, pin)
+            self.assertIsNotNone(head)
+            self.assertTrue(_tape_final(head[0], head[1], pin))
+            _append_bar(root, _ms(2026, 10, 8, 0, 10))
+            with patch(
+                "hedge_fund.trading.price_history._build_pin",
+                side_effect=AssertionError("rebuilt a final day"),
+            ), patch("hedge_fund.trading.price_history.time.time", return_value=(pin + 3700_000) / 1000):
+                _build_pass(root, stable)
+
+    def test_old_days_are_pruned(self):
+        from hedge_fund.trading.price_history import (
+            _build_pin,
+            _cached_pin_numbers,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "state"
+            _write_span(root, _ms(2026, 10, 2, 22, 0), _ms(2026, 10, 8, 1, 0))
+            clear_manifest_cache()
+            base = _ms(2026, 10, 8)
+            for k in range(5):
+                _build_pin(root, base - k * DAY_MS, active_pin=base)
+            _build_pin(root, base, active_pin=base)
+            self.assertEqual(
+                _cached_pin_numbers(root),
+                [base, base - DAY_MS, base - 2 * DAY_MS],
+            )
+
+    def test_tape_endpoint_streams_the_file(self):
+        from hedge_fund.web.server import Handler
+        from hedge_fund.trading.price_history import (
+            clear_served_tape,
+            publish_shared_tape,
+            read_tape_cache,
+        )
+
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+        port = httpd.server_address[1]
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = self._root(tmp)
+                clear_manifest_cache()
+                publish_shared_tape(root)
+                clear_served_tape(root)
+                _man, expected = read_tape_cache(root, _ms(2026, 10, 8))
+                env = {
+                    "PAPER_STATE": str(root),
+                    "PAPER_DISCOVERY_INGEST_TOKEN": "paper-secret-token",
+                }
+                with patch.dict(os.environ, env), patch(
+                    "hedge_fund.trading.price_history.schedule_tape_build",
+                ):
+                    req = Request(
+                        f"http://127.0.0.1:{port}/api/discovery/history/tape",
+                        headers={"X-Discovery-Token": "paper-secret-token"},
+                    )
+                    with urlopen(req, timeout=5) as resp:
+                        body = resp.read()
+                        self.assertEqual(resp.status, 200)
+                        self.assertEqual(int(resp.headers["Content-Length"]), len(expected))
+                self.assertEqual(body, expected)
+        finally:
+            httpd.shutdown()
+            thread.join(timeout=3)
+            httpd.server_close()
+
+    def test_prebuild_window_includes_the_next_pin(self):
+        from hedge_fund.trading.price_history import PREBUILD_LEAD_MS, pins_to_build
+
+        pin = _ms(2026, 10, 8)
+        noon = pin + 12 * 60 * 60 * 1000
+        self.assertEqual(pins_to_build(noon, pin, set()), [pin])
+        almost = pin + DAY_MS - 10 * 60 * 1000
+        self.assertLessEqual(pin + DAY_MS - almost, PREBUILD_LEAD_MS)
+        self.assertEqual(pins_to_build(almost, pin, {pin}), [pin + DAY_MS])
+        self.assertEqual(pins_to_build(almost, pin, {pin, pin + DAY_MS}), [])
+
+    def test_worker_keeps_the_local_tape_only_on_a_matching_503_and_honours_retry_after(self):
+        import argparse
+
+        from scripts.discovery_worker import (
+            HistoryUnavailable,
+            RemoteHTTPError,
+            _run_loop,
+            ensure_shared_history,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write_span(root, _ms(2026, 10, 7, 22, 0), _ms(2026, 10, 8, 1, 0))
+            clear_manifest_cache()
+            local = manifest_for(root)
+            with patch.dict(os.environ, {"PAPER_STATE": str(root)}):
+                with patch(
+                    "scripts.discovery_worker._http_json",
+                    side_effect=RemoteHTTPError(
+                        "GET http://prod/api/discovery/history -> 503: tape not ready",
+                        code=503,
+                        retry_after=12,
+                        body=json.dumps({"error": "tape not ready", "retry_after": 12}),
+                    ),
+                ):
+                    # No fingerprint in the 503: wait, do not evaluate a
+                    # tape prod may not accept.
+                    with self.assertRaises(HistoryUnavailable) as unnamed:
+                        ensure_shared_history("http://prod", "token")
+                self.assertEqual(unnamed.exception.retry_after, 12)
+                with patch(
+                    "scripts.discovery_worker._http_json",
+                    side_effect=RemoteHTTPError(
+                        "GET http://prod/api/discovery/history -> 503: tape not ready",
+                        code=503,
+                        retry_after=12,
+                        body=json.dumps({"sha256": local["sha256"], "retry_after": 12}),
+                    ),
+                ) as fetched:
+                    kept = ensure_shared_history("http://prod", "token")
+                self.assertEqual(fetched.call_count, 1)
+                self.assertEqual(kept["sha256"], local["sha256"])
+                self.assertEqual(kept["provenance"], "shared")
+                with patch(
+                    "scripts.discovery_worker._http_json",
+                    side_effect=RemoteHTTPError(
+                        "GET http://prod/api/discovery/history -> 503: new tape",
+                        code=503,
+                        retry_after=17,
+                        body=json.dumps({"sha256": "ab" * 32, "retry_after": 17}),
+                    ),
+                ):
+                    with self.assertRaises(HistoryUnavailable) as raised:
+                        ensure_shared_history("http://prod", "token")
+                self.assertEqual(raised.exception.retry_after, 17)
+
+        sleeps: list[int] = []
+        calls = {"n": 0}
+
+        def boom(**_kwargs):
+            calls["n"] += 1
+            if calls["n"] > 1:
+                raise KeyboardInterrupt()
+            raise HistoryUnavailable("tape not ready", retry_after=17)
+
+        args = argparse.Namespace(
+            once=False,
+            no_ingest=True,
+            no_bootstrap=True,
+            idle_sleep=5,
+            pause_sleep=1,
+        )
+        with patch("scripts.discovery_worker.run_batch", side_effect=boom), patch(
+            "scripts.discovery_worker.time.sleep",
+            side_effect=lambda seconds: sleeps.append(seconds),
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                _run_loop(
+                    args,
+                    workers=1,
+                    max_names=1,
+                    local_plan=True,
+                    worker_id="linux-1",
+                    token=None,
+                    ingest_url=None,
+                    base="http://prod",
+                    farm_enabled=True,
+                )
+        self.assertEqual(sleeps, [17])

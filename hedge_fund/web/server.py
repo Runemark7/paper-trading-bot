@@ -21,7 +21,9 @@ A small, dependency-free HTTP server (stdlib only) that exposes:
                                 and does not load the results log.
   GET /api/discovery/lift -> top and bottom atoms by net OOS P&L minus buy-and-hold (cached)
   GET /api/discovery/blocks -> exploratory atom-block effects (cached; does not change the gate)
-  GET /api/discovery/history -> canonical 5m tape hash + data_end (ingest token)
+  GET /api/discovery/history -> canonical 5m tape hash + data_end (ingest token).
+                                Serves the day-keyed file. 503 + Retry-After when
+                                that file is not ready; does not rebuild on the request.
   GET /api/discovery/history/tape -> that tape as a compressed npz (ingest token)
   POST /api/discovery/ingest -> Windows worker: append evals. A pass is proposed,
                                 not seated. force_admit seats (shared secret)
@@ -59,6 +61,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -178,12 +181,12 @@ def _build_summary_uncached() -> dict:
 
 
 def health_payload() -> dict:
-    """Liveness. Candle fields are best-effort and never fail the probe."""
+    """Liveness. In-memory only: no database, no tape rebuild, no discovery lock."""
     body: dict = {"ok": True, "ts": time.time()}
     try:
-        from hedge_fund.data.candle_store import health_snapshot
+        from hedge_fund.data.candle_store import cached_health_snapshot
 
-        body["candles"] = health_snapshot()
+        body["candles"] = cached_health_snapshot()
     except Exception as exc:  # noqa: BLE001 — probe must stay green
         body["candles"] = {
             "configured": bool(os.environ.get("PAPERBOT_DATABASE_URL", "").strip()),
@@ -384,11 +387,13 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass  # quieter
 
-    def _send_json(self, obj, code=200):
+    def _send_json(self, obj, code=200, retry_after: int | None = None):
         body = json.dumps(obj, separators=(",", ":")).encode()
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
+        if retry_after is not None:
+            self.send_header("Retry-After", str(int(retry_after)))
         self.end_headers()
         self.wfile.write(body)
 
@@ -582,9 +587,20 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"ok": False, "error": err, "paper_only": True}, code)
                 return
             try:
-                from hedge_fund.trading.price_history import manifest_for
+                from hedge_fund.trading.price_history import TapeNotReady, served_manifest
 
-                self._send_json(manifest_for(_state_dir()))
+                self._send_json(served_manifest(_state_dir()))
+            except TapeNotReady as exc:
+                self._send_json(
+                    {
+                        "ok": False,
+                        "error": "tape not ready",
+                        "paper_only": True,
+                        "retry_after": exc.retry_after,
+                    },
+                    503,
+                    retry_after=exc.retry_after,
+                )
             except Exception as exc:
                 self._send_json({"error": str(exc), "paper_only": True}, 500)
         elif route == "/api/discovery/history/tape":
@@ -593,10 +609,31 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"ok": False, "error": err, "paper_only": True}, code)
                 return
             try:
-                from hedge_fund.trading.price_history import tape_blob
+                from hedge_fund.trading.price_history import TapeNotReady, open_served_tape
 
-                blob = tape_blob(_state_dir())
-                self._send_bytes(blob, "application/octet-stream")
+                _manifest, handle, size = open_served_tape(_state_dir())
+                with handle:
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/octet-stream")
+                    self.send_header("Content-Length", str(size))
+                    self.end_headers()
+                    # Stream the day file; the npz is never held in memory.
+                    try:
+                        shutil.copyfileobj(handle, self.wfile, 1 << 20)
+                    except OSError:
+                        pass  # client went away; headers are already sent
+                return
+            except TapeNotReady as exc:
+                self._send_json(
+                    {
+                        "ok": False,
+                        "error": "tape not ready",
+                        "paper_only": True,
+                        "retry_after": exc.retry_after,
+                    },
+                    503,
+                    retry_after=exc.retry_after,
+                )
             except Exception as exc:
                 self._send_json({"error": str(exc), "paper_only": True}, 500)
         elif route == "/api/discovery":
@@ -885,6 +922,9 @@ def main():
     from hedge_fund.trading.discovery_results import start_results_backfill
 
     start_results_backfill()
+    from hedge_fund.trading.price_history import prime_tape_cache
+
+    prime_tape_cache()
     from hedge_fund.trading.requalify import start_requalify_autoseed
 
     start_requalify_autoseed()

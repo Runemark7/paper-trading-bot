@@ -633,7 +633,12 @@ def _http_json(url: str, *, token: str | None = None, data: dict | None = None, 
             return json.loads(raw) if raw else {}
     except HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")[:400]
-        raise RuntimeError(f"{method} {url} -> {exc.code}: {detail}") from exc
+        raise RemoteHTTPError(
+            f"{method} {url} -> {exc.code}: {detail}",
+            code=exc.code,
+            retry_after=_retry_after_seconds(exc.headers),
+            body=detail,
+        ) from exc
     except URLError as exc:
         raise RuntimeError(f"{method} {url} failed: {exc.reason}") from exc
 
@@ -660,13 +665,90 @@ HISTORY_BACKOFF_SECONDS = 60
 class HistoryUnavailable(Exception):
     """Prod tape is missing or still mismatched. Back off and do not eval."""
 
+    def __init__(self, message: str, retry_after: int | None = None) -> None:
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
+class RemoteHTTPError(RuntimeError):
+    """HTTP error from prod. ``retry_after`` is the Retry-After header, in seconds."""
+
+    def __init__(self, message: str, *, code: int, retry_after: int | None = None, body: str = "") -> None:
+        super().__init__(message)
+        self.code = int(code)
+        self.retry_after = retry_after
+        self.body = body
+
+
+def _retry_after_seconds(headers) -> int | None:
+    if headers is None:
+        return None
+    raw = headers.get("Retry-After")
+    if not raw:
+        return None
+    try:
+        value = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return None
+    if value < 0:
+        return None
+    return value
+
+
+def _backoff_seconds(exc: HistoryUnavailable) -> int:
+    retry = getattr(exc, "retry_after", None)
+    if isinstance(retry, (int, float)) and not isinstance(retry, bool) and retry > 0:
+        return int(retry)
+    return HISTORY_BACKOFF_SECONDS
+
+
+def _local_tape_if_unchanged(remote_sha: str | None) -> dict | None:
+    """Local tape only when the 503 names the same fingerprint.
+
+    A 503 with no hash says nothing about which day prod will serve (a
+    rollover may be pending), so the worker waits ``Retry-After`` instead of
+    evaluating a tape whose results ingest could reject.
+    """
+    from hedge_fund.trading.price_history import manifest_for
+    from hedge_fund.trading.constants import QUAL_SYMBOLS
+
+    local = manifest_for()
+    sha = local.get("sha256") if isinstance(local, dict) else None
+    if not isinstance(sha, str) or not sha:
+        return None
+    symbols = local.get("symbols") if isinstance(local.get("symbols"), dict) else {}
+    bars = 0
+    for symbol in QUAL_SYMBOLS:
+        row = symbols.get(symbol)
+        if isinstance(row, dict) and isinstance(row.get("bars"), int):
+            bars += row["bars"]
+    if bars <= 0:
+        return None
+    if not remote_sha or remote_sha != sha:
+        return None
+    kept = dict(local)
+    kept["provenance"] = "shared"
+    return kept
+
+
+def _sha_from_body(body: str) -> str | None:
+    try:
+        payload = json.loads(body) if body else None
+    except ValueError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    sha = payload.get("sha256")
+    return sha if isinstance(sha, str) and sha else None
+
 
 def ensure_shared_history(base_url: str, token: str) -> dict:
     """Fetch prod's canonical tape when the local hash differs.
 
     A mismatch after refresh, or a failed fetch (including HTTP 502),
     raises ``HistoryUnavailable``. The farm loop sleeps and retries.
-    It does not exit.
+    It does not exit. HTTP 503 uses Retry-After. When the 503 body names
+    the local fingerprint the worker keeps its local tape instead of stalling.
     """
     from hedge_fund.trading.price_history import install_tape_blob, manifest_for
 
@@ -689,6 +771,25 @@ def ensure_shared_history(base_url: str, token: str) -> dict:
         installed = install_tape_blob(blob)
     except HistoryUnavailable:
         raise
+    except RemoteHTTPError as exc:
+        if exc.code == 503:
+            kept = _local_tape_if_unchanged(_sha_from_body(exc.body))
+            if kept is not None:
+                print(
+                    "discovery_worker: prod tape not ready "
+                    f"(retry_after={exc.retry_after}); keeping local hash={kept['sha256'][:12]}",
+                    flush=True,
+                )
+                return kept
+            raise HistoryUnavailable(
+                str(exc),
+                retry_after=exc.retry_after if exc.retry_after is not None else HISTORY_BACKOFF_SECONDS,
+            ) from exc
+        print(
+            f"discovery_worker: shared tape fetch failed ({exc}); skipping eval",
+            flush=True,
+        )
+        raise HistoryUnavailable(str(exc)) from exc
     except Exception as exc:
         print(
             f"discovery_worker: shared tape fetch failed ({exc}); skipping eval",
@@ -1721,14 +1822,15 @@ def _run_loop(
                     sync_token=None if args.no_ingest else token,
                 )
             except HistoryUnavailable as exc:
+                delay = _backoff_seconds(exc)
                 print(
                     f"discovery_worker: shared tape not ready ({exc}); "
-                    f"backing off {HISTORY_BACKOFF_SECONDS}s",
+                    f"backing off {delay}s",
                     flush=True,
                 )
                 if args.once:
                     return 1
-                time.sleep(HISTORY_BACKOFF_SECONDS)
+                time.sleep(delay)
                 continue
             except SystemExit:
                 raise
@@ -1847,15 +1949,16 @@ def _run_loop(
                     trials_for=trials_for,
                 )
             except HistoryUnavailable as exc:
+                delay = _backoff_seconds(exc)
                 print(
                     f"discovery_worker: shared tape not ready ({exc}); "
-                    f"backing off {HISTORY_BACKOFF_SECONDS}s",
+                    f"backing off {delay}s",
                     flush=True,
                 )
                 _release_remote_safe(base, token, worker_id, names=names, status="idle")
                 if args.once:
                     return 1
-                time.sleep(HISTORY_BACKOFF_SECONDS)
+                time.sleep(delay)
                 continue
             except SystemExit:
                 raise
