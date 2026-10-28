@@ -431,35 +431,144 @@ def _blob_file(root: Path, pin: int) -> Path:
     return _cache_dir(root) / f"{int(pin)}.npz"
 
 
+# Bookkeeping stored beside the manifest on disk. Stripped before serving.
+_CACHE_META = "_tape_cache"
+# Days of tape files kept on disk (today, yesterday, a prebuilt tomorrow).
+TAPE_CACHE_KEEP = 3
+
+
 def _atomic_bytes(path: Path, data: bytes) -> None:
+    """Temp file in the same directory, fsync, rename, fsync the directory.
+
+    A crash leaves either the old file or the new one, never a torn one.
+    The temp name starts with a dot, so the cache scan ignores leftovers.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    tmp.write_bytes(data)
-    os.replace(tmp, path)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    try:
+        with open(tmp, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
+    try:
+        fd = os.open(path.parent, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
 
 
-def save_tape_cache(root: Path, pin: int, manifest: dict, blob: bytes) -> None:
-    """Write the npz first, then the manifest. A reader ignores a half pair."""
+def save_tape_cache(
+    root: Path,
+    pin: int,
+    manifest: dict,
+    blob: bytes,
+    *,
+    built_raw_end: int | None = None,
+) -> None:
+    """Write the npz first, then the manifest. A reader ignores a half pair.
+
+    The manifest file records the npz length and sha256, so an npz that does
+    not match its manifest (a crash between the two renames, a stray copy) is
+    not served.
+    """
     _atomic_bytes(_blob_file(root, pin), blob)
+    record = dict(manifest)
+    record[_CACHE_META] = {
+        "blob_bytes": len(blob),
+        "blob_sha256": hashlib.sha256(blob).hexdigest(),
+        "built_raw_end": None if built_raw_end is None else int(built_raw_end),
+    }
     _atomic_bytes(
         _manifest_file(root, pin),
-        json.dumps(manifest, separators=(",", ":")).encode(),
+        json.dumps(record, separators=(",", ":")).encode(),
     )
 
 
-def read_tape_cache(root: Path, pin: int) -> tuple[dict, bytes] | None:
+def _read_manifest_file(root: Path, pin: int) -> tuple[dict, dict] | None:
+    """``(manifest, cache meta)`` when the pair on disk is whole. No blob read."""
     man_path = _manifest_file(root, pin)
     blob_path = _blob_file(root, pin)
-    if not man_path.is_file() or not blob_path.is_file():
-        return None
     try:
-        manifest = json.loads(man_path.read_text())
-        blob = blob_path.read_bytes()
+        record = json.loads(man_path.read_text())
+        size = blob_path.stat().st_size
     except (OSError, ValueError):
         return None
-    if not isinstance(manifest, dict):
+    if not isinstance(record, dict):
+        return None
+    meta = record.pop(_CACHE_META, None)
+    if not isinstance(meta, dict) or meta.get("blob_bytes") != size:
+        return None
+    if not isinstance(record.get("sha256"), str):
+        return None
+    return record, meta
+
+
+def read_tape_cache(root: Path, pin: int) -> tuple[dict, bytes] | None:
+    """Manifest and npz bytes. The npz must match the recorded sha256."""
+    head = _read_manifest_file(root, pin)
+    if head is None:
+        return None
+    manifest, meta = head
+    try:
+        blob = _blob_file(root, pin).read_bytes()
+    except OSError:
+        return None
+    if hashlib.sha256(blob).hexdigest() != meta.get("blob_sha256"):
         return None
     return manifest, blob
+
+
+def _tape_final(manifest: dict, meta: dict | None, pin: int) -> bool:
+    """The cut at ``pin`` cannot change any more.
+
+    True when the tape reaches the pin bar, or when it was built after the
+    source already had a bar past the pin (a missing 00:00 bar must not make
+    the builder rebuild the same day on every new bar).
+    """
+    if manifest_covers_pin(manifest, pin):
+        return True
+    raw = meta.get("built_raw_end") if isinstance(meta, dict) else None
+    return isinstance(raw, int) and not isinstance(raw, bool) and raw > int(pin)
+
+
+def prune_tape_cache(root: Path, keep: int = TAPE_CACHE_KEEP) -> None:
+    """Drop tape files older than the newest ``keep`` days, and stale temps."""
+    directory = _cache_dir(root)
+    if not directory.is_dir():
+        return
+    pins: set[int] = set()
+    for path in directory.iterdir():
+        name = path.name
+        if name.startswith("."):
+            try:
+                if time.time() - path.stat().st_mtime > 3600:
+                    path.unlink()
+            except OSError:
+                pass
+            continue
+        stem = name.split(".", 1)[0]
+        try:
+            pins.add(int(stem))
+        except ValueError:
+            continue
+    for pin in sorted(pins, reverse=True)[max(1, int(keep)):]:
+        for path in (_manifest_file(root, pin), _blob_file(root, pin)):
+            try:
+                path.unlink()
+            except OSError:
+                pass
 
 
 def manifest_covers_pin(manifest: dict, pin: int) -> bool:
@@ -494,11 +603,17 @@ def pins_to_build(now_ms: int, active_pin: int | None, have: set[int]) -> list[i
     return due
 
 
-def _remember(root: Path, pin: int, manifest: dict, blob: bytes) -> None:
-    _served[_root_key(root)] = {
+def _entry(root: Path, pin: int, manifest: dict) -> dict:
+    """What the web keeps per state dir: the manifest and where its npz is.
+
+    The npz is not held in memory. ``/history/tape`` streams the file.
+    """
+    blob_path = _blob_file(root, int(pin))
+    return {
         "pin": int(pin),
         "manifest": manifest,
-        "blob": blob,
+        "path": blob_path,
+        "size": blob_path.stat().st_size,
     }
 
 
@@ -506,7 +621,6 @@ def _install_built(
     root: Path,
     pin: int,
     manifest: dict,
-    blob: bytes,
     active_pin: int | None,
 ) -> None:
     """Serve ``pin`` when it is the active day. A future prebuild stays on disk."""
@@ -523,7 +637,7 @@ def _install_built(
             and current is not None
         ):
             return
-        _served[key] = {"pin": int(pin), "manifest": manifest, "blob": blob}
+        _served[key] = _entry(root, int(pin), manifest)
 
 
 def _active_and_raw(root: Path) -> tuple[int | None, int | None]:
@@ -552,18 +666,36 @@ def _pin_for_build(root: Path, now_ms: int) -> int | None:
     return pin
 
 
-def _build_pin(root: Path, pin: int, *, active_pin: int | None) -> dict | None:
+def _build_pin(
+    root: Path,
+    pin: int,
+    *,
+    active_pin: int | None,
+    raw_end: int | None = None,
+) -> dict | None:
+    """Read the tape, hash it exactly as :func:`manifest_for` does, persist it.
+
+    Same arrays (``_source_array`` cut by ``_cut_to_pin``) and the same
+    ``_hash_manifest``, so a worker's cached tape keeps its fingerprint.
+    """
     arrays: dict[str, np.ndarray] = {}
     source = "missing"
     for symbol in QUAL_SYMBOLS:
         arr, source = _source_array(root, symbol)
         arrays[symbol] = _cut_to_pin(arr, int(pin), 0)
+        del arr
     if not any(len(arr) for arr in arrays.values()):
         return None
     manifest = _hash_manifest(arrays, source, int(pin))
     blob = _compress(arrays, int(pin))
-    save_tape_cache(root, int(pin), manifest, blob)
-    _install_built(root, int(pin), manifest, blob, active_pin)
+    del arrays
+    save_tape_cache(root, int(pin), manifest, blob, built_raw_end=raw_end)
+    del blob
+    _install_built(root, int(pin), manifest, active_pin)
+    try:
+        prune_tape_cache(root)
+    except OSError:
+        pass
     return manifest
 
 
@@ -575,13 +707,18 @@ def publish_shared_tape(
 ) -> dict | None:
     """Build one pin and persist it. Not for a request handler."""
     root = state_root() if state_dir is None else Path(state_dir)
-    active = pin if pin is not None else _pin_for_build(
-        root, now_ms if now_ms is not None else int(time.time() * 1000)
+    del now_ms
+    active, raw_end = _active_and_raw(root)
+    if pin is None:
+        if active is None:
+            return None
+        pin = active
+    return _build_pin(
+        root,
+        int(pin),
+        active_pin=int(active) if active is not None else int(pin),
+        raw_end=raw_end,
     )
-    if active is None:
-        return None
-    target = int(pin) if pin is not None else int(active)
-    return _build_pin(root, target, active_pin=int(active))
 
 
 def _served_pin(root: Path) -> int | None:
@@ -611,27 +748,31 @@ def _cached_pin_numbers(root: Path) -> list[int]:
 
 
 def _load_newest(root: Path) -> dict | None:
-    """Newest on-disk tape. A prebuild that does not reach its pin is skipped
-    when an older, complete day is also on disk.
+    """Newest whole on-disk tape. A prebuild that does not reach its pin is
+    skipped when an older, complete day is also on disk. Reads only the
+    small manifest file; the npz stays on disk.
     """
     pins = _cached_pin_numbers(root)
-    chosen: tuple[int, dict, bytes] | None = None
-    fallback: tuple[int, dict, bytes] | None = None
+    chosen: tuple[int, dict] | None = None
+    fallback: tuple[int, dict] | None = None
     for pin in pins:
-        loaded = read_tape_cache(root, pin)
-        if loaded is None:
+        head = _read_manifest_file(root, pin)
+        if head is None:
             continue
-        manifest, blob = loaded
+        manifest, meta = head
         if fallback is None:
-            fallback = (pin, manifest, blob)
-        if manifest_covers_pin(manifest, pin):
-            chosen = (pin, manifest, blob)
+            fallback = (pin, manifest)
+        if _tape_final(manifest, meta, pin):
+            chosen = (pin, manifest)
             break
     picked = chosen or fallback
     if picked is None:
         return None
-    pin, manifest, blob = picked
-    return {"pin": int(pin), "manifest": manifest, "blob": blob}
+    pin, manifest = picked
+    try:
+        return _entry(root, pin, manifest)
+    except OSError:
+        return None
 
 
 def clear_served_tape(state_dir: Path | None = None) -> None:
@@ -642,12 +783,7 @@ def clear_served_tape(state_dir: Path | None = None) -> None:
     _served.pop(_root_key(Path(state_dir)), None)
 
 
-def served_history(state_dir: Path | None = None) -> tuple[dict, bytes]:
-    """Manifest and npz already in memory or on disk.
-
-    Raises :class:`TapeNotReady` when neither exists. Does not read
-    Postgres and does not hash the tape.
-    """
+def _served_entry(state_dir: Path | None) -> dict:
     root = state_root() if state_dir is None else Path(state_dir)
     key = _root_key(root)
     with _serve_lock:
@@ -657,14 +793,42 @@ def served_history(state_dir: Path | None = None) -> tuple[dict, bytes]:
             if hit is not None:
                 _served[key] = hit
         if hit is not None:
-            return dict(hit["manifest"]), hit["blob"]
+            return hit
     schedule_tape_build(root)
     raise TapeNotReady()
 
 
 def served_manifest(state_dir: Path | None = None) -> dict:
-    manifest, _blob = served_history(state_dir)
-    return manifest
+    """Manifest already in memory or on disk. Raises :class:`TapeNotReady`.
+
+    Does not read Postgres and does not hash the tape.
+    """
+    return dict(_served_entry(state_dir)["manifest"])
+
+
+def open_served_tape(state_dir: Path | None = None):
+    """``(manifest, open binary file, size)`` for streaming the npz.
+
+    The file is opened before returning, so a later rename of a new day over
+    it does not change what this response sends.
+    """
+    for _attempt in range(2):
+        hit = _served_entry(state_dir)
+        try:
+            handle = open(hit["path"], "rb")
+        except OSError:
+            clear_served_tape(state_dir)
+            continue
+        size = os.fstat(handle.fileno()).st_size
+        return dict(hit["manifest"]), handle, size
+    raise TapeNotReady()
+
+
+def served_history(state_dir: Path | None = None) -> tuple[dict, bytes]:
+    """Manifest and npz bytes. Tests and tools; the web streams instead."""
+    manifest, handle, _size = open_served_tape(state_dir)
+    with handle:
+        return manifest, handle.read()
 
 
 def served_tape_blob(state_dir: Path | None = None) -> bytes:
@@ -672,68 +836,53 @@ def served_tape_blob(state_dir: Path | None = None) -> bytes:
     return blob
 
 
-def _symbol_end(manifest: dict | None) -> int | None:
-    if not isinstance(manifest, dict):
-        return None
-    symbols = manifest.get("symbols")
-    if not isinstance(symbols, dict):
-        return None
-    ends: list[int] = []
-    for symbol in QUAL_SYMBOLS:
-        row = symbols.get(symbol)
-        end = row.get("data_end") if isinstance(row, dict) else None
-        if isinstance(end, bool) or not isinstance(end, (int, float)):
-            return None
-        ends.append(int(end))
-    return min(ends) if ends else None
+def _build_pass(root: Path, stable: dict) -> float:
+    """One builder pass. Returns seconds to sleep before the next pass."""
+    now_ms = int(time.time() * 1000)
+    active, raw_end = _active_and_raw(root)
+    if active is not None:
+        head = _read_manifest_file(root, active)
+        final = head is not None and _tape_final(head[0], head[1], active)
+        if final and head is not None and _served_pin(root) != active:
+            _install_built(root, active, head[0], active)
+        elif not final:
+            # Rebuild when the source moved since the last try. A tape whose
+            # newest bar did not move is not read again.
+            if head is None or stable.get(active) != raw_end:
+                _build_pin(root, active, active_pin=active, raw_end=raw_end)
+                stable[active] = raw_end
+    nxt = floor_utc_day(now_ms) + DAY_MS
+    if (
+        active is not None
+        and nxt != active
+        and 0 < nxt - now_ms <= PREBUILD_LEAD_MS
+        and _read_manifest_file(root, nxt) is None
+    ):
+        # Warm the next day. It is not served until it is final; after
+        # midnight the pass above rebuilds it once the 00:00 bar lands.
+        _build_pin(root, nxt, active_pin=active, raw_end=raw_end)
+    wait = 60.0
+    if active is not None:
+        until_lead = (nxt - PREBUILD_LEAD_MS - now_ms) / 1000.0
+        if until_lead > 0:
+            wait = min(60.0, max(1.0, until_lead))
+    return wait
 
 
 def _build_loop(root_str: str) -> None:
-    """One builder. Sleeps between passes. A failed pass backs off.
-
-    A pin whose rebuilt tape did not gain a bar is not rebuilt again until
-    the source's newest bar moves, so a short tape cannot spin on Postgres.
-    """
+    """One builder per process. A failed pass backs off 5s doubling to 300s."""
     delay = _BUILD_BACKOFF_START
     root = Path(root_str)
-    # pin -> (symbol end, raw end observed when we last built it)
-    stable: dict[int, tuple[int | None, int | None]] = {}
+    stable: dict[int, int | None] = {}
     while True:
         try:
-            now_ms = int(time.time() * 1000)
-            active, raw_end = _active_and_raw(root)
-            if active is not None:
-                loaded = read_tape_cache(root, active)
-                covers = loaded is not None and manifest_covers_pin(loaded[0], active)
-                served = _served_pin(root)
-                if covers and served != active and loaded is not None:
-                    _install_built(root, active, loaded[0], loaded[1], active)
-                elif not covers:
-                    sig = _symbol_end(loaded[0]) if loaded is not None else None
-                    seen = stable.get(active)
-                    raw_moved = seen is None or seen[1] != raw_end
-                    if loaded is None or raw_moved or seen is None or seen[0] != sig:
-                        manifest = _build_pin(root, active, active_pin=active)
-                        stable[active] = (_symbol_end(manifest), raw_end)
-            nxt = floor_utc_day(now_ms) + DAY_MS
-            if (
-                active is not None
-                and nxt != active
-                and 0 < nxt - now_ms <= PREBUILD_LEAD_MS
-                and read_tape_cache(root, nxt) is None
-            ):
-                _build_pin(root, nxt, active_pin=active)
-            wait = 60.0
-            if active is not None:
-                until_lead = (nxt - PREBUILD_LEAD_MS - now_ms) / 1000.0
-                if until_lead > 0:
-                    wait = min(60.0, max(1.0, until_lead))
-            time.sleep(wait)
+            wait = _build_pass(root, stable)
             delay = _BUILD_BACKOFF_START
         except Exception as exc:  # noqa: BLE001 — keep the one builder alive
-            print(f"[price history] tape build failed: {exc}", flush=True)
-            time.sleep(delay)
+            print(f"[price history] tape build failed: {exc}; retry in {delay:.0f}s", flush=True)
+            wait = delay
             delay = min(delay * 2, _BUILD_BACKOFF_MAX)
+        time.sleep(wait)
 
 
 def schedule_tape_build(state_dir: Path | None = None) -> None:
@@ -755,7 +904,7 @@ def schedule_tape_build(state_dir: Path | None = None) -> None:
 
 
 def prime_tape_cache(state_dir: Path | None = None) -> None:
-    """Load the newest on-disk tape, then let the background thread catch up.
+    """Load the newest on-disk manifest, then let the background thread catch up.
 
     Called once from the web process start. A request does not call this.
     """

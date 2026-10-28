@@ -703,11 +703,11 @@ def _backoff_seconds(exc: HistoryUnavailable) -> int:
 
 
 def _local_tape_if_unchanged(remote_sha: str | None) -> dict | None:
-    """Local tape when prod did not publish a different fingerprint.
+    """Local tape only when the 503 names the same fingerprint.
 
-    A 503 with no hash, or the same hash, means the worker keeps evaluating
-    the tape it already has. A different hash means the local copy is stale
-    and the worker must wait.
+    A 503 with no hash says nothing about which day prod will serve (a
+    rollover may be pending), so the worker waits ``Retry-After`` instead of
+    evaluating a tape whose results ingest could reject.
     """
     from hedge_fund.trading.price_history import manifest_for
     from hedge_fund.trading.constants import QUAL_SYMBOLS
@@ -724,7 +724,7 @@ def _local_tape_if_unchanged(remote_sha: str | None) -> dict | None:
             bars += row["bars"]
     if bars <= 0:
         return None
-    if remote_sha and remote_sha != sha:
+    if not remote_sha or remote_sha != sha:
         return None
     kept = dict(local)
     kept["provenance"] = "shared"
@@ -747,8 +747,8 @@ def ensure_shared_history(base_url: str, token: str) -> dict:
 
     A mismatch after refresh, or a failed fetch (including HTTP 502),
     raises ``HistoryUnavailable``. The farm loop sleeps and retries.
-    It does not exit. HTTP 503 uses Retry-After. When the fingerprint
-    is unchanged the worker keeps its local tape instead of stalling.
+    It does not exit. HTTP 503 uses Retry-After. When the 503 body names
+    the local fingerprint the worker keeps its local tape instead of stalling.
     """
     from hedge_fund.trading.price_history import install_tape_blob, manifest_for
 

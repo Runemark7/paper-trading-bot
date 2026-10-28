@@ -583,9 +583,8 @@ def write_tape_chunk(arr: np.ndarray, offset: int, rows) -> int:
     end = offset + n
     if end > len(arr):
         raise ValueError(f"tape chunk exceeds allocation ({end} > {len(arr)})")
-    view = arr[offset:end]
-    for i, row in enumerate(rows):
-        view[i] = row
+    # One C-level conversion per chunk instead of a Python store per row.
+    arr[offset:end] = np.array([tuple(row) for row in rows], dtype=arr.dtype)
     return end
 
 
@@ -629,6 +628,11 @@ def load_tape(
     select_sql = _tape_select_sql(where)
     with _pool().connection() as conn:
         conn.execute(f"SET LOCAL statement_timeout = '{TAPE_STATEMENT_TIMEOUT}'")
+        # The client converts each chunk between fetches; under CPU throttling
+        # that gap must not trip the session's 60s idle-in-transaction cap.
+        conn.execute(
+            f"SET LOCAL idle_in_transaction_session_timeout = '{TAPE_STATEMENT_TIMEOUT}'"
+        )
         counted = conn.execute(count_sql, params).fetchone()
         total = 0 if counted is None or counted[0] is None else int(counted[0])
         if total <= 0:

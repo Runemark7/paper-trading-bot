@@ -258,10 +258,11 @@ def require_parallel(value: object) -> int | None:
     return value
 
 
-# A worker that omits ``parallel`` is capped as one lane. Two lanes of
-# lease-ahead (the running slot plus one waiting name) is the most a
-# claim may hold for that worker.
-_ABSENT_PARALLEL = 1
+# Lease-ahead per lane: the running name plus one waiting behind it.
+LEASES_PER_LANE = 2
+# A worker that never reported ``parallel`` (request or a stored heartbeat)
+# is not starved: it may hold this many, the cap of a 6-lane host.
+ABSENT_PARALLEL_LEASE_CAP = 12
 
 
 def worker_lease_count(state: dict, worker_id: str) -> int:
@@ -275,13 +276,29 @@ def worker_lease_count(state: dict, worker_id: str) -> int:
     return held
 
 
-def lease_room(state: dict, worker_id: str, parallel: int | None) -> int:
-    """How many more discovery leases this worker may hold.
+def _stored_parallel(state: dict, worker_id: str) -> int | None:
+    workers = state.get("workers") if isinstance(state, dict) else None
+    meta = workers.get(worker_id) if isinstance(workers, dict) else None
+    raw = meta.get("parallel") if isinstance(meta, dict) else None
+    if isinstance(raw, bool) or not isinstance(raw, int) or raw < 1:
+        return None
+    return raw
 
-    ``max(0, 2 * parallel - current)``. Missing ``parallel`` counts as 1.
-    """
-    width = _ABSENT_PARALLEL if parallel is None else int(parallel)
-    return max(0, 2 * width - worker_lease_count(state, worker_id))
+
+def worker_lease_cap(state: dict, worker_id: str, parallel: int | None) -> int:
+    """``2 * parallel``. Falls back to the width this worker last reported,
+    then to :data:`ABSENT_PARALLEL_LEASE_CAP`."""
+    width = parallel if parallel is not None and int(parallel) >= 1 else None
+    if width is None:
+        width = _stored_parallel(state, worker_id)
+    if width is None:
+        return ABSENT_PARALLEL_LEASE_CAP
+    return LEASES_PER_LANE * int(width)
+
+
+def lease_room(state: dict, worker_id: str, parallel: int | None) -> int:
+    """How many more discovery leases this worker may hold."""
+    return max(0, worker_lease_cap(state, worker_id, parallel) - worker_lease_count(state, worker_id))
 
 
 def _status(value: object, default: str) -> str:

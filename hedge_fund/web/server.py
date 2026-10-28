@@ -61,6 +61,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -608,10 +609,20 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"ok": False, "error": err, "paper_only": True}, code)
                 return
             try:
-                from hedge_fund.trading.price_history import TapeNotReady, served_tape_blob
+                from hedge_fund.trading.price_history import TapeNotReady, open_served_tape
 
-                blob = served_tape_blob(_state_dir())
-                self._send_bytes(blob, "application/octet-stream")
+                _manifest, handle, size = open_served_tape(_state_dir())
+                with handle:
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/octet-stream")
+                    self.send_header("Content-Length", str(size))
+                    self.end_headers()
+                    # Stream the day file; the npz is never held in memory.
+                    try:
+                        shutil.copyfileobj(handle, self.wfile, 1 << 20)
+                    except OSError:
+                        pass  # client went away; headers are already sent
+                return
             except TapeNotReady as exc:
                 self._send_json(
                     {
