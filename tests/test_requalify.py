@@ -173,6 +173,37 @@ class RequalifyTests(unittest.TestCase):
         )
         self.assertEqual(set(later["requalify"]), set(first["requalify"]))
 
+    def test_heartbeat_holds_requalify_until_the_per_name_cap(self):
+        from hedge_fund.trading.leases import claim_discovery_batch, touch_worker_unlocked
+        from hedge_fund.trading.store import paper_state_lock
+
+        self._seed()
+        with patch("hedge_fund.trading.leases.next_refill_batch", return_value=[]):
+            with patch("hedge_fund.trading.leases.schedule_refill_buffer"):
+                first = claim_discovery_batch("omarchy-1", 4, parallel=1, now=self.t0)
+                self.assertEqual(len(first["requalify"]), 4)
+                name0 = first["requalify"][0]
+                with paper_state_lock("discovery"):
+                    touch_worker_unlocked(
+                        "omarchy-1",
+                        "running",
+                        now=self.t0 + timedelta(seconds=100),
+                        evaluating=[name0],
+                    )
+                    touch_worker_unlocked(
+                        "omarchy-1",
+                        "running",
+                        now=self.t0 + timedelta(seconds=950),
+                        evaluating=[name0],
+                    )
+                later = claim_discovery_batch(
+                    "omarchy-2",
+                    4,
+                    parallel=1,
+                    now=self.t0 + timedelta(seconds=1301),
+                )
+        self.assertEqual(later["requalify"], [name0])
+
     def test_enqueue_validates_and_dedupes(self):
         from hedge_fund.trading.requalify import enqueue_requalify_batch
 

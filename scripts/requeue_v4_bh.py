@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
-"""Queue v4 discovery-window buy-and-hold misses for one v5 retest.
+"""Queue discovery-window buy-and-hold misses for one v5 retest.
 
-Dry-run unless ``--apply``. Does not read the sealed holdout, does not
-admit or retire a champion, and does not add a DSR trial.
+The set is every stored fail that is only a discovery-window
+buy-and-hold comparison under ``gate_v4_*``,
+``sltp_cap100_bhdsr_tiled87_20261008``, or
+``sltp_cap100_bhdsr_20261008``. Dry-run unless ``--apply``. Does not
+read the sealed holdout, does not admit or retire a champion, and
+does not add a DSR trial.
 
     python3 scripts/requeue_v4_bh.py
     python3 scripts/requeue_v4_bh.py --apply
@@ -23,7 +27,7 @@ from hedge_fund.trading.requeue_v4_bh import requeue_v4_bh  # noqa: E402
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Dry-run the v4 discovery-window buy-and-hold retest queue.",
+        description="Dry-run the discovery-window buy-and-hold retest queue.",
     )
     parser.add_argument(
         "--apply",

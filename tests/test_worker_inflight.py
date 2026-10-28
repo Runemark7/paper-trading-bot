@@ -109,6 +109,7 @@ class _Batch:
             "n": len(evals),
             "names": [e.get("strategy") for e in evals],
             "heartbeat": kwargs.get("heartbeat"),
+            "evaluating": list(kwargs.get("evaluating") or []),
         })
         return {}
 
@@ -196,6 +197,9 @@ class InFlightSchedulingTests(unittest.TestCase):
         self.assertEqual([p["names"] for p in result_posts], [["fast"], ["third"], ["slow"]])
         self.assertTrue(all(p["heartbeat"] == "running" for p in result_posts))
         self.assertTrue(all(p["n"] == 1 for p in result_posts))
+        # The replacement is submitted before the result POST, so the
+        # heartbeat that carries fast's row already lists third.
+        self.assertIn("third", result_posts[0]["evaluating"])
         self.assertIn("eval_timeout after 50s", by_name["slow"]["fail_reasons"])
         self.assertNotIn("eval_timeout", by_name["fast"]["fail_reasons"][0])
         self.assertLess(batch.clock["t"], 50 + 5)

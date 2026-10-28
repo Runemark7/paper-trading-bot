@@ -1,10 +1,18 @@
-"""One-shot requeue of v4 names whose only fail was discovery-window buy-and-hold.
+"""One-shot requeue of names whose only fail was discovery-window buy-and-hold.
 
-Gate v4 stopped those names before the sealed holdout, DSR, PBO, neighbour
+Those names stopped before the sealed holdout, DSR, PBO, neighbour
 perturbation, and cost stress ran. Gate v5 no longer treats buy-and-hold as
 a fail, and the rescore cannot relabel them: the later inputs were never
 stored (``missing_inputs``). This module puts exactly that set back on the
 discovery claim queue for one fresh v5 evaluation.
+
+The stored rules tag is one of ``gate_v4_*``,
+``sltp_cap100_bhdsr_tiled87_20261008``, or
+``sltp_cap100_bhdsr_20261008``. A prod dry-run of the earlier v4-only
+batch found the one ``gate_v4`` name and left the other 341. This batch
+is a new id and a new state file, so an unapplied
+``discovery_v4_bh_requeue.json`` is not this queue and is not a reason
+to skip the scan. One apply freezes all of them.
 
 Dry-run is the default. Apply freezes the name list. A second apply does
 not rescan, does not move the timestamp, and does not add names.
@@ -23,12 +31,21 @@ import json
 import os
 from datetime import datetime, timezone
 
-from hedge_fund.trading.constants import GATE_RULES, V4_GATE_RULES
+from hedge_fund.trading.constants import GATE_RULES, V3_GATE_RULES, V4_GATE_RULES
 from hedge_fund.trading.rescore_v5 import classify_row, is_bh_decision_reason
 
-BATCH_ID = "v4-bh-requeue-20261027"
-RETEST_REASON = "v4_discovery_bh_only_missing_later_checks"
-STATE_NAME = "discovery_v4_bh_requeue.json"
+BATCH_ID = "bh-only-requeue-20261027"
+RETEST_REASON = "discovery_bh_only_missing_later_checks"
+STATE_NAME = "discovery_bh_requeue.json"
+# Pre-tiled rules string. Not a named constant in constants.py.
+LEGACY_BH_RULES = "sltp_cap100_bhdsr_20261008"
+BH_ONLY_RULE_TAGS = (
+    V4_GATE_RULES,
+    V3_GATE_RULES,
+    LEGACY_BH_RULES,
+)
+_EXACT_OLDER_TAGS = frozenset({V3_GATE_RULES, LEGACY_BH_RULES})
+_RULE_BUCKETS = ("gate_v4", V3_GATE_RULES, LEGACY_BH_RULES)
 
 _LATER_BLOCK_KEYS = (
     "dsr",
@@ -42,12 +59,38 @@ _HOLDOUT_PRESENT_KEYS = ("sharpe", "trades", "pnl", "sma_pnl")
 
 
 def is_gate_v4_rules(value: object) -> bool:
-    """True for the v4 rules tag. v5 and older tags are not this batch."""
+    """True for the v4 rules tag. v5 and older tags are not this tag."""
     if not isinstance(value, str) or not value:
         return False
     if value == V4_GATE_RULES:
         return True
     return value.startswith("gate_v4_")
+
+
+def is_bh_requeue_rules(value: object) -> bool:
+    """True for a rules tag whose discovery-window B&H miss is in this batch.
+
+    ``gate_v4_*``, the tiled v3 tag, and the pre-tiled
+    ``sltp_cap100_bhdsr_20261008`` tag. A v5 tag is already the current
+    gate. Any other historical tag is left alone.
+    """
+    if is_gate_v4_rules(value):
+        return True
+    return isinstance(value, str) and value in _EXACT_OLDER_TAGS
+
+
+def _rule_bucket(value: object) -> str:
+    if is_gate_v4_rules(value):
+        return "gate_v4"
+    if value == V3_GATE_RULES:
+        return V3_GATE_RULES
+    if value == LEGACY_BH_RULES:
+        return LEGACY_BH_RULES
+    return "other"
+
+
+def _empty_by_rules() -> dict[str, int]:
+    return {key: 0 for key in _RULE_BUCKETS}
 
 
 def is_discovery_window_bh_reason(reason: object) -> bool:
@@ -86,17 +129,18 @@ def later_checks_ran(row: dict) -> bool:
 
 
 def is_requeue_candidate(row: dict) -> bool:
-    """True when this stored row is one of the v4 discovery-window B&H misses.
+    """True when this stored row is a discovery-window B&H miss to retest.
 
-    The row is unqualified, tagged with a v4 rules id, and every fail reason
-    is a discovery-window buy-and-hold comparison. The later checks are not
-    on the row, so rescore classifies it ``missing_inputs`` and leaves it.
+    The row is unqualified, tagged with one of the buy-and-hold-only
+    rules ids, and every fail reason is a discovery-window buy-and-hold
+    comparison. The later checks are not on the row, so rescore classifies
+    it ``missing_inputs`` and leaves it.
     """
     if not isinstance(row, dict):
         return False
     if row.get("qualified") or row.get("ops_park") or row.get("retest") is True:
         return False
-    if not is_gate_v4_rules(row.get("gate_rules")):
+    if not is_bh_requeue_rules(row.get("gate_rules")):
         return False
     reasons = row.get("fail_reasons")
     if not isinstance(reasons, list) or not reasons:
@@ -183,7 +227,7 @@ def complete_retest_unlocked(name: str, *, tested_at: str | None = None) -> bool
 
 
 def stamp_retest_result(row: dict, entry: dict) -> None:
-    """Mark the fresh v5 result as a retest of the stored v4 fail."""
+    """Mark the fresh v5 result as a retest of the stored buy-and-hold fail."""
     row["retest"] = True
     row["retest_reason"] = RETEST_REASON
     row["retest_batch"] = BATCH_ID
@@ -244,22 +288,34 @@ def _entry_for(row: dict, stamp: str) -> dict:
     }
 
 
-def _counts(state: dict | None) -> tuple[list[str], int, int]:
+def _by_rules(pairs: list[tuple[str, object]]) -> dict[str, int]:
+    counts = _empty_by_rules()
+    for _name, rules in pairs:
+        bucket = _rule_bucket(rules)
+        if bucket not in counts:
+            continue
+        counts[bucket] += 1
+    return counts
+
+
+def _counts(state: dict | None) -> tuple[list[str], int, int, dict[str, int]]:
     if not state:
-        return [], 0, 0
+        return [], 0, 0, _empty_by_rules()
     order = [name for name in (state.get("order") or []) if isinstance(name, str)]
     entries = state.get("entries") if isinstance(state.get("entries"), dict) else {}
     pending = 0
     completed = 0
+    tagged: list[tuple[str, object]] = []
     for name in order:
         entry = entries.get(name)
         if not isinstance(entry, dict):
             continue
+        tagged.append((name, entry.get("prior_gate_rules")))
         if entry.get("status") == "completed":
             completed += 1
         elif entry.get("status") == "pending":
             pending += 1
-    return order, pending, completed
+    return order, pending, completed, _by_rules(tagged)
 
 
 def _report(
@@ -271,6 +327,7 @@ def _report(
     stamp: str | None,
     pending: int,
     completed: int,
+    by_rules: dict[str, int],
 ) -> dict:
     return {
         "ok": True,
@@ -280,9 +337,11 @@ def _report(
         "already_applied": already,
         "batch_id": BATCH_ID,
         "reason": RETEST_REASON,
-        "gate_from": V4_GATE_RULES,
+        "gate_from": "bh_only_discovery_window",
+        "gate_from_tags": list(BH_ONLY_RULE_TAGS),
         "gate_to": GATE_RULES,
         "count": len(names),
+        "by_rules": dict(by_rules),
         "names": list(names),
         "pending": pending,
         "completed": completed,
@@ -293,19 +352,21 @@ def _report(
         "applied_at": stamp,
         "note": (
             "One shot. Names whose stored fail is only a discovery-window "
-            "buy-and-hold comparison under a gate_v4 tag, and whose holdout, "
-            "DSR, PBO, neighbour, and cost-stress inputs were never stored. "
+            "buy-and-hold comparison under a gate_v4 tag, "
+            "sltp_cap100_bhdsr_tiled87_20261008, or "
+            "sltp_cap100_bhdsr_20261008, and whose holdout, DSR, PBO, "
+            "neighbour, and cost-stress inputs were never stored. "
             "Dry-run does not write. Apply puts that frozen list ahead of "
             "the random mint. Each name already counts once in the DSR trial "
             "census; the retest does not add a trial. Fail-once still blocks "
             "every other name. The holdout stays sealed. Nothing is admitted "
-            "or retired."
+            "or retired. An earlier unapplied v4-only file is not this batch."
         ),
     }
 
 
 def _report_state(state: dict, *, dry_run: bool, wrote: bool, already: bool) -> dict:
-    names, pending, completed = _counts(state)
+    names, pending, completed, by_rules = _counts(state)
     return _report(
         names,
         dry_run=dry_run,
@@ -314,6 +375,7 @@ def _report_state(state: dict, *, dry_run: bool, wrote: bool, already: bool) -> 
         stamp=state.get("applied_at") if isinstance(state.get("applied_at"), str) else None,
         pending=pending,
         completed=completed,
+        by_rules=by_rules,
     )
 
 
@@ -342,11 +404,12 @@ def _ensure_counted(by_name: dict[str, dict], names: list[str]) -> None:
 
 
 def requeue_v4_bh(*, apply: bool = False, now: str | None = None) -> dict:
-    """List the v4 discovery-window B&H misses. Write the queue only when asked.
+    """List the discovery-window B&H misses. Write the queue only when asked.
 
-    A batch that is already on disk is returned as-is, including its
-    timestamp. Dry-run after apply reports that frozen list and does not
-    write.
+    A batch that is already on disk for this batch id is returned as-is,
+    including its timestamp. Dry-run after apply reports that frozen list
+    and does not write. A file from the earlier v4-only batch is a
+    different path and a different id, so it does not count as applied.
     """
     existing = load_state()
     if existing and existing.get("applied_at"):
@@ -355,6 +418,7 @@ def requeue_v4_bh(*, apply: bool = False, now: str | None = None) -> dict:
     by_name = _stored_by_name()
     selected = _select(by_name)
     names = [name for name, _row in selected]
+    by_rules = _by_rules([(name, row.get("gate_rules")) for name, row in selected])
     if not apply:
         return _report(
             names,
@@ -364,6 +428,7 @@ def requeue_v4_bh(*, apply: bool = False, now: str | None = None) -> dict:
             stamp=None,
             pending=0,
             completed=0,
+            by_rules=by_rules,
         )
 
     stamp = now or datetime.now(timezone.utc).isoformat()
@@ -381,7 +446,8 @@ def requeue_v4_bh(*, apply: bool = False, now: str | None = None) -> dict:
             "batch_id": BATCH_ID,
             "paper_only": True,
             "reason": RETEST_REASON,
-            "gate_from": V4_GATE_RULES,
+            "gate_from": "bh_only_discovery_window",
+            "gate_from_tags": list(BH_ONLY_RULE_TAGS),
             "gate_to": GATE_RULES,
             "applied_at": stamp,
             "order": names,

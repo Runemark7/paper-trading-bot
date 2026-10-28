@@ -13,15 +13,22 @@ threading lock plus ``fcntl.flock`` so claim / ingest / release read-modify-writ
 ``discovery_leases.json`` atomically across those threads and processes.
 A second replica cannot mount the RWO volume, so flock is sufficient.
 
-Lease TTL is about 2× batch time. One wave is bounded by
-``DISCOVERY_EVAL_TIMEOUT_SECONDS`` (default 600). ``parallel`` is the worker
-pool size; waves = ceil(n / parallel). TTL = 2 × timeout × waves, and never
-shorter than 2 × the per-name backstop. Timeout 0 (disabled) still uses the
-600s default so a lease cannot live forever.
+Lease expiry is per name and follows that worker's heartbeat. A claim
+sets ``expires_at`` one heartbeat grace out
+(``FARM_HEARTBEAT_STALE_SECONDS``, 900s). A later heartbeat from the
+same worker, running or idle, pushes each of its leases out by another
+grace. A name the worker reports in ``heartbeat.evaluating`` records
+``started_at`` on first sight and is not extended past
+``started_at + 2 × DISCOVERY_EVAL_TIMEOUT_SECONDS`` (default 1200s;
+timeout 0 still uses the 600s backstop). A paused heartbeat does not
+extend. A worker that goes offline therefore returns its names about
+15 minutes after its last heartbeat, including names it had not
+started. Batch length does not scale the lease: 16 names are not
+held for ``16 × 2 × 600`` seconds.
 
 OOS gates are not involved here. Fail-once: a name in the durable
 tested-name index (not the capped display log) is never leased again,
-except one pending v4 discovery-window buy-and-hold retest. That lane
+except one pending discovery-window buy-and-hold retest. That lane
 is leased after requalify and before leftovers or a mint.
 
 When the unleased queue cannot fill this claim, the claim mints only
@@ -29,8 +36,11 @@ enough names to fill it, and at most the old handful of 16 when that
 is the whole top-up. A thin queue (untested eligible below
 ``max(cap, 4 × recent leased lanes)``) is topped up on a daemon thread
 after the claim releases the paper-state lock, in batches up to 64.
-That mint stays off the claim hot path. Bans and the holdout seal on
-``mix_refill`` / ``next_refill_batch`` are unchanged.
+The buffer's ``mix_refill`` runs outside the paper-state lock so a
+claim or an ingest is not stuck behind that CPU. The lock is held
+again only to drop names that were taken while the mint ran and to
+append the rest. Bans and the holdout seal on ``mix_refill`` /
+``next_refill_batch`` are unchanged.
 """
 from __future__ import annotations
 
@@ -255,18 +265,59 @@ def _status(value: object, default: str) -> str:
     return cleaned or default
 
 
-def lease_ttl_seconds(n: int, parallel: int | None = None) -> int:
-    """~2× batch time. One wave lasts at most one eval timeout."""
+def per_name_lease_seconds() -> int:
+    """Hard cap from ``started_at``: two eval timeouts, default 1200s.
+
+    Timeout 0 (disabled) still uses the 600s backstop so a started name
+    cannot be held forever by a worker that keeps heartbeating.
+    """
     per = eval_timeout_seconds()
     if per <= 0:
         per = DEFAULT_EVAL_TIMEOUT_SECONDS
-    count = max(1, int(n))
-    if parallel is None or parallel <= 0:
-        waves = 1
+    return LEASE_TTL_FACTOR * per
+
+
+def lease_heartbeat_grace_seconds() -> int:
+    """How long a lease lives after this worker's last heartbeat."""
+    return int(FARM_HEARTBEAT_STALE_SECONDS)
+
+
+def lease_ttl_seconds(n: int, parallel: int | None = None) -> int:
+    """Initial lease window. ``n`` and ``parallel`` do not scale it.
+
+    Older callers passed the batch shape because the lease used to be
+    ``2 × timeout × ceil(n / parallel)``. A dead worker then held every
+    name for the whole batch. The window is now the heartbeat grace.
+    """
+    del n, parallel
+    return lease_heartbeat_grace_seconds()
+
+
+def bump_lease_expiry(
+    record: dict,
+    now: datetime,
+    *,
+    name: str,
+    evaluating: set[str] | None,
+) -> None:
+    """Push one lease out from ``now``. A started name stops at its cap.
+
+    ``evaluating`` is the set of names this heartbeat says are in flight.
+    The first such heartbeat records ``started_at``. A later heartbeat
+    does not move that timestamp. Names left out of the set stay
+    unstarted and keep renewing with the grace, so a live worker's
+    queue is not cut off at the cap before those evals begin.
+    """
+    if evaluating is not None and name in evaluating and not record.get("started_at"):
+        record["started_at"] = _iso(now)
+    horizon = now + timedelta(seconds=lease_heartbeat_grace_seconds())
+    started_raw = record.get("started_at")
+    started = parse_tested_at(started_raw) if isinstance(started_raw, str) else None
+    if started is not None:
+        hard = started + timedelta(seconds=per_name_lease_seconds())
+        record["expires_at"] = _iso(min(horizon, hard))
     else:
-        width = max(1, int(parallel))
-        waves = max(1, (count + width - 1) // width)
-    return LEASE_TTL_FACTOR * per * waves
+        record["expires_at"] = _iso(horizon)
 
 
 def _blocked_names(log: list[dict]) -> set[str]:
@@ -282,7 +333,7 @@ def _blocked_names(log: list[dict]) -> set[str]:
 def _drop_expired_and_tested(state: dict, now: datetime, tested: set[str]) -> int:
     """Remove expired leases and any lease on an already-tested name.
 
-    A pending v4 buy-and-hold retest stays leased: the name is already
+    A pending buy-and-hold retest stays leased: the name is already
     in the tested index, and fail-once is lifted only until one fresh
     result is stored. Returns how many expired (not tested) leases were
     dropped.
@@ -605,6 +656,7 @@ def _claim_unlocked(
             "retest": [],
             "refill": paused_refill,
             "ttl_seconds": ttl,
+            "per_name_cap_seconds": per_name_lease_seconds(),
             "expires_at": None,
             "claimed_at": _iso(now),
             "_schedule_refill": False,
@@ -655,6 +707,7 @@ def _claim_unlocked(
         "retest": list(retest),
         "refill": refill_meta,
         "ttl_seconds": ttl,
+        "per_name_cap_seconds": per_name_lease_seconds(),
         "expires_at": _iso(expires) if chosen else None,
         "claimed_at": _iso(now),
         "leases_active": len(state["leases"]),
@@ -724,38 +777,53 @@ def claim_discovery_batch(
     return body
 
 
-def _refill_buffer_holding(now: datetime) -> dict:
-    """Mint one buffer batch. Caller holds the paper-state lock."""
+def _refill_plan(now: datetime) -> dict:
+    """How many names the buffer wants. Caller holds the paper-state lock."""
     state = load_lease_state()
     view = _queue_view(state)
     lanes = active_leased_lanes(state, now)
     eligible = len(view["claimable"])
     cap = max(len(view["active"]), 1)
     want = refill_batch_size(eligible=eligible, cap=cap, lanes=lanes)
-    if want <= 0:
-        return {
-            "ok": True,
-            "paper_only": True,
-            "refilled": [],
-            "wanted": 0,
-            "eligible": eligible,
-            "lanes": lanes,
-            "cap": cap,
-        }
     taken = view["universe"] | view["blocked"] | view["active"] | set(view["claimable"])
-    added, meta = _mint_unlocked(taken, want)
-    if added:
-        append_extended_batch(added)
-        _append_minted(view, added)
+    return {
+        "want": want,
+        "taken": taken,
+        "eligible": eligible,
+        "lanes": lanes,
+        "cap": cap,
+    }
+
+
+def _refill_commit(added: list[str], meta: dict, plan: dict) -> dict:
+    """Append names that are still free. Caller holds the paper-state lock.
+
+    A claim may have leased or minted some of ``added`` while
+    ``mix_refill`` ran outside the lock. Those names are dropped.
+    """
+    state = load_lease_state()
+    view = _queue_view(state)
+    kept = _append_minted(view, added) if added else []
+    if kept:
+        append_extended_batch(kept)
     save_refill_status(meta)
     return {
         "ok": True,
         "paper_only": True,
-        "refilled": list(added),
-        "wanted": want,
-        "eligible": eligible,
-        "lanes": lanes,
-        "cap": cap,
+        "refilled": list(kept),
+        "wanted": plan["want"],
+        "eligible": plan["eligible"],
+        "lanes": plan["lanes"],
+        "cap": plan["cap"],
+    }
+
+
+def _refill_skipped(reason: str) -> dict:
+    return {
+        "ok": True,
+        "paper_only": True,
+        "skipped": reason,
+        "refilled": [],
     }
 
 
@@ -764,23 +832,39 @@ def refill_buffer_unlocked(
     now: datetime | None = None,
     expect_root: str | None = None,
 ) -> dict:
-    """Top up a thin discovery queue. Takes the paper-state lock.
+    """Top up a thin discovery queue.
 
+    The snapshot and the append take the paper-state lock. ``mix_refill``
+    runs between them, so a claim is not blocked for the whole mint.
     ``expect_root`` drops the mint when ``PAPER_STATE`` moved after the
     claim that scheduled this thread (tests delete that directory).
     """
     from hedge_fund.paths import state_root
 
     clock = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+
+    def moved() -> bool:
+        return expect_root is not None and str(state_root()) != expect_root
+
     with paper_state_lock("discovery"):
-        if expect_root is not None and str(state_root()) != expect_root:
-            return {
-                "ok": True,
-                "paper_only": True,
-                "skipped": "state_moved",
-                "refilled": [],
-            }
-        return _refill_buffer_holding(clock)
+        if moved():
+            return _refill_skipped("state_moved")
+        plan = _refill_plan(clock)
+    if plan["want"] <= 0:
+        return {
+            "ok": True,
+            "paper_only": True,
+            "refilled": [],
+            "wanted": 0,
+            "eligible": plan["eligible"],
+            "lanes": plan["lanes"],
+            "cap": plan["cap"],
+        }
+    added, meta = _mint_unlocked(plan["taken"], plan["want"])
+    with paper_state_lock("discovery"):
+        if moved():
+            return _refill_skipped("state_moved")
+        return _refill_commit(list(added), meta, plan)
 
 
 def _refill_buffer_thread(root: str) -> None:
@@ -797,8 +881,9 @@ def _refill_buffer_thread(root: str) -> None:
 def schedule_refill_buffer() -> bool:
     """Start one daemon mint. A second call while it runs does nothing.
 
-    The thread takes the paper-state lock itself, so this must be called
-    after the claim has released that lock.
+    The thread takes the paper-state lock around the snapshot and the
+    append, and mints outside it, so this must be called after the
+    claim has released that lock.
     """
     global _buffer_running
     from hedge_fund.paths import state_root
@@ -890,16 +975,41 @@ def clear_leases_unlocked(names: Iterable[str]) -> list[str]:
     return released
 
 
-def touch_worker_unlocked(worker_id: object, status: object = None, *, now: datetime | None = None) -> None:
-    """Record a per-worker heartbeat. Invalid ids are ignored. Caller holds the lock."""
+def touch_worker_unlocked(
+    worker_id: object,
+    status: object = None,
+    *,
+    now: datetime | None = None,
+    evaluating: object = None,
+) -> None:
+    """Record a per-worker heartbeat and renew that worker's leases.
+
+    Invalid ids are ignored. Caller holds the paper-state lock. A
+    ``paused`` heartbeat updates ``last_seen`` and does not move
+    ``expires_at``. ``evaluating`` is the names this worker currently
+    has in flight; the first time a leased name appears there, its
+    per-name cap starts.
+    """
     if not isinstance(worker_id, str) or not _WORKER_ID_RE.match(worker_id.strip()):
         return
     wid = worker_id.strip()
     clock = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    cleaned = _status(status, "running")
     state = load_lease_state()
-    _touch(state, wid, _status(status, "running"), clock)
+    _touch(state, wid, cleaned, clock)
+    ev: set[str] | None = None
+    if isinstance(evaluating, (list, tuple, set)):
+        ev = {n for n in evaluating if isinstance(n, str) and n}
+    if cleaned != "paused":
+        for name, lease in state["leases"].items():
+            if isinstance(lease, dict) and lease.get("worker_id") == wid:
+                bump_lease_expiry(lease, clock, name=name, evaluating=ev)
     _prune_workers(state, clock)
     save_lease_state(state)
+    if cleaned != "paused":
+        from hedge_fund.trading.requalify import refresh_requalify_leases_unlocked
+
+        refresh_requalify_leases_unlocked(wid, clock, ev)
 
 
 def _active_map(state: dict, now: datetime) -> tuple[dict[str, dict], int]:

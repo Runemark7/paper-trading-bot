@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+import threading
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -178,6 +179,30 @@ class BufferMintTests(unittest.TestCase):
         with scoring_purpose("mint"):
             with self.assertRaises(HoldoutLeak):
                 read_bars([[HOLDOUT_START_MS, 1, 1, 1, 1, 1]], purpose="holdout")
+
+    def test_buffer_mint_does_not_hold_the_discovery_lock(self):
+        from hedge_fund.trading.store import paper_state_lock
+
+        entered = threading.Event()
+
+        def mint(taken, n):
+            def other():
+                with paper_state_lock("discovery"):
+                    entered.set()
+
+            thread = threading.Thread(target=other)
+            thread.start()
+            thread.join(timeout=2)
+            self.assertTrue(entered.is_set(), "mix_refill held the discovery lock")
+            return ["buf_0"], _meta(1)
+
+        now = datetime(2026, 10, 27, 22, 0, tzinfo=timezone.utc)
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.dict(os.environ, self._env(Path(tmp))):
+                with patch("hedge_fund.trading.leases.discovery_universe", return_value=[]):
+                    with patch("hedge_fund.trading.leases._mint_unlocked", side_effect=mint):
+                        report = refill_buffer_unlocked(now=now)
+        self.assertEqual(report["refilled"], ["buf_0"])
 
 
 if __name__ == "__main__":

@@ -30,7 +30,7 @@ A small, dependency-free HTTP server (stdlib only) that exposes:
   POST /api/discovery/rescore -> gate v5 B&H re-label (same ingest token).
                                 Dry-run unless the body sets apply=true.
                                 Does not admit or retire champions.
-  POST /api/discovery/requeue -> one-shot v4 discovery-window B&H retest
+  POST /api/discovery/requeue -> one-shot discovery-window B&H retest
                                 queue (same ingest token). Dry-run unless
                                 the body sets apply=true. Does not unseal
                                 the holdout and does not admit or retire.

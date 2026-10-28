@@ -331,6 +331,36 @@ def lease_requalify_unlocked(worker_id: str, n: int, ttl_seconds: int, now: date
     return chosen
 
 
+def refresh_requalify_leases_unlocked(
+    worker_id: str,
+    now: datetime,
+    evaluating: set[str] | None,
+) -> None:
+    """Renew this worker's requalify leases from a heartbeat.
+
+    Same grace and per-name cap as discovery leases. A missing file is
+    a no-op. Caller holds the discovery lock. Does not add an attempt.
+    """
+    if not requalify_path().exists():
+        return
+    from hedge_fund.trading.leases import bump_lease_expiry
+
+    now = now.astimezone(timezone.utc)
+    state = load_requalify_state()
+    changed = False
+    for name, meta in state["names"].items():
+        if not isinstance(meta, dict) or meta.get("status") != "leased":
+            continue
+        if meta.get("worker_id") != worker_id:
+            continue
+        before = (meta.get("expires_at"), meta.get("started_at"))
+        bump_lease_expiry(meta, now, name=name, evaluating=evaluating)
+        if (meta.get("expires_at"), meta.get("started_at")) != before:
+            changed = True
+    if changed:
+        save_requalify_state(state)
+
+
 def release_requalify_unlocked(worker_id: str, names: list[str] | None) -> list[str]:
     """Return this worker's requalify leases to the queue. Caller holds the lock."""
     path = requalify_path()

@@ -1,4 +1,4 @@
-"""One-shot requeue of v4 discovery-window buy-and-hold misses."""
+"""One-shot requeue of discovery-window buy-and-hold misses."""
 from __future__ import annotations
 
 import json
@@ -12,9 +12,16 @@ from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-from hedge_fund.trading.constants import GATE_RULES, HOLDOUT_END_MS, HOLDOUT_START_MS, V4_GATE_RULES
+from hedge_fund.trading.constants import (
+    GATE_RULES,
+    HOLDOUT_END_MS,
+    HOLDOUT_START_MS,
+    V3_GATE_RULES,
+    V4_GATE_RULES,
+)
 from hedge_fund.trading.requeue_v4_bh import (
     BATCH_ID,
+    LEGACY_BH_RULES,
     RETEST_REASON,
     is_requeue_candidate,
     requeue_v4_bh,
@@ -69,16 +76,28 @@ def _decoys() -> list[dict]:
         {**_bh("cost_floor"), "fail_reasons": [
             "cost stress sharpe 0.10 / daily 0.50 vs bh 0.10 (2x fee + 5bps)",
         ]},
-        {**_bh("v3_tag"), "gate_rules": "sltp_cap100_bhdsr_tiled87_20261008"},
+        {**_bh("other_old_tag"), "gate_rules": "sltp_cap100_bhdsr_other"},
         later,
         _bh("on_the_book"),
     ]
 
 
+def _tagged(name: str, rules: str, reason: str | None = None) -> dict:
+    row = _bh(name, reason=reason)
+    row["gate_rules"] = rules
+    return row
+
+
 def _prod_like() -> list[dict]:
-    rows = [_bh(f"v4bh_{i:04d}") for i in range(341)]
-    missing = _bh("v4bh_missing", reason="buy-and-hold daily sharpe missing")
-    rows.append(missing)
+    """1 gate_v4 + 185 tiled + 156 pre-tiled. The missing-Sharpe sentence is one of the 185."""
+    rows = [_bh("v4bh_0000")]
+    rows.append(_tagged(
+        "tiled_missing",
+        V3_GATE_RULES,
+        reason="buy-and-hold daily sharpe missing",
+    ))
+    rows.extend(_tagged(f"tiled_{i:04d}", V3_GATE_RULES) for i in range(184))
+    rows.extend(_tagged(f"plain_{i:04d}", LEGACY_BH_RULES) for i in range(156))
     rows.extend(_decoys())
     return rows
 
@@ -89,6 +108,8 @@ class SelectTests(unittest.TestCase):
         self.assertTrue(is_requeue_candidate(
             _bh("missing_only", reason="buy-and-hold daily sharpe missing")
         ))
+        self.assertTrue(is_requeue_candidate(_tagged("tiled_ok", V3_GATE_RULES)))
+        self.assertTrue(is_requeue_candidate(_tagged("plain_ok", LEGACY_BH_RULES)))
         for row in _decoys():
             if row["strategy"] == "on_the_book":
                 self.assertTrue(is_requeue_candidate(row))
@@ -124,12 +145,22 @@ class SelectTests(unittest.TestCase):
         self.assertFalse(dry["holdout_unsealed"])
         self.assertNotIn("on_the_book", dry["names"])
         self.assertNotIn("other_fail", dry["names"])
+        self.assertNotIn("other_old_tag", dry["names"])
         self.assertIn("v4bh_0000", dry["names"])
-        self.assertIn("v4bh_missing", dry["names"])
+        self.assertIn("tiled_missing", dry["names"])
+        self.assertIn("plain_0000", dry["names"])
+        self.assertEqual(dry["by_rules"], {
+            "gate_v4": 1,
+            V3_GATE_RULES: 185,
+            LEGACY_BH_RULES: 156,
+        })
         self.assertEqual(len(dry["names"]), 342)
+        self.assertEqual(dry["batch_id"], "bh-only-requeue-20261027")
         self.assertTrue(first["applied"])
         self.assertEqual(first["applied_at"], "2026-10-27T22:40:00+00:00")
         self.assertEqual(first["count"], 342)
+        self.assertEqual(first["by_rules"][V3_GATE_RULES], 185)
+        self.assertEqual(first["by_rules"][LEGACY_BH_RULES], 156)
         self.assertTrue(second["already_applied"])
         self.assertFalse(second["applied"])
         self.assertEqual(second["applied_at"], "2026-10-27T22:40:00+00:00")
@@ -251,7 +282,43 @@ class RetestLaneTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertTrue(report["dry_run"])
         self.assertEqual(report["count"], 1)
+        self.assertFalse((root / "discovery_bh_requeue.json").exists())
         self.assertFalse((root / "discovery_v4_bh_requeue.json").exists())
+
+    def test_unapplied_v4_file_does_not_block_the_wider_batch(self):
+        from hedge_fund.trading.discovery import save_discovery_log
+        from hedge_fund.trading.requeue_v4_bh import pending_retest_names
+
+        tmp, root = self._state()
+        try:
+            with patch.dict(os.environ, {"PAPER_STATE": str(root)}):
+                (root / "discovery_v4_bh_requeue.json").write_text(json.dumps({
+                    "batch_id": "v4-bh-requeue-20261027",
+                    "applied_at": "2026-10-27T22:00:00+00:00",
+                    "order": ["someone_else"],
+                    "entries": {"someone_else": {"status": "pending"}},
+                }))
+                save_discovery_log([
+                    _bh("only_v4"),
+                    _tagged("only_tiled", V3_GATE_RULES),
+                ])
+                dry = requeue_v4_bh(apply=False)
+                applied = requeue_v4_bh(apply=True, now="2026-10-27T23:10:00+00:00")
+                pending = pending_retest_names()
+                old = json.loads((root / "discovery_v4_bh_requeue.json").read_text())
+                new_file = json.loads((root / "discovery_bh_requeue.json").read_text())
+        finally:
+            tmp.cleanup()
+        self.assertFalse(dry["already_applied"])
+        self.assertEqual(dry["count"], 2)
+        self.assertEqual(sorted(dry["names"]), ["only_tiled", "only_v4"])
+        self.assertTrue(applied["applied"])
+        self.assertEqual(applied["batch_id"], BATCH_ID)
+        self.assertNotEqual(BATCH_ID, "v4-bh-requeue-20261027")
+        self.assertEqual(old["applied_at"], "2026-10-27T22:00:00+00:00")
+        self.assertEqual(old["order"], ["someone_else"])
+        self.assertEqual(new_file["batch_id"], BATCH_ID)
+        self.assertEqual(pending, ["only_tiled", "only_v4"])
 
 
 class RequeueHttpTests(unittest.TestCase):
