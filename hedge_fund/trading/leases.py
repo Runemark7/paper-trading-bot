@@ -757,7 +757,10 @@ def _claim_unlocked(
     state = load_lease_state()
     # The index is the fail-once set. A retest-filled claim does not
     # parse the display log; leftovers still do, inside ``_queue_view``.
-    tested = set(load_tested_index())
+    # Membership only — do not copy the book on the request.
+    from hedge_fund.trading.tested_index import tested_name_set
+
+    tested = tested_name_set()
     _drop_expired_and_tested(state, now, tested)
     ttl = lease_ttl_seconds(n, parallel)
     if not farm_enabled_unlocked():

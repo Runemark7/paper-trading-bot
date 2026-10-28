@@ -14,9 +14,11 @@ A small, dependency-free HTTP server (stdlib only) that exposes:
                            running_now.live_history is the same tape summary
   GET /api/discovery/summary -> tested / in-flight / leftover-untested; farm Start/Stop status
                                 (?compact=1 omits those lists; counts/farm/stuck stay).
-                                Pass/fail/unique counts are the discovery_results.ix header.
+                                Pass/fail/unique counts are the discovery_results.ix header
+                                plus the append journal (discovery_results.ixj).
   GET /api/discovery/results -> paged full records (?offset=&limit=&status=pass|fail);
-                                seeks one page, does not load the results log.
+                                seeks one page of the base index and the journal,
+                                and does not load the results log.
   GET /api/discovery/lift -> top and bottom atoms by net OOS P&L minus buy-and-hold (cached)
   GET /api/discovery/blocks -> exploratory atom-block effects (cached; does not change the gate)
   GET /api/discovery/history -> canonical 5m tape hash + data_end (ingest token)
