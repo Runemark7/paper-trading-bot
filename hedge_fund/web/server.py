@@ -81,6 +81,7 @@ from hedge_fund.trading.discovery_mode import ingest_token, tokens_match
 from hedge_fund.trading.open_lots import open_lots_snapshot, paper_book_dbs
 from hedge_fund.trading.store import TradeStore, read_paper_account
 from hedge_fund.web.live import live_preview
+from hedge_fund.web.bg_cache import COMPUTING, BackgroundCache, computing_body
 from hedge_fund.web.ttl_cache import READ_REBUILD_SECONDS, StaleCache
 
 _INGEST_MAX_BYTES = 1_000_000
@@ -123,6 +124,17 @@ def store_dbs() -> list[str]:
 
 
 _SUMMARY_CACHE = StaleCache()
+
+CHAMPIONS_MIN_REBUILD_SECONDS = 30.0
+_CHAMPIONS_CACHE = BackgroundCache("champions", min_interval=CHAMPIONS_MIN_REBUILD_SECONDS, max_keys=2)
+
+
+def champions_response(builder) -> tuple[dict, int]:
+    """GET /api/champions body. The pool build reads every account DB and the discovery log."""
+    read = _CHAMPIONS_CACHE.get(str(_state_dir().resolve()), builder, wait_cold=8.0)
+    if read.status == COMPUTING:
+        return computing_body("The champion pool", retry_after=5, error=read.error, active_champions=[]), 202
+    return read.value, 200
 
 
 def clear_summary_cache() -> None:
@@ -523,19 +535,23 @@ class Handler(BaseHTTPRequestHandler):
             # Read-only: last-known champions.json + open-lots snapshot.
             # collect_live_results mutates the pool / may graduate — that stays
             # on live_cycle.py (and heartbeat after closes), not a browser GET.
+            # Served from a single-flight background cache (rebuilt at most
+            # every CHAMPIONS_MIN_REBUILD_SECONDS); a request never builds it.
             try:
                 from hedge_fund.trading.champions import pool_status
 
-                self._send_json(pool_status(read_only=True))
+                body, code = champions_response(lambda: pool_status(read_only=True))
+                self._send_json(body, code, retry_after=5 if code == 202 else None)
             except Exception as exc:
                 self._send_json({"error": str(exc), "champions": [], "count": 0}, 500)
         elif route == "/api/champions/trades":
             # Read-only trade log. Per-account reads are cached by DB file token.
             try:
-                from hedge_fund.web.champion_trades import champion_trades_payload, parse_limit
+                from hedge_fund.web.champion_trades import champion_trades_response, parse_limit
 
                 limit = parse_limit(qs.get("limit"))
-                self._send_json(champion_trades_payload(qs.get("name"), limit=limit))
+                body, code = champion_trades_response(qs.get("name"), limit=limit)
+                self._send_json(body, code, retry_after=5 if code == 202 else None)
             except ValueError as exc:
                 self._send_json({"error": str(exc), "paper_only": True}, 400)
             except Exception as exc:
@@ -594,17 +610,19 @@ class Handler(BaseHTTPRequestHandler):
         elif route == "/api/discovery/insights":
             # Read-only. Built from the in-memory display log; cached by its fingerprint.
             try:
-                from hedge_fund.web.discovery_insights import discovery_insights_payload
+                from hedge_fund.web.discovery_insights import insights_response
 
-                self._send_json(discovery_insights_payload())
+                body, code = insights_response()
+                self._send_json(body, code, retry_after=10 if code == 202 else None)
             except Exception as exc:
                 self._send_json({"error": str(exc), "paper_only": True}, 500)
         elif route == "/api/discovery/blocks":
             # Read-only. Not on the summary poll. Does not mint, qualify, or touch the gate.
             try:
-                from hedge_fund.trading.block_report import cached_block_report
+                from hedge_fund.trading.block_report import block_report_response
 
-                self._send_json(cached_block_report())
+                body, code = block_report_response()
+                self._send_json(body, code, retry_after=body.get("retry_after") if code == 202 else None)
             except Exception as exc:
                 self._send_json({"error": str(exc), "paper_only": True, "exploratory": True}, 500)
         elif route == "/api/discovery/history":
@@ -928,9 +946,11 @@ class Handler(BaseHTTPRequestHandler):
                     names = {
                         n.strip() for n in keep if isinstance(n, str) and n.strip()
                     }
-                    self._send_json(retain_champions(names))
+                    result = retain_champions(names)
                 else:
-                    self._send_json(cull_undated_champions())
+                    result = cull_undated_champions()
+                _CHAMPIONS_CACHE.clear()
+                self._send_json(result)
             except Exception as exc:
                 self._send_json({"ok": False, "error": str(exc), "paper_only": True}, 500)
         else:
