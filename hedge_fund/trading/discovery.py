@@ -411,9 +411,11 @@ def append_discovery_evaluations(
         with paper_state_lock("discovery"):
             if still_valid is not None and not still_valid():
                 return None
+            snap = _cache_snapshot()
             saved = _commit_append_locked(eval_records, cap=cap)
             if after_commit is not None:
                 after_commit()
+            _note_written(eval_records, snap)
     else:
         saved = None
         for _attempt in range(8):
@@ -440,6 +442,7 @@ def append_discovery_evaluations(
                     or discovery_log_fingerprint() != prepared["log_fp"]
                 ):
                     continue
+                snap = _cache_snapshot()
                 saved = _commit_append_locked(
                     eval_records,
                     cap=cap,
@@ -450,14 +453,17 @@ def append_discovery_evaluations(
                 )
                 if after_commit is not None:
                     after_commit()
+                _note_written(eval_records, snap)
                 break
         if saved is None:
             with paper_state_lock("discovery"):
                 if still_valid is not None and not still_valid():
                     return None
+                snap = _cache_snapshot()
                 saved = _commit_append_locked(eval_records, cap=cap)
                 if after_commit is not None:
                     after_commit()
+                _note_written(eval_records, snap)
     from hedge_fund.trading.discovery_results import sync_discovery_results
 
     fresh = {
@@ -465,12 +471,6 @@ def append_discovery_evaluations(
         for row in eval_records
         if isinstance(row, dict) and isinstance(row.get("strategy"), str)
     }
-    for name in fresh:
-        remember_tested_name(name)
-    from hedge_fund.trading.leases import note_queue_tested
-
-    for name in fresh:
-        note_queue_tested(name)
     sync_discovery_results(eval_records, fresh=fresh)
     return saved
 
@@ -633,7 +633,7 @@ def cached_tested_names() -> set[str]:
         tested_name_set,
     )
 
-    fp = (str(state_root()), discovery_log_fingerprint(), tested_index_fingerprint())
+    fp = _tested_cache_fp()
     names = _tested_names_cache.get("names")
     if _tested_names_cache.get("fp") == fp and isinstance(names, set):
         return names
@@ -655,28 +655,53 @@ def cached_tested_names() -> set[str]:
     return found
 
 
-def remember_tested_name(name: str) -> None:
-    """The name was just written. Keep an already-built set in sync.
-
-    A cold cache is left cold so the next read rebuilds from disk instead
-    of trusting a set that only contains this name.
-    """
-    if not isinstance(name, str) or not name:
-        return
-    names = _tested_names_cache.get("names")
-    old = _tested_names_cache.get("fp")
-    if not isinstance(names, set) or not isinstance(old, tuple):
-        return
+def _tested_cache_fp() -> tuple:
     from hedge_fund.paths import state_root
     from hedge_fund.trading.tested_index import tested_index_fingerprint
 
-    fp = (str(state_root()), discovery_log_fingerprint(), tested_index_fingerprint())
-    if old[0] != fp[0]:
+    return (str(state_root()), discovery_log_fingerprint(), tested_index_fingerprint())
+
+
+def _cache_snapshot() -> tuple:
+    """Fingerprints just before an append. Caller holds the discovery lock."""
+    from hedge_fund.trading.leases import queue_snapshot
+
+    return (_tested_cache_fp(), queue_snapshot())
+
+
+def _note_written(eval_records: list, snap: tuple) -> None:
+    """Update the claim caches in place after an append, under the same lock."""
+    names = [
+        row.get("strategy")
+        for row in eval_records
+        if isinstance(row, dict) and isinstance(row.get("strategy"), str) and row.get("strategy")
+    ]
+    remember_tested_names(names, before=snap[0])
+    from hedge_fund.trading.leases import note_queue_tested
+
+    note_queue_tested(names, before=snap[1])
+
+
+def remember_tested_names(names, before: tuple | None) -> None:
+    """Names were just written. Keep an already-built set in sync.
+
+    Caller holds ``paper_state_lock('discovery')`` and passes the
+    fingerprint taken under that lock before the write. The set is only
+    updated in place when it was built from exactly that state; anything
+    else (another process, rescore, requeue) drops it so the next read
+    rebuilds from disk. A cold cache is left cold.
+    """
+    names = [n for n in names if isinstance(n, str) and n]
+    cached = _tested_names_cache.get("names")
+    old = _tested_names_cache.get("fp")
+    if not isinstance(cached, set) or not isinstance(old, tuple):
+        return
+    if before is None or old != before:
         _tested_names_cache["fp"] = None
         _tested_names_cache["names"] = None
         return
-    names.add(name)
-    _tested_names_cache["fp"] = fp
+    cached.update(names)
+    _tested_names_cache["fp"] = _tested_cache_fp()
 
 
 def tested_discovery_names(log: list[dict] | None = None) -> set[str]:

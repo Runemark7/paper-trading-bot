@@ -361,30 +361,57 @@ _QUEUE: dict = {
 }
 
 
-def note_queue_tested(name: str) -> None:
-    """A name was just stored. Drop it from the cached leftover queue."""
-    if not isinstance(name, str) or not name or _QUEUE.get("fp") is None:
+def queue_snapshot() -> tuple | None:
+    """Fingerprint before an append. Caller holds the discovery lock."""
+    if _QUEUE.get("fp") is None:
+        return None
+    return _queue_fingerprint()
+
+
+def _drop_queue() -> None:
+    _QUEUE["fp"] = None
+    _QUEUE["base"] = None
+
+
+def note_queue_tested(names, before: tuple | None) -> None:
+    """Names were just stored. Drop them from the cached leftover queue.
+
+    Caller holds ``paper_state_lock('discovery')`` and passes the
+    fingerprint taken under that lock just before the write. The cached
+    queue is updated in place only when it was built from exactly that
+    state, and only the log and index (which this lock serialises) moved.
+    Any other change, by another process or code path, drops the cache
+    so the next claim rebuilds it from disk.
+    """
+    if isinstance(names, str):
+        names = [names]
+    names = [n for n in names if isinstance(n, str) and n]
+    if _QUEUE.get("fp") is None:
+        return
+    cached = _QUEUE.get("fp")
+    if before is None or cached != before:
+        _drop_queue()
         return
     current = _queue_fingerprint()
-    cached = _QUEUE.get("fp")
-    if not isinstance(cached, tuple) or not current or cached[0] != current[0]:
-        _QUEUE["fp"] = None
-        _QUEUE["base"] = None
+    if not isinstance(current, tuple) or current[0] != before[0] or current[3:] != before[3:]:
+        _drop_queue()
         return
     blocked = _QUEUE.get("blocked")
+    seen = _QUEUE.get("seen_canon")
+    gone = set(names)
     if isinstance(blocked, set):
-        blocked.add(name)
+        blocked.update(gone)
     base = _QUEUE.get("base")
     if isinstance(base, list):
-        _QUEUE["base"] = [n for n in base if n != name]
-    seen = _QUEUE.get("seen_canon")
+        _QUEUE["base"] = [n for n in base if n not in gone]
     if isinstance(seen, set):
         from hedge_fund.trading.mint_quality import canonical_name
 
-        key = canonical_name(name)
-        if key:
-            seen.add(key)
-    _QUEUE["fp"] = _queue_fingerprint()
+        for name in names:
+            key = canonical_name(name)
+            if key:
+                seen.add(key)
+    _QUEUE["fp"] = current
 
 
 def _blocked_names(log: list[dict]) -> set[str]:
