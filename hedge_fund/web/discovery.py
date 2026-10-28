@@ -123,7 +123,7 @@ def _summary_cache_key(lists: bool) -> str:
 def cached_discovery_summary(*, lists: bool = True) -> dict:
     """Last summary. A cold key builds once; later polls do not refit lift."""
     key = _summary_cache_key(lists)
-    hit = _DISCOVERY_SUMMARY.peek(key)
+    hit = _DISCOVERY_SUMMARY.peek(key, duplicate=False)
     if not isinstance(hit, dict):
         from hedge_fund.trading.atom_lift import schedule_lift_refresh
 
@@ -140,6 +140,9 @@ def refresh_discovery_summaries() -> None:
             key,
             lambda lists=lists: build_discovery_summary(lists=lists),
         )
+    from hedge_fund.trading.mem import release_heap
+
+    release_heap()
 
 
 def _with_live_strategy(summary: dict) -> dict:

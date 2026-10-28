@@ -787,5 +787,27 @@ class IncrementalIndexTests(unittest.TestCase):
         self.assertFalse(any(q for _, q in merged["fail"]))
 
 
-if __name__ == "__main__":
-    unittest.main()
+class ResultMemoryTests(unittest.TestCase):
+    def test_windows_stay_on_disk_and_not_in_the_process_map(self):
+        from hedge_fund.trading import discovery_results as results
+        from hedge_fund.trading.discovery_results import records_by_name, sync_discovery_results
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.dict(os.environ, {"PAPER_STATE": tmp}):
+                results._bound = None
+                results._map = None
+                results._map_pos = None
+                sync_discovery_results([
+                    _eval(
+                        "wide",
+                        qualified=False,
+                        tested_at="2026-10-08T03:00:00+00:00",
+                        windows=[{"blob": "x" * 2000, "i": 1}],
+                    ),
+                ], fresh={"wide"})
+                stored = results._map["wide"]
+                self.assertNotIn("windows", stored)
+                self.assertTrue(stored.get("_disk_windows"))
+                full = records_by_name()["wide"]
+        self.assertIn("windows", full)
+        self.assertEqual(full["windows"][0]["blob"], "x" * 2000)

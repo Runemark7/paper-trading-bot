@@ -549,7 +549,7 @@ def _scan_jsonl(start: int = 0) -> tuple[dict[str, dict], int]:
                     continue
                 row["_offset"] = offset
                 row["_length"] = len(line)
-                found[name] = row
+                found[name] = _retain_row(row)
     except OSError:
         return found, end
     return found, end
@@ -688,7 +688,7 @@ def _append_records(pending: list[dict], rows: dict[str, dict]) -> None:
                 stored["_length"] = len(payload)
                 name = stored.get("strategy")
                 if isinstance(name, str) and name:
-                    rows[name] = stored
+                    rows[name] = _retain_row(stored)
                     _publish_seed(name, stored)
             fh.flush()
             if rows is _map:
@@ -889,6 +889,9 @@ def backfill_discovery_results() -> None:
             deltas = _apply_rows(current, log_rows, index=index)
             if deltas or not _index_current(current):
                 _install_full_index(current)
+    from hedge_fund.trading.mem import release_heap
+
+    release_heap()
 
 
 def start_results_backfill() -> None:
@@ -1219,11 +1222,44 @@ def compact_results_index(*, force: bool = False) -> bool:
             return True
 
 
+def _retain_row(row: dict) -> dict:
+    """Drop window payloads from the in-memory map.
+
+    The jsonl line still has them. Dedup, counts, and the index use the
+    slim fields. ``records_by_name`` reads the line back when a caller
+    needs the windows. A process that kept every window list grew with
+    each ingest and never gave the pages back.
+    """
+    if "windows" not in row:
+        return row
+    kept = {key: value for key, value in row.items() if key != "windows"}
+    kept["_disk_windows"] = True
+    return kept
+
+
+def _public_row(row: dict, fh) -> dict:
+    if row.get("_disk_windows") and fh is not None:
+        try:
+            fh.seek(int(row.get("_offset") or 0))
+            parsed = json.loads(fh.read(int(row.get("_length") or 0)))
+        except (OSError, ValueError):
+            parsed = None
+        if isinstance(parsed, dict):
+            return parsed
+    return {key: value for key, value in row.items() if not str(key).startswith("_")}
+
+
 def records_by_name() -> dict[str, dict]:
     """Write-path snapshot. Not for request handlers."""
     with _lock, _ResultsLock(exclusive=False):
         current = _load_map()
-        return {
-            name: {key: value for key, value in row.items() if not str(key).startswith("_")}
-            for name, row in current.items()
-        }
+        path = discovery_results_path()
+        try:
+            fh = path.open("rb")
+        except OSError:
+            fh = None
+        try:
+            return {name: _public_row(row, fh) for name, row in current.items()}
+        finally:
+            if fh is not None:
+                fh.close()

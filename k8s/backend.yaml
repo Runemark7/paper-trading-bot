@@ -57,6 +57,11 @@ spec:
               value: paperbot-web
             - name: PAPERBOT_DB_POOL_MAX
               value: "2"
+            # glibc per-thread arenas hold onto freed summary/ingest
+            # buffers. Two arenas keep that from climbing toward the
+            # memory limit. This does not change requests or limits.
+            - name: MALLOC_ARENA_MAX
+              value: "2"
           livenessProbe:
             httpGet:
               path: /health
