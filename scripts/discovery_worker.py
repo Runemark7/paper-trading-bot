@@ -112,6 +112,14 @@ DEFAULT_BASE_URL = "https://trading.runevibe.se"
 PAUSE_SLEEP_DEFAULT = 15
 PAUSE_SLEEP_MIN = 10
 PAUSE_SLEEP_MAX = 30
+# Prod web has half a core. An empty top-up means no room or no names, so
+# asking again on every completion only burns its CPU.
+CLAIM_EMPTY_BACKOFF_SECONDS = 30.0
+CLAIM_EMPTY_BACKOFF_MAX_SECONDS = 240.0
+CLAIM_FAIL_BACKOFF_MAX_SECONDS = 600
+# Prod's lease cap per worker is this many names per --workers lane
+# (leases.LEASES_PER_LANE). A finished name holds its lease until ingest.
+PROD_LEASES_PER_LANE = 2
 
 _SLICES = None
 _BH = None
@@ -509,6 +517,8 @@ def _run_inflight(
     on_inflight=None,
     refill=None,
     prefetch: int = 0,
+    on_queue=None,
+    unacked=None,
 ) -> None:
     """Keep up to *n_workers* evals in flight.
 
@@ -524,7 +534,15 @@ def _run_inflight(
 
     ``refill(n)`` leases more names when the local queue cannot fill the
     slots. ``prefetch`` is how many extra names to hold behind the running
-    set so the next start does not wait on that claim.
+    set so the next start does not wait on that claim. ``on_queue`` sees
+    the leased names that are waiting for a slot. ``unacked()`` counts
+    finished names prod has not acknowledged yet; their leases still use
+    this worker's room on prod, so they are not free slots to claim for.
+
+    Claims are batched: no claim while a full wave (``n_workers``) is
+    already queued, and a top-up waits until at least half a wave is
+    missing unless a slot would otherwise sit idle. An empty reply backs
+    off (``CLAIM_EMPTY_BACKOFF_SECONDS``, doubling) before the next ask.
     """
     if sleeper is None:
         sleeper = time.sleep
@@ -535,6 +553,22 @@ def _run_inflight(
     queue = list(names)
     inflight: dict[str, tuple[object, float]] = {}
     pool = None
+    min_batch = max(1, -(-width // 2))
+    backoff = {"until": 0.0, "delay": 0.0}
+    unposted = {"n": 0}
+
+    def _claim_size() -> int:
+        if refill is None or len(queue) >= width:
+            return 0
+        local = len(inflight) + len(queue)
+        held = unposted["n"] + (int(unacked()) if unacked is not None else 0)
+        deficit = min(width + ahead - local, PROD_LEASES_PER_LANE * width - local - held)
+        if deficit <= 0 or clock() < backoff["until"]:
+            return 0
+        starving = len(inflight) < width and not queue
+        if deficit < min_batch and not starving:
+            return 0
+        return deficit
 
     def _submit_queued() -> None:
         nonlocal pool
@@ -547,23 +581,34 @@ def _run_inflight(
             ar = pool.apply_async(_eval_name, (name, trials, True))
             inflight[name] = (ar, started)
 
-    def launch() -> None:
-        _submit_queued()
-        if refill is not None:
-            # One claim per launch. A short reply is asked again after the
-            # next completion, not in a tight loop.
-            deficit = width + ahead - len(inflight) - len(queue)
-            if deficit > 0:
-                try:
-                    more = refill(deficit) or []
-                except Exception as exc:
-                    print(f"discovery_worker: claim top-up failed: {exc}", flush=True)
-                    more = []
-                if more:
-                    queue.extend(more)
-                    _submit_queued()
+    def _report() -> None:
         if on_inflight is not None:
             on_inflight(list(inflight))
+        if on_queue is not None:
+            on_queue(list(queue))
+
+    def launch() -> None:
+        _submit_queued()
+        deficit = _claim_size()
+        if deficit > 0:
+            try:
+                more = refill(deficit) or []
+            except Exception as exc:
+                print(f"discovery_worker: claim top-up failed: {exc}", flush=True)
+                more = []
+            if more:
+                queue.extend(more)
+                _submit_queued()
+                backoff["delay"] = 0.0
+                # Short reply: prod is out of room or names. Wait one step
+                # before asking again instead of on the next poll tick.
+                short = len(more) < deficit
+                backoff["until"] = clock() + CLAIM_EMPTY_BACKOFF_SECONDS if short else 0.0
+            else:
+                delay = backoff["delay"] * 2 or CLAIM_EMPTY_BACKOFF_SECONDS
+                backoff["delay"] = min(delay, CLAIM_EMPTY_BACKOFF_MAX_SECONDS)
+                backoff["until"] = clock() + backoff["delay"]
+        _report()
 
     launch()
     while inflight:
@@ -583,19 +628,21 @@ def _run_inflight(
                 print(f"discovery_worker: {name} failed: {exc}", flush=True)
                 rec = None
             ready.append((name, rec))
-        for name, rec in ready:
+        for name, _rec in ready:
             del inflight[name]
+        unposted["n"] = len(ready)
+        for name, rec in ready:
             # Fill the free slot before the result post. The child is
             # already running while finish() talks to prod.
             if not stuck:
                 launch()
             finish(name, rec)
+            unposted["n"] -= 1
         if stuck:
             reason = eval_timeout_reason(timeout_s)
             killed = [name for name in inflight if name not in stuck]
             inflight.clear()
-            if on_inflight is not None:
-                on_inflight([])
+            _report()
             _drop_eval_pool()
             pool = None
             for name in stuck:
@@ -606,10 +653,14 @@ def _run_inflight(
                     f"discovery_worker: resubmitting {len(killed)} name(s) after eval timeout",
                     flush=True,
                 )
-            queue = killed + queue
+            queue[:0] = killed
             launch()
             continue
         if not ready:
+            # A slot left idle by a backed-off claim retries once the
+            # backoff ends, without waiting for another completion.
+            if _claim_size() > 0:
+                launch()
             sleeper(0.05)
 
 
@@ -700,6 +751,23 @@ def _backoff_seconds(exc: HistoryUnavailable) -> int:
     if isinstance(retry, (int, float)) and not isinstance(retry, bool) and retry > 0:
         return int(retry)
     return HISTORY_BACKOFF_SECONDS
+
+
+def _claim_reply_maybe_lost(exc: Exception) -> bool:
+    """True unless prod answered with a 4xx, which records no lease."""
+    code = getattr(exc, "code", None)
+    if isinstance(code, int) and 400 <= code < 500:
+        return False
+    return True
+
+
+def _claim_fail_backoff(exc: Exception, failures: int, idle_sleep: int) -> int:
+    retry = getattr(exc, "retry_after", None)
+    if isinstance(retry, (int, float)) and not isinstance(retry, bool) and retry > 0:
+        return int(min(retry, CLAIM_FAIL_BACKOFF_MAX_SECONDS))
+    base = max(5, int(idle_sleep))
+    step = min(max(1, int(failures)) - 1, 6)
+    return int(min(base * (2 ** step), CLAIM_FAIL_BACKOFF_MAX_SECONDS))
 
 
 def _local_tape_if_unchanged(remote_sha: str | None) -> dict | None:
@@ -1185,6 +1253,7 @@ class _ResultPoster:
                     heartbeat=item["heartbeat"],
                     worker_id=item["worker_id"],
                     evaluating=item["evaluating"],
+                    queued=_resolve(item.get("queued")),
                 )
                 ack = item.get("on_ack")
                 if ack is not None:
@@ -1208,6 +1277,10 @@ class _ResultPoster:
 
 
 _poster = _ResultPoster()
+
+
+def _resolve(value):
+    return value() if callable(value) else value
 
 
 def _log_round_trip(label: str, started: float, body: object) -> None:
@@ -1240,6 +1313,7 @@ def _post_ingest(
     heartbeat: str | None = None,
     worker_id: str | None = None,
     evaluating: list[str] | None = None,
+    queued: list[str] | None = None,
 ) -> dict:
     payload = {
         "evaluations": evaluations,
@@ -1255,6 +1329,8 @@ def _post_ingest(
             hb["worker_id"] = worker_id
         if evaluating is not None:
             hb["evaluating"] = [n for n in evaluating if isinstance(n, str)]
+        if queued is not None:
+            hb["queued"] = [n for n in queued if isinstance(n, str)]
         payload["heartbeat"] = hb
     if clear:
         payload["clear_in_flight"] = True
@@ -1380,9 +1456,28 @@ def run_batch(
         print(f"discovery_worker: refilled {len(added)} names", flush=True)
 
     evaluating_names: list[str] = []
+    queued_names: list[str] = []
     eval_beat = {"sent": False}
 
-    def _ingest(evals, extended, flight, *, clear=False, heartbeat=None, evaluating=None, ack_name=None):
+    def on_queue(names_now: list[str]) -> None:
+        queued_names[:] = list(names_now)
+
+    def _queued_now() -> list[str]:
+        # Read when the post is sent, not when it is queued: a heartbeat
+        # stuck behind retries must still list names claimed meanwhile.
+        return list(queued_names)
+
+    def _ingest(
+        evals,
+        extended,
+        flight,
+        *,
+        clear=False,
+        heartbeat=None,
+        evaluating=None,
+        queued=None,
+        ack_name=None,
+    ):
         """Queue a prod post. Returns True when ``ack_name`` will be acked on success."""
         if not (ingest_url and token):
             return False
@@ -1402,6 +1497,7 @@ def run_batch(
             "heartbeat": heartbeat,
             "worker_id": worker_id,
             "evaluating": evaluating,
+            "queued": queued,
             "ack_name": ack_name,
             "on_ack": on_ack,
         })
@@ -1423,6 +1519,7 @@ def run_batch(
                 },
                 heartbeat="running",
                 evaluating=list(names_now),
+                queued=_queued_now if claim_mode else None,
             )
         except Exception as exc:
             print(f"discovery_worker: in-flight heartbeat failed: {exc}", flush=True)
@@ -1515,6 +1612,7 @@ def run_batch(
                 },
                 heartbeat="running",
                 evaluating=list(evaluating_names),
+                queued=_queued_now if claim_mode else None,
                 ack_name=name,
             )
             if not queued:
@@ -1530,6 +1628,7 @@ def run_batch(
             )
 
     seen_names = set(planned)
+    queued_names[:] = list(planned)
     cheap: list[str] = []
     for name in planned:
         expensive = lookback_too_expensive_reason(name, lookback_cap)
@@ -1537,6 +1636,7 @@ def run_batch(
             finish(name, ops_fail_record(name, expensive))
         else:
             cheap.append(name)
+    queued_names[:] = list(cheap)
 
     # Slot count is the worker width, not the size of this claim. A
     # one-name claim used to take the in-process path and leave the
@@ -1553,8 +1653,9 @@ def run_batch(
                 eth_slices, holdout, holdout_bh, n_trials,
                 retest_names, n_trials_retest,
             )
-            for name in cheap:
+            for i, name in enumerate(cheap):
                 evaluating_names[:] = [name]
+                queued_names[:] = cheap[i + 1:]
                 finish(name, _eval_name(name))
                 evaluating_names[:] = []
         else:
@@ -1583,13 +1684,18 @@ def run_batch(
                 asks = 0
                 while len(runnable) < n and asks < 8:
                     asks += 1
+                    want = n - len(runnable)
                     try:
-                        got = claim_more(n - len(runnable)) or []
+                        got = claim_more(want) or []
                     except Exception as exc:
                         print(f"discovery_worker: claim top-up failed: {exc}", flush=True)
                         break
                     if not got:
                         break
+                    # A short reply means prod has no more room or names.
+                    # Only a full reply whose names were all skipped here
+                    # (duplicates or too expensive) is worth asking again.
+                    short = len(got) < want
                     fresh = False
                     for name in got:
                         if not isinstance(name, str) or name in seen_names:
@@ -1602,7 +1708,7 @@ def run_batch(
                             finish(name, ops_fail_record(name, expensive))
                             continue
                         runnable.append(name)
-                    if not fresh:
+                    if not fresh or short:
                         break
                 return runnable
 
@@ -1617,6 +1723,8 @@ def run_batch(
                     on_inflight=on_inflight,
                     refill=refill if claim_more is not None else None,
                     prefetch=prefetch,
+                    on_queue=on_queue,
+                    unacked=lambda: max(0, len(completed) - len(acked)),
                 )
             except BaseException:
                 _drop_eval_pool()
@@ -1747,6 +1855,11 @@ def main(argv: list[str] | None = None) -> int:
 
     prev_signals = _install_exit_signals() if not local_plan else {}
     farm_enabled = True
+    if not local_plan:
+        # A restart under the same worker_id (DISCOVERY_WORKER_ID, or a
+        # container whose hostname and pid repeat) must not inherit leases
+        # from the previous process: it does not know those names.
+        _release_remote_safe(base, token, worker_id, status="idle")
     try:
         return _run_loop(
             args,
@@ -1782,6 +1895,7 @@ def _run_loop(
     base: str,
     farm_enabled: bool,
 ) -> int:
+    claim_failures = 0
     while True:
         if not args.no_ingest:
             farm_enabled = poll_farm_enabled(base, farm_enabled)
@@ -1847,11 +1961,18 @@ def _run_loop(
                 claim_n = max(int(max_names), int(workers))
                 claimed = _claim_remote(base, token or "", worker_id, claim_n, workers)
             except Exception as exc:
+                claim_failures += 1
                 print(f"discovery_worker: claim failed: {exc}", flush=True)
+                if _claim_reply_maybe_lost(exc):
+                    # Prod may have recorded the lease before the proxy
+                    # dropped the reply. Nothing runs here yet, so hand
+                    # back every name this worker might hold.
+                    _release_remote_safe(base, token, worker_id, status="idle")
                 if args.once:
                     return 1
-                time.sleep(max(5, args.idle_sleep))
+                time.sleep(_claim_fail_backoff(exc, claim_failures, args.idle_sleep))
                 continue
+            claim_failures = 0
             if claimed.get("paused"):
                 decision = consider_pause(
                     False,
