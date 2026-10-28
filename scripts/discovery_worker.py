@@ -491,38 +491,61 @@ def _run_inflight(
     sleeper=None,
     clock=None,
     on_inflight=None,
+    refill=None,
+    prefetch: int = 0,
 ) -> None:
     """Keep up to *n_workers* evals in flight.
 
     The next name is submitted as soon as a slot frees, and that submit
     happens before *finish* posts the result, so the HTTP post does not
-    leave the core idle. Each name's deadline is *timeout_s* seconds from
-    its own submit (``timeout_s`` <= 0 waits). Only a name that crosses
-    its own deadline is fail-parked. ``pool.terminate`` is process-wide,
-    so any other in-flight name is submitted again with a fresh deadline
-    and is not parked. *finish* runs as each result is ready.
-    ``on_inflight`` sees the names actually submitted, including right
-    after the first launch.
+    leave the core idle. Retests and fresh names share this queue. Each
+    name's deadline is *timeout_s* seconds from its own submit
+    (``timeout_s`` <= 0 waits). Only a name that crosses its own deadline
+    is fail-parked. ``pool.terminate`` is process-wide, so any other
+    in-flight name is submitted again with a fresh deadline and is not
+    parked. *finish* runs as each result is ready. ``on_inflight`` sees
+    the names actually submitted, including right after the first launch.
+
+    ``refill(n)`` leases more names when the local queue cannot fill the
+    slots. ``prefetch`` is how many extra names to hold behind the running
+    set so the next start does not wait on that claim.
     """
     if sleeper is None:
         sleeper = time.sleep
     if clock is None:
         clock = time.monotonic
     width = max(1, int(n_workers))
+    ahead = max(0, int(prefetch))
     queue = list(names)
     inflight: dict[str, tuple[object, float]] = {}
     pool = None
 
-    def launch() -> None:
+    def _submit_queued() -> None:
         nonlocal pool
-        if pool is None:
-            pool = pool_factory()
         while queue and len(inflight) < width:
+            if pool is None:
+                pool = pool_factory()
             name = queue.pop(0)
             trials = trial_for(name)
             started = clock()
             ar = pool.apply_async(_eval_name, (name, trials, True))
             inflight[name] = (ar, started)
+
+    def launch() -> None:
+        _submit_queued()
+        if refill is not None:
+            # One claim per launch. A short reply is asked again after the
+            # next completion, not in a tight loop.
+            deficit = width + ahead - len(inflight) - len(queue)
+            if deficit > 0:
+                try:
+                    more = refill(deficit) or []
+                except Exception as exc:
+                    print(f"discovery_worker: claim top-up failed: {exc}", flush=True)
+                    more = []
+                if more:
+                    queue.extend(more)
+                    _submit_queued()
         if on_inflight is not None:
             on_inflight(list(inflight))
 
@@ -1043,6 +1066,9 @@ def run_batch(
     n_trials: int | None = None,
     retest_names: list[str] | None = None,
     n_trials_retest: int | None = None,
+    claim_more=None,
+    prefetch: int = 0,
+    trials_for=None,
 ) -> dict:
     bundle = _prepare_eval_context(
         sync_base=sync_base,
@@ -1219,6 +1245,7 @@ def run_batch(
                 source="windows_worker",
             )
 
+    seen_names = set(planned)
     cheap: list[str] = []
     for name in planned:
         expensive = lookback_too_expensive_reason(name, lookback_cap)
@@ -1227,13 +1254,16 @@ def run_batch(
         else:
             cheap.append(name)
 
-    flight = max(1, min(int(workers), len(cheap) or 1))
-    pool_size = max(1, int(workers))
+    # Slot count is the worker width, not the size of this claim. A
+    # one-name claim used to take the in-process path and leave the
+    # other core idle even when more names were waiting on the server.
+    slots = max(1, int(workers))
+    pool_size = slots
     retain_pool = bool(bundle.get("sha"))
     try:
-        if not cheap:
+        if not cheap and claim_more is None:
             pass
-        elif flight == 1 and timeout_s <= 0:
+        elif slots == 1 and timeout_s <= 0:
             _init_pool(
                 slices, bh, sma, n_windows, bh_dsr,
                 eth_slices, holdout, holdout_bh, n_trials,
@@ -1244,9 +1274,11 @@ def run_batch(
                 finish(name, _eval_name(name))
                 evaluating_names[:] = []
         else:
-            retest = frozenset(retest_names or ())
+            retest = set(retest_names or ())
 
             def trial_for(name: str) -> int | None:
+                if trials_for is not None:
+                    return trials_for(name)
                 if name in retest:
                     return n_trials_retest
                 return n_trials
@@ -1260,15 +1292,47 @@ def run_batch(
                     n_trials_retest,
                 )
 
+            def refill(n: int) -> list[str]:
+                if claim_more is None or n <= 0:
+                    return []
+                runnable: list[str] = []
+                asks = 0
+                while len(runnable) < n and asks < 8:
+                    asks += 1
+                    try:
+                        got = claim_more(n - len(runnable)) or []
+                    except Exception as exc:
+                        print(f"discovery_worker: claim top-up failed: {exc}", flush=True)
+                        break
+                    if not got:
+                        break
+                    fresh = False
+                    for name in got:
+                        if not isinstance(name, str) or name in seen_names:
+                            continue
+                        seen_names.add(name)
+                        planned.append(name)
+                        fresh = True
+                        expensive = lookback_too_expensive_reason(name, lookback_cap)
+                        if expensive:
+                            finish(name, ops_fail_record(name, expensive))
+                            continue
+                        runnable.append(name)
+                    if not fresh:
+                        break
+                return runnable
+
             try:
                 _run_inflight(
                     cheap,
-                    n_workers=flight,
+                    n_workers=slots,
                     timeout_s=timeout_s,
                     finish=finish,
                     pool_factory=pool_factory,
                     trial_for=trial_for,
                     on_inflight=on_inflight,
+                    refill=refill if claim_more is not None else None,
+                    prefetch=prefetch,
                 )
             except BaseException:
                 _drop_eval_pool()
@@ -1488,7 +1552,10 @@ def _run_loop(
                 continue
         else:
             try:
-                claimed = _claim_remote(base, token or "", worker_id, max_names, workers)
+                # At least one name per slot. A smaller --max-names used to
+                # lease a single retest and leave the other core idle.
+                claim_n = max(int(max_names), int(workers))
+                claimed = _claim_remote(base, token or "", worker_id, claim_n, workers)
             except Exception as exc:
                 print(f"discovery_worker: claim failed: {exc}", flush=True)
                 if args.once:
@@ -1539,6 +1606,39 @@ def _run_loop(
                 retest_names = [
                     n for n in (claimed.get("retest") or []) if isinstance(n, str)
                 ]
+                retest_set = set(retest_names)
+                fresh_trials = trials.get("n_trials")
+                retest_trials = n_trials_for_retest(trials)
+                trial_of = {
+                    name: retest_trials if name in retest_set else fresh_trials
+                    for name in names
+                }
+
+                def bind_claim(body: dict) -> list[str]:
+                    got = [n for n in (body.get("names") or []) if isinstance(n, str)]
+                    got_retests = {
+                        n for n in (body.get("retest") or []) if isinstance(n, str)
+                    }
+                    census = body.get("trials") if isinstance(body.get("trials"), dict) else {}
+                    n_fresh = census.get("n_trials")
+                    n_re = n_trials_for_retest(census)
+                    for name in got:
+                        if name in got_retests:
+                            retest_set.add(name)
+                            trial_of[name] = n_re
+                        else:
+                            trial_of[name] = n_fresh
+                    return got
+
+                def claim_more(n: int) -> list[str]:
+                    body = _claim_remote(base, token or "", worker_id, int(n), workers)
+                    if body.get("paused") or body.get("stale_rules"):
+                        return []
+                    return bind_claim(body)
+
+                def trials_for(name: str):
+                    return trial_of.get(name)
+
                 result = run_batch(
                     workers=workers,
                     max_names=max_names,
@@ -1549,9 +1649,14 @@ def _run_loop(
                     worker_id=worker_id,
                     sync_base=base,
                     sync_token=token,
-                    n_trials=trials.get("n_trials"),
+                    n_trials=fresh_trials,
                     retest_names=retest_names,
-                    n_trials_retest=n_trials_for_retest(trials),
+                    n_trials_retest=retest_trials,
+                    claim_more=claim_more,
+                    # One extra wave leased behind the running slots, so a
+                    # finish starts the next name without waiting on claim.
+                    prefetch=workers,
+                    trials_for=trials_for,
                 )
             except HistoryUnavailable as exc:
                 print(

@@ -37,6 +37,8 @@ class _ScriptedPool:
         self.starts: dict[str, list[float]] = {}
         self.max_inflight = 0
         self._inflight = 0
+        self.samples: list[int] = []
+        self.tasks: list[tuple] = []
 
     def apply_async(self, fn, args):
         name = args[0]
@@ -46,6 +48,8 @@ class _ScriptedPool:
         self.starts.setdefault(name, []).append(start)
         self._inflight += 1
         self.max_inflight = max(self.max_inflight, self._inflight)
+        self.samples.append(self._inflight)
+        self.tasks.append((name, args[1] if len(args) > 1 else None))
         delay = self.ready_after(name, attempt)
         ar = MagicMock()
 
@@ -203,6 +207,59 @@ class InFlightSchedulingTests(unittest.TestCase):
         self.assertIn("eval_timeout after 50s", by_name["slow"]["fail_reasons"])
         self.assertNotIn("eval_timeout", by_name["fast"]["fail_reasons"][0])
         self.assertLess(batch.clock["t"], 50 + 5)
+
+    def test_mixed_retest_queue_keeps_both_slots_full(self):
+        """A retest and a fresh name share the pool, and a free slot is filled.
+
+        Timeout 0 used to evaluate a one-name claim in the parent process.
+        Top-up claims the next name into the same pool before that slot
+        goes idle, including when the queue mixes retests and new names.
+        """
+        pending = ["fresh", "re_two", "fresh_two"]
+
+        def claim_more(n):
+            got = pending[:n]
+            del pending[:n]
+            return got
+
+        def trials_for(name):
+            return 10 if name.startswith("re_") else 11
+
+        def ready_after(name, attempt):
+            # One sibling stays running while the others complete, so a
+            # serial evaluator would show a single occupied slot.
+            return 100 if name == "fresh" else 1
+
+        with tempfile.TemporaryDirectory() as tmp:
+            batch = _Batch(
+                Path(tmp),
+                timeout="0",
+                workers=2,
+                names=["re_name"],
+            )
+            batch.ready_after = ready_after
+            batch.run(
+                claim_more=claim_more,
+                prefetch=0,
+                n_trials=11,
+                retest_names=["re_name", "re_two"],
+                n_trials_retest=10,
+                trials_for=trials_for,
+            )
+
+        self.assertEqual(len(batch.pools), 1)
+        self.assertEqual(batch.pools[0].max_inflight, 2)
+        self.assertEqual(batch.pools[0].samples, [1, 2, 2, 2])
+        self.assertEqual(
+            batch.pools[0].tasks,
+            [
+                ("re_name", 10),
+                ("fresh", 11),
+                ("re_two", 10),
+                ("fresh_two", 11),
+            ],
+        )
+        self.assertEqual(pending, [])
 
     def test_timeout_reruns_sibling_that_is_still_inside_its_deadline(self):
         with tempfile.TemporaryDirectory() as tmp:
