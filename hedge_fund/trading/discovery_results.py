@@ -26,6 +26,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import struct
 import threading
 from pathlib import Path
@@ -99,6 +100,9 @@ _flock_local = threading.local()
 # that switch PAPER_STATE do not reuse another directory's records.
 _bound: str | None = None
 _map: dict[str, dict] | None = None
+# (inode, bytes scanned) of the jsonl behind ``_map``. Another process may
+# append between our calls; the next locked call scans only the new tail.
+_map_pos: tuple[int, int] | None = None
 _counts_key: tuple | None = None
 _counts: dict | None = None
 # Slim rows for densify seeds. Published by the write path and backfill.
@@ -129,6 +133,8 @@ def _reset_if_moved() -> None:
         return
     _bound = root
     _map = None
+    global _map_pos
+    _map_pos = None
     _counts_key = None
     _counts = None
     _seed_view = None
@@ -314,7 +320,7 @@ def write_result_counts_header(*, tested_pass: int, tested_fail: int) -> None:
             int(tested_pass) + int(tested_fail),
             int(tested_pass),
             int(tested_fail),
-            0,
+            (_generation() + 1) & 0xFFFFFFFF,
         )
         tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
         tmp.write_bytes(blob)
@@ -508,19 +514,27 @@ def _gate_for(row: dict, name: str, fresh: set[str], prev: dict | None) -> str:
     return "backfill"
 
 
-def _scan_jsonl() -> dict[str, dict]:
-    """Latest line per name, remembering the byte span. Write path only."""
+def _scan_jsonl(start: int = 0) -> tuple[dict[str, dict], int]:
+    """Latest line per name from ``start``, remembering the byte span.
+
+    Returns the rows and the offset after the last complete line. A
+    partial last line (a writer mid-append or a crash) is not consumed.
+    Write path only.
+    """
     path = discovery_results_path()
     found: dict[str, dict] = {}
+    end = start
     if not path.exists():
-        return found
+        return found, end
     try:
         with path.open("rb") as fh:
+            fh.seek(start)
             while True:
                 offset = fh.tell()
                 line = fh.readline()
-                if not line:
+                if not line or not line.endswith(b"\n"):
                     break
+                end = offset + len(line)
                 stripped = line.strip()
                 if not stripped:
                     continue
@@ -537,17 +551,35 @@ def _scan_jsonl() -> dict[str, dict]:
                 row["_length"] = len(line)
                 found[name] = row
     except OSError:
-        return {}
-    return found
+        return found, end
+    return found, end
 
 
 def _load_map() -> dict[str, dict]:
-    """Caller holds ``_lock``. Scans the jsonl at most once per state dir."""
-    global _map, _seed_view
+    """Caller holds ``_lock`` and the results file lock.
+
+    The full jsonl is scanned once per state dir. Later calls scan only
+    bytes another process appended since (web, heartbeat, and cycle share
+    the volume). A replaced or shrunk file is rescanned.
+    """
+    global _map, _seed_view, _map_pos
     _reset_if_moved()
-    if _map is None:
-        _map = _scan_jsonl()
-        _seed_view = {name: _seed_item(row) for name, row in _map.items()}
+    try:
+        st = discovery_results_path().stat()
+        ino, size = st.st_ino, st.st_size
+    except OSError:
+        ino, size = None, 0
+    if _map is not None and _map_pos is not None and _map_pos[0] == ino and _map_pos[1] <= size:
+        if _map_pos[1] < size:
+            tail, end = _scan_jsonl(_map_pos[1])
+            _map.update(tail)
+            for name, row in tail.items():
+                _publish_seed(name, row)
+            _map_pos = (ino, end)
+        return _map
+    _map, end = _scan_jsonl()
+    _map_pos = (ino, end)
+    _seed_view = {name: _seed_item(row) for name, row in _map.items()}
     return _map
 
 
@@ -611,9 +643,9 @@ def _install_full_index(rows: dict[str, dict]) -> None:
     before the unlink cannot fold those rows on top of the new index.
     Caller holds ``_lock`` and the exclusive results file lock.
     """
-    generation = _generation()
-    if _read_journal_records(generation):
-        generation += 1
+    # Always a new generation: any journal on disk (live, stale, or one a
+    # crash leaves behind before the unlink) then no longer applies.
+    generation = (_generation() + 1) & 0xFFFFFFFF
     _write_index(rows, generation=generation)
     _remove_journal()
 
@@ -631,12 +663,19 @@ def _index_current(rows: dict[str, dict]) -> bool:
 
 
 def _append_records(pending: list[dict], rows: dict[str, dict]) -> None:
+    """Caller holds ``_lock`` and the exclusive results file lock."""
+    global _map_pos
     path = discovery_results_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     from hedge_fund.trading.handler_timing import io_timer
 
     with io_timer():
         with path.open("ab") as fh:
+            fh.seek(0, os.SEEK_END)
+            if fh.tell() and not _ends_with_newline(path, fh.tell()):
+                # A crash left a partial line. Close it so this record is
+                # its own line on a rescan.
+                fh.write(b"\n")
             for record in pending:
                 payload = json.dumps(
                     {key: value for key, value in record.items() if not key.startswith("_")},
@@ -652,6 +691,17 @@ def _append_records(pending: list[dict], rows: dict[str, dict]) -> None:
                     rows[name] = stored
                     _publish_seed(name, stored)
             fh.flush()
+            if rows is _map:
+                _map_pos = (os.fstat(fh.fileno()).st_ino, fh.tell())
+
+
+def _ends_with_newline(path: Path, size: int) -> bool:
+    try:
+        with path.open("rb") as fh:
+            fh.seek(size - 1)
+            return fh.read(1) == b"\n"
+    except OSError:
+        return True
 
 
 def _apply_rows(
@@ -888,6 +938,35 @@ def _read_span(fh, file_offset: int, length: int) -> dict | None:
     return row if isinstance(row, dict) else None
 
 
+_NAME_PREFIX = re.compile(rb'^\{\s*"strategy"\s*:\s*("(?:[^"\\]|\\.)*")')
+
+
+def _span_name(fh, file_offset: int, length: int) -> str | None:
+    """Strategy name of one jsonl span, reading only its first bytes.
+
+    Records are written with ``strategy`` as the first key. Falls back to a
+    full decode when the prefix does not parse.
+    """
+    if length <= 0:
+        return None
+    fh.seek(int(file_offset))
+    try:
+        head = fh.read(min(int(length), 512))
+    except OSError:
+        return None
+    match = _NAME_PREFIX.match(head)
+    if match:
+        try:
+            name = json.loads(match.group(1))
+        except ValueError:
+            name = None
+        if isinstance(name, str):
+            return name or None
+    row = _read_span(fh, file_offset, length)
+    name = row.get("strategy") if row else None
+    return name if isinstance(name, str) and name else None
+
+
 def _page_base(
     *,
     offset: int,
@@ -1009,21 +1088,20 @@ def _page_merged(
         emitted = 0
         need = offset + limit
 
-        def resolve_base() -> tuple[int, int, dict] | None:
+        def resolve_base() -> tuple[int, int, tuple] | None:
+            # Reads only the name prefix of each skipped base ref; the full
+            # span is decoded only when it lands on the page.
             nonlocal b_i
             while b_i < len(base_refs):
-                file_offset, length, unix, _flags = base_refs[b_i]
+                ref = base_refs[b_i]
                 b_i += 1
-                row = _read_span(fh, file_offset, length)
-                if row is None:
-                    continue
-                name = row.get("strategy")
-                if not isinstance(name, str) or not name:
+                name = _span_name(fh, ref[0], ref[1])
+                if name is None:
                     continue
                 hashed = _name_hash(name)
                 if hashed in latest:
                     continue
-                return int(unix), hashed, row
+                return int(ref[2]), hashed, ref
             return None
 
         while emitted < need:
@@ -1054,7 +1132,9 @@ def _page_merged(
             if resolved is None:
                 break
             if emitted >= offset:
-                records.append(resolved[2])
+                row = _read_span(fh, resolved[2][0], resolved[2][1])
+                if row is not None:
+                    records.append(row)
             emitted += 1
             resolved = None
     finally:
@@ -1120,7 +1200,7 @@ def compact_results_index(*, force: bool = False) -> bool:
             snapshot = {name: dict(row) for name, row in rows.items()}
             ix_stat = _file_stat(discovery_results_index_path())
             j_stat = _file_stat(discovery_results_journal_path())
-            next_gen = generation + 1
+            next_gen = (generation + 1) & 0xFFFFFFFF
     blob = _index_bytes(snapshot, next_gen)
     with _lock:
         with _ResultsLock(exclusive=True):
@@ -1141,7 +1221,7 @@ def compact_results_index(*, force: bool = False) -> bool:
 
 def records_by_name() -> dict[str, dict]:
     """Write-path snapshot. Not for request handlers."""
-    with _lock:
+    with _lock, _ResultsLock(exclusive=False):
         current = _load_map()
         return {
             name: {key: value for key, value in row.items() if not str(key).startswith("_")}

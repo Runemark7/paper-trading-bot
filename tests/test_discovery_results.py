@@ -433,6 +433,7 @@ class IncrementalIndexTests(unittest.TestCase):
 
         results._bound = None
         results._map = None
+        results._map_pos = None
         results._seed_view = None
         results._counts_key = None
         results._counts = None
@@ -534,6 +535,9 @@ class IncrementalIndexTests(unittest.TestCase):
             }))
             with patch.dict(os.environ, {"PAPER_STATE": tmp}):
                 backfill_discovery_results()
+                installed_gen = _HEADER.unpack(
+                    (root / DISCOVERY_RESULTS_IX).read_bytes()[:_HEADER.size]
+                )[5]
                 sync_discovery_results([
                     _eval("journal_name", qualified=True, tested_at="2026-10-08T02:00:00+00:00"),
                 ], fresh={"journal_name"})
@@ -547,10 +551,12 @@ class IncrementalIndexTests(unittest.TestCase):
                     (root / DISCOVERY_RESULTS_IX).read_bytes()[:_HEADER.size]
                 )
                 self.assertEqual(magic, b"DRIX")
-                self.assertEqual(generation, 1)
+                self.assertEqual(generation, installed_gen + 1)
                 self.assertEqual(count, 2)
                 # A journal stamped for the previous generation must not add a row.
-                journal.write_bytes(_JHDR.pack(_JMAGIC, _JVERSION, 0, 0) + b"\x00" * 32)
+                journal.write_bytes(
+                    _JHDR.pack(_JMAGIC, _JVERSION, installed_gen, 0) + b"\x00" * 32
+                )
                 self._forget()
                 self.assertEqual(peek_result_counts(), before)
                 from hedge_fund.web.discovery import discovery_results_response
@@ -631,6 +637,154 @@ class IncrementalIndexTests(unittest.TestCase):
         self.assertEqual((size - _JHDR.size) % _JREC.size, 0)
         self.assertEqual(counts["unique"], 8)
         self.assertEqual(counts["tested_pass"] + counts["tested_fail"], 8)
+
+    def test_another_process_append_is_seen_before_the_next_write(self):
+        """Web, heartbeat, and cycle each keep a map; none may go stale."""
+        import subprocess
+        import sys
+
+        from hedge_fund.trading.discovery_results import (
+            compact_results_index,
+            page_result_records,
+            sync_discovery_results,
+        )
+
+        script = (
+            "import json,sys\n"
+            "from hedge_fund.trading.discovery_results import sync_discovery_results\n"
+            "rows=json.loads(sys.argv[1])\n"
+            "sync_discovery_results(rows, fresh={r['strategy'] for r in rows})\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "discovery_tested.json").write_text(json.dumps({"v": 1, "names": {}}))
+            with patch.dict(os.environ, {"PAPER_STATE": tmp}):
+                backfill_discovery_results()
+                sync_discovery_results([
+                    _eval("mine", qualified=False, tested_at="2026-10-08T01:00:00+00:00"),
+                ], fresh={"mine"})
+                other = [
+                    _eval("theirs", qualified=False, tested_at="2026-10-08T02:00:00+00:00"),
+                ]
+                subprocess.run(
+                    [sys.executable, "-c", script, json.dumps(other)],
+                    check=True,
+                    env={**os.environ, "PAPER_STATE": tmp},
+                )
+                # This process re-posts the other process's name as a pass.
+                sync_discovery_results([
+                    _eval("theirs", qualified=True, tested_at="2026-10-08T03:00:00+00:00"),
+                ], fresh={"theirs"})
+                counts = peek_result_counts()
+                by_name = records_by_name()
+                self.assertTrue(compact_results_index(force=True))
+                self._forget()
+                compacted = peek_result_counts()
+                names = [r["strategy"] for r in page_result_records(offset=0, limit=10)[0]]
+        self.assertEqual(counts, {"unique": 2, "tested_pass": 1, "tested_fail": 1})
+        self.assertEqual(set(by_name), {"mine", "theirs"})
+        self.assertEqual(compacted, counts)
+        self.assertEqual(names, ["theirs", "mine"])
+
+    def test_torn_jsonl_tail_does_not_swallow_the_next_record(self):
+        from hedge_fund.trading.discovery_results import (
+            discovery_results_path,
+            page_result_records,
+            sync_discovery_results,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "discovery_tested.json").write_text(json.dumps({"v": 1, "names": {}}))
+            with patch.dict(os.environ, {"PAPER_STATE": tmp}):
+                backfill_discovery_results()
+                sync_discovery_results([
+                    _eval("first", qualified=False, tested_at="2026-10-08T01:00:00+00:00"),
+                ], fresh={"first"})
+                with discovery_results_path().open("ab") as fh:
+                    fh.write(b'{"strategy":"half')
+                self._forget()
+                sync_discovery_results([
+                    _eval("second", qualified=True, tested_at="2026-10-08T02:00:00+00:00"),
+                ], fresh={"second"})
+                self._forget()
+                rescanned = records_by_name()
+                names = [r["strategy"] for r in page_result_records(offset=0, limit=10)[0]]
+                counts = peek_result_counts()
+        self.assertEqual(set(rescanned), {"first", "second"})
+        self.assertEqual(names, ["second", "first"])
+        self.assertEqual(counts, {"unique": 2, "tested_pass": 1, "tested_fail": 1})
+
+    def test_counts_header_and_full_install_retire_any_journal(self):
+        """A crash between the base replace and the journal unlink."""
+        from hedge_fund.trading.discovery_results import (
+            discovery_results_journal_path,
+            sync_discovery_results,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "discovery_tested.json").write_text(json.dumps({"v": 1, "names": {}}))
+            with patch.dict(os.environ, {"PAPER_STATE": tmp}):
+                write_result_counts_header(tested_pass=0, tested_fail=0)
+                sync_discovery_results([
+                    _eval("j1", qualified=True, tested_at="2026-10-08T01:00:00+00:00"),
+                ], fresh={"j1"})
+                journal = discovery_results_journal_path()
+                saved = journal.read_bytes()
+                write_result_counts_header(tested_pass=1, tested_fail=0)
+                journal.write_bytes(saved)  # the unlink never happened
+                self._forget()
+                after_header = peek_result_counts()
+        self.assertEqual(after_header, {"unique": 1, "tested_pass": 1, "tested_fail": 0})
+
+    def test_deep_merged_page_matches_the_compacted_order(self):
+        from hedge_fund.trading.discovery_results import (
+            compact_results_index,
+            page_result_records,
+            sync_discovery_results,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "discovery_tested.json").write_text(json.dumps({"v": 1, "names": {}}))
+            with patch.dict(os.environ, {"PAPER_STATE": tmp}):
+                backfill_discovery_results()
+                for i in range(30):
+                    name = f"b{i:02d}"
+                    sync_discovery_results([
+                        _eval(name, qualified=i % 3 == 0, tested_at=f"2026-10-08T01:{i:02d}:00+00:00"),
+                    ], fresh={name})
+                compact_results_index(force=True)
+                for i in range(0, 30, 4):
+                    name = f"b{i:02d}"
+                    sync_discovery_results([
+                        _eval(name, qualified=i % 3 != 0, tested_at=f"2026-10-08T02:{i:02d}:00+00:00"),
+                    ], fresh={name})
+                for i in range(5):
+                    name = f"n{i}"
+                    sync_discovery_results([
+                        _eval(name, qualified=True, tested_at=f"2026-10-08T01:{i:02d}:30+00:00"),
+                    ], fresh={name})
+
+                def walk(status):
+                    out, offset = [], 0
+                    while True:
+                        page = page_result_records(offset=offset, limit=4, status=status)[0]
+                        if not page:
+                            return out
+                        out += [(r["strategy"], r["qualified"]) for r in page]
+                        offset += 4
+
+                merged = {status: walk(status) for status in (None, "pass", "fail")}
+                compact_results_index(force=True)
+                self._forget()
+                compacted = {status: walk(status) for status in (None, "pass", "fail")}
+        self.assertEqual(merged, compacted)
+        self.assertEqual(len(merged[None]), 35)
+        self.assertEqual(len({n for n, _ in merged[None]}), 35)
+        self.assertTrue(all(q for _, q in merged["pass"]))
+        self.assertFalse(any(q for _, q in merged["fail"]))
 
 
 if __name__ == "__main__":
