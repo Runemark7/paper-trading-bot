@@ -356,8 +356,9 @@ def append_discovery_evaluations(
     runs in that same lock, before it is released.
 
     Full records for this batch are appended to the results log after the
-    lock is released. Compaction of a large delta or journal runs on a
-    daemon thread, not on this request.
+    lock is released. The results index gains one journal record per
+    changed name and is not rewritten. Compaction of a large delta or
+    journal runs on a daemon thread, not on this request.
     """
     if not eval_records:
         return load_discovery_log()
@@ -420,10 +421,16 @@ def _index_compact_due() -> bool:
         return False
 
 
+def _results_compact_due() -> bool:
+    from hedge_fund.trading.discovery_results import results_compact_due
+
+    return results_compact_due()
+
+
 def schedule_state_compact() -> None:
     """Fold a large delta or journal into its base file off the request."""
     global _compact_scheduled
-    if not _log_compact_due() and not _index_compact_due():
+    if not _log_compact_due() and not _index_compact_due() and not _results_compact_due():
         return
     with _compact_guard:
         if _compact_scheduled:
@@ -453,9 +460,14 @@ def compact_discovery_state() -> None:
     A crash after the base rename and before the journal unlink is safe:
     the log reader drops a delta row already in the base, and the tested
     journal carries the base's ``jgen`` so a stale journal is ignored.
+    The results index uses its own file lock, not the discovery lock.
     """
     _compact_log()
     _compact_tested_index()
+    if _results_compact_due():
+        from hedge_fund.trading.discovery_results import compact_results_index
+
+        compact_results_index()
 
 
 def _compact_log() -> None:
