@@ -13,6 +13,7 @@ one-per-family rule (``families.py``): a twin is parked to
 """
 from __future__ import annotations
 
+import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -48,7 +49,12 @@ from hedge_fund.trading.requalify import (
     requalify_path,
     save_requalify_state,
 )
+from hedge_fund.paths import state_root
 from hedge_fund.trading.store import paper_state_lock
+
+# One parked-row scan per paper-state dir. A later fail-only ingest does
+# not walk the display log again. A qualified row or force_admit still scans.
+_park_scan_dir: str | None = None
 
 _EVAL_REQUIRED = ("strategy", "qualified", "tested_at")
 
@@ -193,6 +199,68 @@ def _apply_force_admit(
     return admitted
 
 
+def _park_scan_due(*, force: bool) -> bool:
+    """True when this ingest should walk the display log for parked flips."""
+    if force:
+        return True
+    return _park_scan_dir != str(state_root())
+
+
+def _mark_park_scanned() -> None:
+    global _park_scan_dir
+    _park_scan_dir = str(state_root())
+
+
+def _touch_heartbeat_and_flight(payload: dict) -> None:
+    """Lease heartbeat and in-flight file. Caller holds the discovery lock."""
+    hb = payload.get("heartbeat")
+    status = None
+    worker_id = None
+    evaluating = None
+    if isinstance(hb, dict):
+        status = hb.get("status")
+        raw_id = hb.get("worker_id")
+        if isinstance(raw_id, str):
+            worker_id = raw_id
+        raw_evaluating = hb.get("evaluating")
+        if isinstance(raw_evaluating, list):
+            evaluating = raw_evaluating
+    elif hb:
+        status = str(hb)
+    if not worker_id and isinstance(payload.get("worker_id"), str):
+        worker_id = payload.get("worker_id")
+    if isinstance(hb, dict) or hb or worker_id:
+        apply_heartbeat_unlocked(str(status) if status else None)
+    if worker_id:
+        touch_worker_unlocked(
+            worker_id,
+            str(status) if status else None,
+            evaluating=evaluating,
+        )
+
+    flight = payload.get("in_flight")
+    if payload.get("clear_in_flight"):
+        clear_in_flight()
+    elif isinstance(flight, dict):
+        names = [n for n in (flight.get("names") or []) if isinstance(n, str)]
+        remaining = flight.get("remaining")
+        completed = flight.get("completed")
+        write_in_flight(
+            names,
+            current=flight.get("current") if isinstance(flight.get("current"), str) else None,
+            remaining=[n for n in remaining if isinstance(n, str)] if isinstance(remaining, list) else None,
+            completed=[n for n in completed if isinstance(n, str)] if isinstance(completed, list) else None,
+            batch_size=flight.get("batch_size"),
+            started_at=flight.get("started_at") if isinstance(flight.get("started_at"), str) else None,
+            source="windows_worker",
+        )
+
+
+def _timing(started: float, phases: dict) -> dict:
+    phases["total"] = round((time.perf_counter() - started) * 1000, 1)
+    return phases
+
+
 def ingest_discovery_payload(payload: dict) -> dict:
     """Apply a worker batch. Caller must already have checked the ingest token.
 
@@ -216,6 +284,12 @@ def ingest_discovery_payload(payload: dict) -> dict:
     if raw_force is not None and not isinstance(raw_force, list):
         raise ValueError("force_admit must be a list")
 
+    started = time.perf_counter()
+    phases: dict[str, float] = {}
+
+    def mark(label: str, t: float) -> None:
+        phases[label] = round((time.perf_counter() - t) * 1000, 1)
+
     ingested: list[str] = []
     skipped: list[dict] = []
     admitted: list[str] = []
@@ -226,10 +300,37 @@ def ingest_discovery_payload(payload: dict) -> dict:
     added_extended: list[str] = []
     requalify_recorded: list[str] = []
 
+    qualified_in = any(isinstance(row, dict) and row.get("qualified") is True for row in raw_evals)
+    heartbeat_only = not raw_evals and not raw_extended and not raw_force
+    if heartbeat_only and not _park_scan_due(force=False):
+        t_hb = time.perf_counter()
+        with paper_state_lock("discovery"):
+            _touch_heartbeat_and_flight(payload)
+        mark("heartbeat", t_hb)
+        return {
+            "ok": True,
+            "paper_only": True,
+            "ingested": [],
+            "skipped": [],
+            "admitted": [],
+            "proposed": [],
+            "admission": "manual",
+            "requalified": [],
+            "requalify_recorded": [],
+            "force_admitted": [],
+            "rejected_invalid": [],
+            "extended_added": [],
+            "family_parked": {},
+            "source": payload.get("source") or "windows_worker",
+            "timing_ms": _timing(started, phases),
+        }
+
     with paper_state_lock("discovery"):
         requal_state = load_requalify_state() if requalify_path().exists() else None
-        log = load_discovery_log()
-        already = tested_discovery_names(log)
+        # Fail-once is the index union the display log (including the delta).
+        # The parsed log is cached, so this is not a fresh multi-megabyte parse
+        # on every result.
+        already = tested_discovery_names(load_discovery_log())
         st = load_pool()
         grads = load_graduated()
         existing = {c["name"] for c in (st.get("champions") or []) if c.get("name")}
@@ -278,8 +379,16 @@ def ingest_discovery_payload(payload: dict) -> dict:
         if requalify_recorded:
             save_requalify_state(requal_state)
 
-        log = load_discovery_log()
-        requal_rows, requal_names = requalify_parked_log(log, existing_names=existing)
+        scan = _park_scan_due(force=qualified_in or bool(raw_force))
+        t_scan = time.perf_counter()
+        if scan:
+            log = load_discovery_log()
+            requal_rows, requal_names = requalify_parked_log(log, existing_names=existing)
+            _mark_park_scanned()
+        else:
+            log = None
+            requal_rows, requal_names = [], []
+        mark("park_scan", t_scan)
         if requal_names:
             # The flip is a proposal. It does not seat.
             for rec in requal_rows:
@@ -288,6 +397,8 @@ def ingest_discovery_payload(payload: dict) -> dict:
                     proposed.append(rec["strategy"])
 
         if raw_force:
+            if log is None:
+                log = load_discovery_log()
             force_source = str(payload.get("source") or "manual_force_admit")
             force_admitted = _apply_force_admit(
                 raw_force,
@@ -301,7 +412,7 @@ def ingest_discovery_payload(payload: dict) -> dict:
                 if name not in admitted:
                     admitted.append(name)
 
-        if requal_names or force_admitted:
+        if (requal_names or force_admitted) and log is not None:
             save_discovery_log(log)
 
         families = None
@@ -327,47 +438,9 @@ def ingest_discovery_payload(payload: dict) -> dict:
         if clear_names:
             clear_leases_unlocked(clear_names)
 
-        hb = payload.get("heartbeat")
-        status = None
-        worker_id = None
-        evaluating = None
-        if isinstance(hb, dict):
-            status = hb.get("status")
-            raw_id = hb.get("worker_id")
-            if isinstance(raw_id, str):
-                worker_id = raw_id
-            raw_evaluating = hb.get("evaluating")
-            if isinstance(raw_evaluating, list):
-                evaluating = raw_evaluating
-        elif hb:
-            status = str(hb)
-        if not worker_id and isinstance(payload.get("worker_id"), str):
-            worker_id = payload.get("worker_id")
-        if isinstance(hb, dict) or hb or worker_id:
-            apply_heartbeat_unlocked(str(status) if status else None)
-        if worker_id:
-            touch_worker_unlocked(
-                worker_id,
-                str(status) if status else None,
-                evaluating=evaluating,
-            )
-
-        flight = payload.get("in_flight")
-        if payload.get("clear_in_flight"):
-            clear_in_flight()
-        elif isinstance(flight, dict):
-            names = [n for n in (flight.get("names") or []) if isinstance(n, str)]
-            remaining = flight.get("remaining")
-            completed = flight.get("completed")
-            write_in_flight(
-                names,
-                current=flight.get("current") if isinstance(flight.get("current"), str) else None,
-                remaining=[n for n in remaining if isinstance(n, str)] if isinstance(remaining, list) else None,
-                completed=[n for n in completed if isinstance(n, str)] if isinstance(completed, list) else None,
-                batch_size=flight.get("batch_size"),
-                started_at=flight.get("started_at") if isinstance(flight.get("started_at"), str) else None,
-                source="windows_worker",
-            )
+        t_hb = time.perf_counter()
+        _touch_heartbeat_and_flight(payload)
+        mark("heartbeat", t_hb)
 
     return {
         "ok": True,
@@ -384,4 +457,5 @@ def ingest_discovery_payload(payload: dict) -> dict:
         "extended_added": added_extended,
         "family_parked": (families or {}).get("parked") or {},
         "source": payload.get("source") or "windows_worker",
+        "timing_ms": _timing(started, phases),
     }

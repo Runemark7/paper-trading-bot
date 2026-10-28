@@ -26,6 +26,9 @@ def _sharpe(item: object) -> float | None:
     return number
 
 
+_census_cache: dict = {"key": None, "value": None}
+
+
 def trial_census() -> dict:
     """Trial count and the cross-sectional stdev of stored trade Sharpes.
 
@@ -33,7 +36,16 @@ def trial_census() -> dict:
     for the audit. The DSR itself uses the variance of the daily-return
     Sharpe estimator (same units as the Sharpe being deflated), not this
     cross-section — the stored Sharpes are a different statistic.
+
+    Repeated calls reuse the count while ``discovery_tested.json`` is
+    unchanged, so a claim does not walk every stored Sharpe again.
     """
+    from hedge_fund.trading.tested_index import tested_index_fingerprint
+
+    key = tested_index_fingerprint()
+    cached = _census_cache.get("value")
+    if key is not None and _census_cache.get("key") == key and isinstance(cached, dict):
+        return dict(cached)
     metrics = load_tested_metrics()
     n_ops = 0
     sharpes: list[float] = []
@@ -46,7 +58,7 @@ def trial_census() -> dict:
             sharpes.append(number)
     n_backtested = len(sharpes)
     std = statistics.stdev(sharpes) if len(sharpes) >= 2 else None
-    return {
+    value = {
         "n_metrics": len(metrics),
         "n_ops_park": n_ops,
         "n_backtested": n_backtested,
@@ -56,6 +68,10 @@ def trial_census() -> dict:
         "n_trials": n_backtested + 1,
         "trade_sharpe_std": None if std is None else round(float(std), 6),
     }
+    if key is not None:
+        _census_cache["key"] = key
+        _census_cache["value"] = value
+    return dict(value)
 
 
 def n_trials_for_retest(census: object) -> int | None:
