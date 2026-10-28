@@ -154,6 +154,11 @@ and no `crypto_history_5m.json` placeholder.
    (default 1200s). A dead worker's names return to the pool about 15
    minutes after its last heartbeat, including names it had not started.
    A live worker's heartbeat keeps the names it has not started yet.
+   The worker asks for at least `--workers` names. While those evals run
+   it claims another wave, so a finished slot starts the next name
+   without waiting for the whole claim to drain. Pending buy-and-hold
+   retests and fresh names share that pool. A retest's trial count is
+   `n_backtested`, not `n_backtested + 1`.
    If the unleased pool cannot cover `n`, or never-tested work is below
    twice the active lease capacity, prod refills `discovery_extended.json`.
    The recipe runs first (`iter_recipe_names` / `next_refill_batch`). When

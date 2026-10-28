@@ -258,6 +258,35 @@ class RetestLaneTests(unittest.TestCase):
         self.assertEqual(after["n_trials"], before + 1)
         self.assertIn('"retest":true', body.replace(" ", ""))
 
+    def test_claim_fills_both_slots_from_a_retest_and_a_fresh_name(self):
+        from hedge_fund.trading.discovery import save_discovery_log
+        from hedge_fund.trading.leases import claim_discovery_batch
+
+        name = "dip_222b_lt8pc&h4_ema_abv_160"
+        fresh = ["don_hi_12", "don_hi_18"]
+        tmp, root = self._state()
+        try:
+            with patch.dict(os.environ, {
+                "PAPER_STATE": str(root),
+                "DISCOVERY_EVAL_TIMEOUT_SECONDS": "600",
+                "DISCOVERY_RANDOM_SHARE": "0",
+                "DISCOVERY_PAIRED_SHARE": "0",
+            }):
+                save_discovery_log([_bh(name)])
+                applied = requeue_v4_bh(apply=True, now="2026-10-27T22:40:00+00:00")
+                self.assertEqual(applied["names"], [name])
+                with patch("hedge_fund.trading.leases.discovery_universe", return_value=list(fresh)):
+                    with patch("hedge_fund.trading.leases._mint_unlocked", side_effect=AssertionError("mint")):
+                        with patch("hedge_fund.trading.leases.schedule_refill_buffer"):
+                            claimed = claim_discovery_batch("zealous-lion", 2, parallel=2)
+        finally:
+            tmp.cleanup()
+        self.assertEqual(claimed["retest"], [name])
+        self.assertEqual(len(claimed["names"]), 2)
+        self.assertEqual(claimed["names"][0], name)
+        self.assertIn(claimed["names"][1], fresh)
+        self.assertNotIn(claimed["names"][1], claimed["retest"])
+
     def test_worker_uses_the_backtested_count_for_a_retest(self):
         from scripts.discovery_worker import _init_pool, _trials_for
 
