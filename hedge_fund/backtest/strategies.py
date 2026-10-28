@@ -43,6 +43,7 @@ from hedge_fund.signals.dynamic import (
     parse_strategy,
 )
 from hedge_fund.signals.htf import clear_htf_cache
+from hedge_fund.signals.structure import clear_structure_cache
 from hedge_fund.signals.wavetrend import clear_wavetrend_cache
 
 
@@ -89,6 +90,7 @@ def clear_qual_caches() -> None:
     clear_sma_cache()
     clear_htf_cache()
     clear_wavetrend_cache()
+    clear_structure_cache()
 
 
 def _atr_series(highs, lows, closes, period=14):

@@ -52,6 +52,10 @@ class RequalifyTests(unittest.TestCase):
         self._env.start()
         self._uni = patch("hedge_fund.trading.leases.discovery_universe", return_value=list(FRESH))
         self._uni.start()
+        # Buffer mint is a daemon. It must not write into this directory
+        # while tearDown deletes it.
+        self._sched = patch("hedge_fund.trading.leases.schedule_refill_buffer")
+        self._sched.start()
         from hedge_fund.trading.champions import save_graduated, save_pool
         from hedge_fund.trading.store import paper_state_lock
         from hedge_fund.trading.tested_index import save_tested_index
@@ -63,6 +67,7 @@ class RequalifyTests(unittest.TestCase):
         self.t0 = datetime(2026, 10, 8, 10, 0, tzinfo=timezone.utc)
 
     def tearDown(self):
+        self._sched.stop()
         self._uni.stop()
         self._env.stop()
         self._tmp.cleanup()

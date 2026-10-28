@@ -390,5 +390,96 @@ class CompactDiscoveryLogTests(unittest.TestCase):
         self.assertNotIn("park_scan", second["timing_ms"])
 
 
+class ClaimIngestHotPathTests(unittest.TestCase):
+    def test_retest_claim_and_ingest_stay_under_a_quarter_second(self):
+        """Prod-shaped files: a warm claim/ingest must not rescan the world."""
+        import time
+
+        from hedge_fund.trading.ingest import ingest_discovery_payload
+        from hedge_fund.trading.leases import claim_discovery_batch
+        from hedge_fund.trading.requeue_v4_bh import BATCH_ID, STATE_NAME
+
+        row = {
+            "strategy": "s",
+            "qualified": False,
+            "sharpe": 0.22,
+            "trades": 40,
+            "test_pnl": 3.0,
+            "fail_reasons": ["daily_sharpe 0.22 <= bh_daily_sharpe 0.40"],
+            "timeframe": "5m",
+            "risk_policy": "rm_v1",
+            "gate_rules": "sltp_cap100_bhdsr_tiled87_20261008",
+            "tested_at": "2026-10-20T00:00:00+00:00",
+            "daily_sharpe": 0.22,
+            "bh_daily_sharpe": 0.4,
+            "regimes_tested": 18,
+            "symbols": ["BTC/USDT"],
+            "sma_stack_oos_pnl": 1.0,
+        }
+        rows = [{**row, "strategy": f"n{i:05d}"} for i in range(4000)]
+        metrics = {f"n{i:05d}": {"sharpe": 0.2, "trades": 30} for i in range(8000)}
+        order = [f"n{i:05d}" for i in range(200)]
+        fresh = {
+            "strategy": "fresh_0",
+            "qualified": False,
+            "sharpe": 0.11,
+            "trades": 8,
+            "test_pnl": -1.0,
+            "train_pnl": 0.0,
+            "win_rate_pct": 40.0,
+            "fail_reasons": ["oos_sharpe 0.11 < 0.30"],
+            "timeframe": "5m",
+            "risk_policy": "rm_v1",
+            "gate_rules": "gate_v5_btc_holdout_dsr_pbo_20261027",
+            "tested_at": "2026-10-28T01:00:00+00:00",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "discovery_log.json").write_text(json.dumps(rows, separators=(",", ":")))
+            (root / "discovery_tested.json").write_text(json.dumps({
+                "v": 1,
+                "paper_only": True,
+                "names": {name: 0 for name in metrics},
+                "metrics": metrics,
+            }, separators=(",", ":")))
+            (root / "champions.json").write_text(json.dumps({"champions": [], "synced_until": ""}))
+            (root / STATE_NAME).write_text(json.dumps({
+                "batch_id": BATCH_ID,
+                "applied_at": "2026-10-28T00:00:00+00:00",
+                "order": order,
+                "entries": {
+                    name: {
+                        "status": "pending",
+                        "prior_gate_rules": row["gate_rules"],
+                        "prior_fail_reasons": row["fail_reasons"],
+                    }
+                    for name in order
+                },
+            }))
+            with patch.dict(os.environ, {"PAPER_STATE": str(root)}):
+                ingest_discovery_payload({"evaluations": [fresh]})
+                ingest_ms = []
+                for i in range(3):
+                    ev = {**fresh, "strategy": f"fresh_{i+1}", "tested_at": f"2026-10-28T01:00:0{i+1}+00:00"}
+                    t0 = time.perf_counter()
+                    ingest_discovery_payload({
+                        "evaluations": [ev],
+                        "heartbeat": {"status": "running", "worker_id": "zealous-lion"},
+                    })
+                    ingest_ms.append((time.perf_counter() - t0) * 1000)
+                claim_ms = []
+                for _ in range(3):
+                    t0 = time.perf_counter()
+                    body = claim_discovery_batch("zealous-lion", 2, parallel=2)
+                    claim_ms.append((time.perf_counter() - t0) * 1000)
+                    self.assertEqual(len(body["names"]), 2)
+        print(
+            f"TIMING warm_ingest_ms={['%.1f' % v for v in ingest_ms]} "
+            f"warm_claim_ms={['%.1f' % v for v in claim_ms]}"
+        )
+        self.assertLess(sorted(ingest_ms)[1], 250)
+        self.assertLess(sorted(claim_ms)[1], 250)
+
+
 if __name__ == "__main__":
     unittest.main()

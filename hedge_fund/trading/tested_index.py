@@ -36,6 +36,8 @@ def tested_index_path() -> Path:
 
 _doc_guard = threading.Lock()
 _doc_cache: dict = {"key": None, "data": None}
+# (log fingerprint, index fingerprint) already merged into the index.
+_covers: tuple | None = None
 
 
 def tested_index_fingerprint() -> tuple | None:
@@ -164,21 +166,33 @@ def load_tested_metrics() -> dict[str, TestedMetric]:
     return _metrics_from_document(_read_document())
 
 
-def save_tested_index(index: dict[str, bool], metrics: dict | None = None) -> None:
+def save_tested_index(
+    index: dict[str, bool],
+    metrics: dict | None = None,
+    *,
+    cleaned: bool = False,
+) -> None:
     """Atomic replace. Caller holds ``paper_state_lock('discovery')``.
 
     ``metrics is None`` keeps whatever metrics are already on disk so a
-    qualified-flag write cannot wipe them.
+    qualified-flag write cannot wipe them. ``cleaned=True`` skips the
+    full re-validation of every stored metric (the caller just loaded
+    them and overlaid one row).
     """
     if metrics is None:
         metrics = load_tested_metrics()
+        cleaned = True
+    elif not cleaned:
+        metrics = _clean_metrics(metrics)
+    else:
+        metrics = {name: metrics[name] for name in sorted(metrics) if isinstance(name, str) and name}
     path = tested_index_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "v": 1,
         "paper_only": True,
         "names": {name: 1 if qual else 0 for name, qual in sorted(index.items())},
-        "metrics": _clean_metrics(metrics),
+        "metrics": metrics,
     }
     tmp = path.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(payload, separators=(",", ":")))
@@ -233,25 +247,43 @@ def merge_tested_metrics(metrics: dict[str, dict], rows: list) -> bool:
     return changed
 
 
+def mark_index_covers_log() -> None:
+    """The on-disk index already includes the current display log."""
+    global _covers
+    from hedge_fund.trading.discovery import discovery_log_fingerprint
+
+    _covers = (discovery_log_fingerprint(), tested_index_fingerprint())
+
+
 def ensure_tested_index() -> dict[str, bool]:
     """Merge the on-disk display log into the index.
 
     The log is read before the lock. The lock covers only the index
     read-modify-write, so a slow log parse does not block claim, ingest,
     or champions. No-ops without creating the state dir when neither file
-    exists.
+    exists. A second call with the same files returns the cached flags
+    and does not walk the log again.
     """
-    from hedge_fund.trading.discovery import discovery_log_path, load_discovery_log
+    global _covers
+    from hedge_fund.trading.discovery import discovery_log_fingerprint, discovery_log_path, load_discovery_log
 
     if not tested_index_path().exists() and not discovery_log_path().exists():
         return {}
+    fp = (discovery_log_fingerprint(), tested_index_fingerprint())
+    if _covers == fp and fp[1] is not None:
+        return load_tested_index()
     rows = load_discovery_log()
     with paper_state_lock("discovery"):
+        # Another writer may have covered the log while we parsed it.
+        fp = (discovery_log_fingerprint(), tested_index_fingerprint())
+        if _covers == fp and fp[1] is not None:
+            return load_tested_index()
         index, metrics = load_index_and_metrics()
         flags_changed = merge_tested_rows(index, rows)
         metrics_changed = merge_tested_metrics(metrics, rows)
         if flags_changed or metrics_changed:
-            save_tested_index(index, metrics)
+            save_tested_index(index, metrics, cleaned=True)
+        mark_index_covers_log()
         return index
 
 
