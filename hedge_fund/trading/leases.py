@@ -810,6 +810,37 @@ def _take_retests(
     return chosen
 
 
+def _take_library(
+    state: dict,
+    n: int,
+    worker_id: str,
+    expires: datetime,
+    now: datetime,
+    tested: set[str],
+) -> list[str]:
+    """Lease untested canonical library names, in catalog order. Never mints."""
+    if n <= 0:
+        return []
+    from hedge_fund.library.catalog import claim_names
+
+    book = _book_names()
+    leases: dict = state["leases"]
+    chosen: list[str] = []
+    for name in claim_names():
+        if len(chosen) >= n:
+            break
+        if name in tested or name in leases or name in book:
+            continue
+        leases[name] = {
+            "worker_id": worker_id,
+            "claimed_at": _iso(now),
+            "expires_at": _iso(expires),
+            "library": True,
+        }
+        chosen.append(name)
+    return chosen
+
+
 def _append_minted(view: dict, added: list[str]) -> list[str]:
     """Append minted names that are still leasable. Returns that list."""
     kept: list[str] = []
@@ -913,6 +944,10 @@ def _claim_unlocked(
     # Count this claim's lanes before the thin check, including a host
     # whose previous heartbeat has not landed yet.
     _touch(state, worker_id, "running", now, parallel)
+    from hedge_fund.trading.discovery_mode import library_mode
+
+    if library_mode():
+        return _claim_library_unlocked(state, worker_id, n, parallel=parallel, now=now, ttl=ttl, tested=tested)
     lanes = active_leased_lanes(state, now)
     # Requalify lane first: re-checks of champions / old passes on the
     # current gate. Kept in discovery_requalify.json, not in these leases.
@@ -965,6 +1000,51 @@ def _claim_unlocked(
         "leases_active": len(state["leases"]),
         "requalify": list(requal),
         "_schedule_refill": schedule,
+    }
+
+
+def _claim_library_unlocked(
+    state: dict,
+    worker_id: str,
+    n: int,
+    *,
+    parallel: int | None,
+    now: datetime,
+    ttl: int,
+    tested: set[str],
+) -> dict:
+    """Library mode: only canonical library names. No requalify lane, no
+    buy-and-hold retests, no leftovers, no mint, no lift."""
+    from hedge_fund.library.catalog import library_trial_count
+
+    rest = min(int(n), lease_room(state, worker_id, parallel, now))
+    expires = now + timedelta(seconds=ttl)
+    chosen = _take_library(state, rest, worker_id, expires, now, tested)
+    status = "running" if chosen else "idle"
+    _touch(state, worker_id, status, now, parallel)
+    _prune_workers(state, now)
+    save_lease_state(state)
+    apply_heartbeat_unlocked(status)
+    return {
+        "ok": True,
+        "paper_only": True,
+        "worker_id": worker_id,
+        "names": chosen,
+        "n": n,
+        "paused": False,
+        "source": "library",
+        "library": list(chosen),
+        "library_trials": library_trial_count(),
+        "refilled": [],
+        "retest": [],
+        "refill": load_refill_status(),
+        "ttl_seconds": ttl,
+        "per_name_cap_seconds": per_name_lease_seconds(),
+        "expires_at": _iso(expires) if chosen else None,
+        "claimed_at": _iso(now),
+        "leases_active": len(state["leases"]),
+        "requalify": [],
+        "_schedule_refill": False,
     }
 
 
@@ -1119,6 +1199,10 @@ def refill_buffer_unlocked(
     def moved() -> bool:
         return expect_root is not None and str(state_root()) != expect_root
 
+    from hedge_fund.trading.discovery_mode import library_mode
+
+    if library_mode():
+        return _refill_skipped("library_mode")
     with paper_state_lock("discovery"):
         if moved():
             return _refill_skipped("state_moved")

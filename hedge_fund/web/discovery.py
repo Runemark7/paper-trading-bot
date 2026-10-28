@@ -82,6 +82,18 @@ def discovery_results_response(qs: dict | None = None) -> dict:
     }
 
 
+def discovery_library_response() -> dict:
+    """GET /api/discovery/library: catalog + stored results. Reads two small files."""
+    from hedge_fund.library.results import library_table_payload
+    from hedge_fund.trading.discovery_mode import discovery_source
+
+    snap = lease_snapshot()
+    body = library_table_payload(leased=set(snap["active_names"]))
+    body["source"] = discovery_source()
+    body["gate_rules"] = GATE_RULES
+    return body
+
+
 def _eval_row(row: dict) -> dict:
     """Slim latest-eval row for the Discovery table — no windows / train extras."""
     reasons = row.get("fail_reasons")
@@ -350,6 +362,13 @@ def build_discovery_summary(*, lists: bool = True) -> dict:
     ship_queued = queued if lists else []
     ship_extended = list(extended) if lists else []
 
+    from hedge_fund.library.results import library_progress
+    from hedge_fund.trading.discovery_mode import discovery_source
+
+    source = discovery_source()
+    library_block = library_progress(tested_names, set(lease_names))
+    library_block["mode"] = source
+
     return {
         "paper_only": True,
         "gate": {
@@ -357,6 +376,8 @@ def build_discovery_summary(*, lists: bool = True) -> dict:
             "criteria": GATE_CRITERIA,
             "bh_role": BH_METRIC_ROLE,
         },
+        "source": source,
+        "library": library_block,
         "as_of": _iso(now),
         "compact": not lists,
         "certainty": "stamp" if tournament_now else ("last_known" if log else "no_signal"),

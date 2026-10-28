@@ -8,6 +8,11 @@ which one performs best. All accounts persist in a per-strategy sqlite.
 The decision cycle is TradingLoop.run_cycle — the same loop, stops, sizing,
 and strategy path as hedge_fund.trading.run (the cycle sidecar). This module is
 not a second hardcoded book.
+
+A library champion (``lib.*``, gate v6) runs on the ``signal_exit`` engine
+instead (``hedge_fund.library.live``): the same state machine, daily bars and
+fills as its backtest. It is isolated so a failure there cannot stop the
+5m champions.
 """
 from __future__ import annotations
 
@@ -17,6 +22,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from hedge_fund.library.catalog import is_library_name
 from hedge_fund.paths import state_root
 from hedge_fund.brokers.paper import PaperBroker, SLIPPAGE, TAKER_FEE
 from hedge_fund.calibration import CalibrationStore
@@ -82,6 +88,24 @@ def _run_one_account(strat: str, state: Path, market: CachedMarket, now: str) ->
     })
 
 
+def _run_library_account(strat: str, state: Path, market: CachedMarket, now: str, bars):
+    """One signal_exit decision. Daily bars are built once per cycle."""
+    from hedge_fund.library.live import live_daily_bars, run_library_account
+
+    try:
+        if bars is None:
+            bars = live_daily_bars(state)
+        try:
+            price = market.fetch_price(SYMBOLS[0])
+        except Exception:
+            price = None
+        out = run_library_account(strat, state, bars=bars, price=price, now=now)
+        print(f"[library {strat}] {out.get('actions') or 'no trade'} long={out.get('long')}", flush=True)
+    except Exception as exc:  # noqa: BLE001 — never stop the 5m champions
+        print(f"[library {strat}] failed: {exc}", flush=True)
+    return bars
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--cycles", type=int, default=1)
@@ -100,7 +124,11 @@ def main() -> None:
         market = _fetch_snapshot(data, state)
         fetch_s = time.perf_counter() - t0
         t1 = time.perf_counter()
+        library_bars = None
         for strat in strategies:
+            if is_library_name(strat):
+                library_bars = _run_library_account(strat, state, market, now, library_bars)
+                continue
             _run_one_account(strat, state, market, now)
         eval_s = time.perf_counter() - t1
         print(

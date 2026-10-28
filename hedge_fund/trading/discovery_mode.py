@@ -6,6 +6,12 @@ discovery farm. Re-enable in-cycle tournament with ``DISCOVERY_ON_CYCLE=1``
 or ``PAPER_DISCOVERY_MODE=on`` (dev / emergency only).
 
 Ingest to prod uses ``PAPER_DISCOVERY_INGEST_TOKEN`` (shared secret).
+
+What a claim serves is ``discovery_source()``: ``library`` (default since
+gate v6, 2026-10-28) leases only the canonical variant of each strategy in
+``hedge_fund.library.catalog``; ``random`` is the old random mint, lift and
+refill path, kept in the code and reachable only with
+``PAPER_DISCOVERY_SOURCE=random``.
 """
 from __future__ import annotations
 
@@ -14,6 +20,21 @@ import os
 
 _TRUE = {"1", "true", "yes", "on"}
 _FALSE = {"0", "false", "no", "off"}
+
+SOURCE_LIBRARY = "library"
+SOURCE_RANDOM = "random"
+DISCOVERY_SOURCES = (SOURCE_LIBRARY, SOURCE_RANDOM)
+
+
+def discovery_source(environ: dict[str, str] | None = None) -> str:
+    """``library`` unless ``PAPER_DISCOVERY_SOURCE`` is ``random``."""
+    env = os.environ if environ is None else environ
+    raw = (env.get("PAPER_DISCOVERY_SOURCE") or "").strip().lower()
+    return SOURCE_RANDOM if raw == SOURCE_RANDOM else SOURCE_LIBRARY
+
+
+def library_mode(environ: dict[str, str] | None = None) -> bool:
+    return discovery_source(environ) == SOURCE_LIBRARY
 
 
 def discovery_on_cycle(

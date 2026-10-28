@@ -5,12 +5,17 @@ test (it is one more trial). Ops parks that never produced a Sharpe are
 not return trials and are reported separately. They are not added to N:
 a lookback cap is not a Sharpe estimate, and counting it would invent
 trials the formula does not describe.
+
+Library names (gate v6) are a separate trial family: their N is every
+grid point of the declared library (``library_trial_count``), and they
+are not counted here.
 """
 from __future__ import annotations
 
 import math
 import statistics
 
+from hedge_fund.library.catalog import is_library_name
 from hedge_fund.trading.tested_index import load_tested_metrics
 
 
@@ -49,7 +54,9 @@ def trial_census() -> dict:
     metrics = load_tested_metrics()
     n_ops = 0
     sharpes: list[float] = []
-    for item in metrics.values():
+    for name, item in metrics.items():
+        if is_library_name(name):
+            continue
         if isinstance(item, dict) and item.get("ops_park"):
             n_ops += 1
             continue

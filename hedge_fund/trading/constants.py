@@ -71,20 +71,33 @@ RISK_POLICY = "rm_v1"
 # re-run. Those figures stay on the row as informational metrics. Cost
 # stress still requires stressed Sharpe >= 0.30. Workers on the v4 tag
 # are paused.
+# Amendment 2026-10-28 (Alexander, 20:39 CET): gate v6. Discovery restarts
+# on a pre-registered strategy library (hedge_fund.library.catalog) scored
+# by the signal_exit engine on completed daily bars: long or flat, all-in,
+# exit when the signal turns off. Same floors, applied to daily-equity
+# Sharpe; DSR trial count = every grid point in the library. The 5m rm_v1
+# engine and its gate are unchanged for the existing champions. Workers on
+# the v5 tag are paused.
 V4_GATE_RULES = "gate_v4_btc_holdout_dsr_pbo_20261027"
-GATE_RULES = "gate_v5_btc_holdout_dsr_pbo_20261027"
+V5_GATE_RULES = "gate_v5_btc_holdout_dsr_pbo_20261027"
+GATE_RULES = "gate_v6_library_signal_exit_20261028"
+# 5m rm_v1 rows under these tags measure the same engine with the same
+# floors, so the exploratory atom reports may pool them.
+ATOM_GATE_RULES = frozenset({V5_GATE_RULES, GATE_RULES})
 # Shown on the discovery API and the Discovery page. B&H is not a pass rule.
 GATE_CRITERIA = (
-    "Gate v5 (paper only): BTC-only; 18 walk-forward windows that end before "
-    "the sealed holdout 2025-10-01..2026-10-01; trades ≥ 30; Sharpe ≥ 0.30; "
-    "beat sma_stack; holdout Sharpe, holdout trades, and holdout vs sma_stack; "
-    "DSR ≥ 0.95 using the true trial count (missing trial count fails closed); "
+    "Gate v6 (paper only): BTC-only. Discovery evaluates a pre-registered "
+    "library of cited strategies on completed daily bars with the signal_exit "
+    "engine (long or flat, all-in, enter when the signal turns on, exit when "
+    "it turns off, fills at the next daily open after 0.1% fee + 2 bps). "
+    "18 walk-forward windows that end before the sealed holdout "
+    "2025-10-01..2026-10-01; trades ≥ 30; daily-equity Sharpe ≥ 0.30; "
+    "beat sma_stack; holdout Sharpe, holdout trades ≥ 8, and holdout vs "
+    "sma_stack; DSR ≥ 0.95 with N = every grid point in the library; "
     "PBO ≤ 0.20; at least 70% of parameter neighbours pass; cost stress at "
-    "2× fees + 5 bps/side still clears Sharpe ≥ 0.30. Buy-and-hold daily "
-    "Sharpe and buy-and-hold P&L are informational on the discovery windows, "
-    "the sealed holdout, and the cost-stress re-run. They are not a pass "
-    "requirement. ETH Sharpe is recorded and does not block. Fail-once. "
-    "Forward-test kill rules only flag."
+    "2× fees + 5 bps/side still clears Sharpe ≥ 0.30. Buy-and-hold is "
+    "informational. Fail-once. Forward-test kill rules only flag. The "
+    "existing 5m champions keep the gate v5 rm_v1 engine."
 )
 BH_METRIC_ROLE = "informational"
 # Historical full-tape grid (23 x 87d, last segment open). Discovery no

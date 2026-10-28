@@ -62,6 +62,37 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _validate_library_eval(row: dict, name: str) -> dict | None:
+    """A library row: canonical name, signal_exit engine, this gate, this library."""
+    from hedge_fund.library.catalog import claim_names, library_trial_count
+    from hedge_fund.library.engine import ENGINE_ID, RISK_POLICY as LIB_RISK_POLICY
+    from hedge_fund.library.engine import TIMEFRAME as LIB_TIMEFRAME
+
+    if name not in claim_names():
+        return None
+    if row.get("timeframe") != LIB_TIMEFRAME or row.get("risk_policy") != LIB_RISK_POLICY:
+        return None
+    if row.get("engine") != ENGINE_ID or row.get("gate_rules") != GATE_RULES:
+        return None
+    block = row.get("gate_v4")
+    # A worker with a different library computed DSR with another N.
+    if not isinstance(block, dict) or block.get("n_trials") != library_trial_count():
+        return None
+    if bool(row.get("qualified")):
+        from hedge_fund.trading.gate_v4 import v4_attestation_ok
+
+        if not v4_attestation_ok(row):
+            return None
+    reasons = row.get("fail_reasons")
+    if reasons is not None and not isinstance(reasons, list):
+        return None
+    out = dict(row)
+    out["qualified"] = bool(row.get("qualified"))
+    if reasons is None:
+        out["fail_reasons"] = []
+    return out
+
+
 def _validate_eval(row: Any) -> dict | None:
     if not isinstance(row, dict):
         return None
@@ -71,6 +102,10 @@ def _validate_eval(row: Any) -> dict | None:
     for key in _EVAL_REQUIRED:
         if key not in row:
             return None
+    from hedge_fund.library.catalog import is_library_name
+
+    if is_library_name(name):
+        return _validate_library_eval(row, name)
     tf = row.get("timeframe") or QUAL_TIMEFRAME
     if tf != QUAL_TIMEFRAME:
         return None
@@ -120,6 +155,19 @@ def _admit_qualified(st: dict, record: dict, existing: set[str]) -> bool:
         "timeframe": QUAL_TIMEFRAME,
         "risk_policy": RISK_POLICY,
     }
+    library = record.get("library")
+    if isinstance(library, dict):
+        # The live cycle routes this name to the signal_exit engine.
+        row.update({
+            "source": "library_qualification",
+            "timeframe": record.get("timeframe"),
+            "risk_policy": record.get("risk_policy"),
+            "engine": record.get("engine"),
+            "library": {
+                key: library.get(key)
+                for key in ("key", "title", "params", "citation", "safety_stop_pct")
+            },
+        })
     qual = qual_metrics(record)
     if qual:
         # Ranking fields for the one-per-family rule (families.py).
@@ -428,6 +476,10 @@ def ingest_discovery_payload(payload: dict) -> dict:
             if name in proposed:
                 proposed.remove(name)
             skipped.append({"strategy": name, "reason": "already_tested"})
+        elif isinstance(rec.get("library"), dict):
+            from hedge_fund.library.results import save_library_result
+
+            save_library_result(rec)
     mark("append", t_append)
 
     with paper_state_lock("discovery"):

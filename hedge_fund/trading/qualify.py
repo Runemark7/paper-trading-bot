@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from hedge_fund.library.catalog import is_library_name
 from hedge_fund.trading.buy_and_hold import daily_returns_sharpe
 from hedge_fund.trading.constants import (
     BH_METRIC_ROLE,
@@ -247,6 +248,10 @@ def requalify_parked_log(
         if name in existing_names:
             continue
         if is_ops_park_record(row):
+            continue
+        # A library row's verdict is the full gate-v6 evaluation; the stored
+        # 5m aggregates below do not describe it.
+        if is_library_name(name):
             continue
         # A row measured under older rules (other windows / exits / benchmark)
         # is never re-decided into a pass under the current ones.

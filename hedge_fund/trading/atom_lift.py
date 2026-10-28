@@ -649,8 +649,10 @@ def training_rows() -> list[dict]:
     results = records_by_name()
     names = set(metrics) | set(results)
     rows: list[dict] = []
+    from hedge_fund.library.catalog import is_library_name
+
     for name in names:
-        if not isinstance(name, str) or not name:
+        if not isinstance(name, str) or not name or is_library_name(name):
             continue
         metric = metrics.get(name) if isinstance(metrics.get(name), dict) else {}
         result = results.get(name) if isinstance(results.get(name), dict) else {}
