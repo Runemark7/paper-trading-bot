@@ -531,9 +531,16 @@ class Handler(BaseHTTPRequestHandler):
         elif route == "/api/discovery/summary":
             # Cached build_discovery_summary. The lift fit is not on this request.
             try:
+                import time
+
                 from hedge_fund.web.discovery import cached_discovery_summary, compact_query
 
-                self._send_json(cached_discovery_summary(lists=not compact_query(qs.get("compact"))))
+                t0 = time.perf_counter()
+                body = cached_discovery_summary(lists=not compact_query(qs.get("compact")))
+                elapsed = (time.perf_counter() - t0) * 1000.0
+                if elapsed >= 200:
+                    print(f"discovery summary {elapsed:.0f}ms", flush=True)
+                self._send_json(body)
             except Exception as exc:
                 self._send_json({"error": str(exc)}, 500)
         elif route == "/api/discovery/results":
@@ -592,11 +599,9 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"error": str(exc), "paper_only": True}, 500)
         elif route == "/api/discovery":
             try:
-                log_path = _state_dir() / "discovery_log.json"
-                if log_path.exists():
-                    self._send_json(json.loads(log_path.read_text()))
-                else:
-                    self._send_json([])
+                from hedge_fund.trading.discovery import load_discovery_log
+
+                self._send_json(load_discovery_log())
             except Exception as exc:
                 self._send_json({"error": str(exc)}, 500)
         elif route == "/api/status":
@@ -664,9 +669,22 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"ok": False, "error": err, "paper_only": True}, 400)
                 return
             try:
+                import time
+
                 from hedge_fund.trading.ingest import ingest_discovery_payload
 
-                self._send_json(ingest_discovery_payload(payload))
+                t0 = time.perf_counter()
+                body = ingest_discovery_payload(payload)
+                elapsed = (time.perf_counter() - t0) * 1000.0
+                if isinstance(body, dict):
+                    body["handler_ms"] = round(elapsed, 1)
+                n = len(body.get("ingested") or []) if isinstance(body, dict) else 0
+                print(
+                    f"discovery ingest {elapsed:.0f}ms ingested={n} "
+                    f"phases={body.get('timing_ms') if isinstance(body, dict) else {}}",
+                    flush=True,
+                )
+                self._send_json(body)
             except ValueError as exc:
                 self._send_json({"ok": False, "error": str(exc), "paper_only": True}, 400)
             except Exception as exc:
@@ -681,15 +699,24 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"ok": False, "error": err, "paper_only": True}, 400)
                 return
             try:
+                import time
+
                 from hedge_fund.trading.leases import claim_discovery_batch
 
-                self._send_json(claim_discovery_batch(
+                t0 = time.perf_counter()
+                body = claim_discovery_batch(
                     payload.get("worker_id"),
                     payload.get("n"),
                     parallel=payload.get("parallel") if "parallel" in payload else None,
                     gate_rules=payload.get("gate_rules"),
                     require_gate_rules=True,
-                ))
+                )
+                elapsed = (time.perf_counter() - t0) * 1000.0
+                if isinstance(body, dict):
+                    body["handler_ms"] = round(elapsed, 1)
+                n = len(body.get("names") or []) if isinstance(body, dict) else 0
+                print(f"discovery claim {elapsed:.0f}ms names={n}", flush=True)
+                self._send_json(body)
             except ValueError as exc:
                 self._send_json({"ok": False, "error": str(exc), "paper_only": True}, 400)
             except Exception as exc:

@@ -281,6 +281,114 @@ class CompactDiscoveryLogTests(unittest.TestCase):
         self.assertEqual(log[0]["strategy"], "sma_stack")
         self.assertFalse(log[0]["qualified"])
 
+    def test_large_log_appends_a_line_and_stays_readable(self):
+        import time
+
+        from hedge_fund.trading.discovery import (
+            DELTA_COMPACT_LINES,
+            discovery_log_delta_path,
+        )
+
+        seed = {
+            "strategy": "seed",
+            "qualified": False,
+            "sharpe": 0.1,
+            "trades": 4,
+            "fail_reasons": ["x" * 40],
+        }
+        rows = [{**seed, "strategy": f"s{i:04d}"} for i in range(5000)]
+        blob = json.dumps(rows, separators=(",", ":"))
+        self.assertGreater(len(blob), 256 * 1024)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "discovery_log.json").write_text(blob)
+            with patch.dict(os.environ, {"PAPER_STATE": str(root)}):
+                before = (root / "discovery_log.json").read_bytes()
+                load_discovery_log()
+                started = time.perf_counter()
+                append_discovery_evaluation({
+                    **seed,
+                    "strategy": "new_name",
+                    "tested_at": "2026-10-28T00:00:00+00:00",
+                })
+                delta_s = time.perf_counter() - started
+                self.assertEqual((root / "discovery_log.json").read_bytes(), before)
+                delta = discovery_log_delta_path().read_text()
+                self.assertIn("new_name", delta)
+                self.assertEqual(load_discovery_log()[0]["strategy"], "new_name")
+                rewrite_started = time.perf_counter()
+                loaded = json.loads(before)
+                (root / "full_rewrite.json").write_text(
+                    json.dumps([{"strategy": "z"}] + loaded, separators=(",", ":"))
+                )
+                rewrite_s = time.perf_counter() - rewrite_started
+        print(
+            f"TIMING log_delta_append={delta_s * 1000:.1f}ms "
+            f"full_rewrite={rewrite_s * 1000:.1f}ms bytes={len(blob)} "
+            f"compact_every={DELTA_COMPACT_LINES}"
+        )
+        self.assertLess(delta_s * 3, rewrite_s)
+
+    def test_census_is_reused_until_the_index_changes(self):
+        from hedge_fund.trading.tested_index import save_tested_index
+        from hedge_fund.trading.trials import trial_census
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch.dict(os.environ, {"PAPER_STATE": str(root)}):
+                save_tested_index(
+                    {"a": False, "b": False},
+                    {"a": {"sharpe": 0.2, "trades": 10}, "b": {"sharpe": 0.4, "trades": 12}},
+                )
+                with patch(
+                    "hedge_fund.trading.trials.load_tested_metrics",
+                    wraps=__import__(
+                        "hedge_fund.trading.tested_index",
+                        fromlist=["load_tested_metrics"],
+                    ).load_tested_metrics,
+                ) as load:
+                    first = trial_census()
+                    second = trial_census()
+        self.assertEqual(first["n_backtested"], 2)
+        self.assertEqual(second, first)
+        self.assertEqual(load.call_count, 1)
+
+    def test_later_heartbeat_skips_the_display_log(self):
+        from hedge_fund.trading.ingest import ingest_discovery_payload
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch.dict(os.environ, {"PAPER_STATE": str(root)}):
+                first = ingest_discovery_payload({
+                    "evaluations": [{
+                        "strategy": "sma_stack",
+                        "qualified": False,
+                        "sharpe": 0.1,
+                        "trades": 4,
+                        "test_pnl": -1.0,
+                        "train_pnl": 0.0,
+                        "win_rate_pct": 0.0,
+                        "fail_reasons": ["oos_sharpe 0.10 < 0.30"],
+                        "timeframe": "5m",
+                        "risk_policy": "rm_v1",
+                        "gate_rules": "gate_v5_btc_holdout_dsr_pbo_20261027",
+                        "tested_at": "2026-10-28T00:00:00+00:00",
+                    }],
+                })
+                with patch(
+                    "hedge_fund.trading.ingest.load_discovery_log",
+                    side_effect=AssertionError("log"),
+                ):
+                    second = ingest_discovery_payload({
+                        "evaluations": [],
+                        "heartbeat": {"status": "running", "worker_id": "zealous-lion"},
+                    })
+        self.assertEqual(first["ingested"], ["sma_stack"])
+        self.assertIn("timing_ms", first)
+        self.assertEqual(second["ingested"], [])
+        self.assertIn("heartbeat", second["timing_ms"])
+        self.assertNotIn("park_scan", second["timing_ms"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from pathlib import Path
 from typing import TypedDict
 
@@ -33,15 +34,40 @@ def tested_index_path() -> Path:
     return state_root() / DISCOVERY_TESTED_INDEX
 
 
+_doc_guard = threading.Lock()
+_doc_cache: dict = {"key": None, "data": None}
+
+
+def tested_index_fingerprint() -> tuple | None:
+    """``(path, mtime_ns, size)`` so a census can skip a rescan of an unchanged file."""
+    path = tested_index_path()
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    return (str(path), st.st_mtime_ns, st.st_size)
+
+
 def _read_document() -> dict | None:
     path = tested_index_path()
+    key = tested_index_fingerprint()
+    with _doc_guard:
+        if key is not None and _doc_cache["key"] == key:
+            data = _doc_cache["data"]
+            return data if isinstance(data, dict) else None
     if not path.exists():
         return None
     try:
         data = json.loads(path.read_text())
     except (OSError, ValueError):
         return None
-    return data if isinstance(data, dict) else None
+    if not isinstance(data, dict):
+        return None
+    with _doc_guard:
+        if tested_index_fingerprint() == key:
+            _doc_cache["key"] = key
+            _doc_cache["data"] = data
+    return data
 
 
 def _flags_from_document(data: dict | None) -> dict[str, bool]:
@@ -157,6 +183,9 @@ def save_tested_index(index: dict[str, bool], metrics: dict | None = None) -> No
     tmp = path.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(payload, separators=(",", ":")))
     os.replace(tmp, path)
+    with _doc_guard:
+        _doc_cache["key"] = tested_index_fingerprint()
+        _doc_cache["data"] = payload
 
 
 def merge_tested_rows(index: dict[str, bool], rows: list) -> bool:

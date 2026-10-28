@@ -16,6 +16,8 @@ left off so the next live_cycle continues fairly.
 from __future__ import annotations
 
 import json
+import os
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -34,8 +36,17 @@ from hedge_fund.trading.tested_index import (
 )
 
 DISCOVERY_LOG = "discovery_log.json"
+# Newest rows land here once the display file is large, so an ingest does
+# not rewrite the whole capped log. ``load_discovery_log`` merges it.
+DISCOVERY_LOG_DELTA = "discovery_log_delta.jsonl"
 DISCOVERY_IN_FLIGHT = "discovery_in_flight.json"
 DISCOVERY_CURSOR = "discovery_cursor.json"
+# Below this, append still rewrites the JSON array (tests and a small log).
+# Above it, append is one jsonl line. Compact folds the delta back in.
+LOG_REWRITE_MAX_BYTES = 256 * 1024
+DELTA_COMPACT_LINES = 32
+_log_cache_guard = threading.Lock()
+_log_cache: dict = {"key": None, "rows": None}
 
 
 def _now() -> str:
@@ -44,6 +55,10 @@ def _now() -> str:
 
 def discovery_log_path() -> Path:
     return state_root() / DISCOVERY_LOG
+
+
+def discovery_log_delta_path() -> Path:
+    return state_root() / DISCOVERY_LOG_DELTA
 
 
 def in_flight_path() -> Path:
@@ -66,8 +81,19 @@ def parse_tested_at(value: str | None) -> datetime | None:
     return dt.astimezone(timezone.utc)
 
 
-def load_discovery_log() -> list[dict]:
-    path = discovery_log_path()
+def _file_stat(path: Path) -> tuple | None:
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    return (str(path), st.st_mtime_ns, st.st_size)
+
+
+def _log_stat_key() -> tuple:
+    return (_file_stat(discovery_log_path()), _file_stat(discovery_log_delta_path()))
+
+
+def _read_json_array(path: Path) -> list[dict]:
     if not path.exists():
         return []
     try:
@@ -75,7 +101,65 @@ def load_discovery_log() -> list[dict]:
             data = json.load(fh)
     except (OSError, ValueError):
         return []
-    return data if isinstance(data, list) else []
+    if not isinstance(data, list):
+        return []
+    return [row for row in data if isinstance(row, dict)]
+
+
+def _read_delta_newest_first(path: Path) -> list[dict]:
+    """Delta file order is oldest-first. The returned list is newest-first."""
+    if not path.exists():
+        return []
+    rows: list[dict] = []
+    try:
+        with path.open() as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(row, dict):
+                    rows.append(row)
+    except OSError:
+        return []
+    rows.reverse()
+    return rows
+
+
+def _read_discovery_log() -> list[dict]:
+    base = _read_json_array(discovery_log_path())
+    extra = _read_delta_newest_first(discovery_log_delta_path())
+    if not extra:
+        return base
+    return (extra + base)[:DISCOVERY_LOG_CAP]
+
+
+def _remember_log(rows: list[dict]) -> None:
+    with _log_cache_guard:
+        _log_cache["key"] = _log_stat_key()
+        _log_cache["rows"] = rows
+
+
+def load_discovery_log() -> list[dict]:
+    """Newest-first display log, including rows not yet folded into the array.
+
+    The parsed list is cached for this process. A new ``PAPER_STATE`` or a
+    rewritten file misses the cache. Callers get a new list, sharing the
+    row dicts.
+    """
+    key = _log_stat_key()
+    with _log_cache_guard:
+        if _log_cache["key"] == key and isinstance(_log_cache["rows"], list):
+            return list(_log_cache["rows"])
+    rows = _read_discovery_log()
+    with _log_cache_guard:
+        if _log_stat_key() == key:
+            _log_cache["key"] = key
+            _log_cache["rows"] = rows
+    return list(rows)
 
 
 def latest_eval_per_strategy(log: list[dict] | None = None) -> list[dict]:
@@ -129,27 +213,75 @@ def evals_on_utc_date(log: list[dict], day: datetime | None = None) -> int:
     return n
 
 
+def _write_log_array(path: Path, log: list[dict]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(log, separators=(",", ":")))
+    os.replace(tmp, path)
+
+
+def _append_delta(records: list[dict]) -> int:
+    """Append oldest-first so the last line is the newest record. Returns the line count."""
+    path = discovery_log_delta_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a") as fh:
+        for row in reversed(records):
+            fh.write(json.dumps(row, separators=(",", ":")) + "\n")
+        fh.flush()
+    try:
+        with path.open() as fh:
+            return sum(1 for line in fh if line.strip())
+    except OSError:
+        return len(records)
+
+
+def _clear_delta() -> None:
+    path = discovery_log_delta_path()
+    try:
+        path.unlink()
+    except OSError:
+        pass
+
+
 def append_discovery_evaluations(eval_records: list[dict], *, cap: int = DISCOVERY_LOG_CAP) -> list[dict]:
     """Prepend records (newest-first) and cap the display log.
 
-    The tested-name index is updated from the pre-trim list under the
-    discovery lock, so a name that falls off the display cap stays skipped.
-    Full records for this batch are appended after the lock is released.
+    The tested-name index is updated from these records only. A name that
+    falls off the display cap stays in the index. Full records for this
+    batch are appended to the results log after the lock is released.
+
+    A small display file is rewritten in place. Once it is past
+    ``LOG_REWRITE_MAX_BYTES``, further rows are one jsonl line each and
+    folded back into the array every ``DELTA_COMPACT_LINES`` appends.
     """
     if not eval_records:
         return load_discovery_log()
     with paper_state_lock("discovery"):
-        path = discovery_log_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        log = load_discovery_log()
-        log = list(eval_records) + log
         index, metrics = load_index_and_metrics()
-        flags_changed = merge_tested_rows(index, log)
-        metrics_changed = merge_tested_metrics(metrics, log)
+        flags_changed = merge_tested_rows(index, eval_records)
+        metrics_changed = merge_tested_metrics(metrics, eval_records)
         if flags_changed or metrics_changed:
             save_tested_index(index, metrics)
-        log = log[:cap]
-        path.write_text(json.dumps(log, separators=(",", ":")))
+        path = discovery_log_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        base_size = path.stat().st_size if path.exists() else 0
+        delta = discovery_log_delta_path()
+        delta_exists = delta.exists() and delta.stat().st_size > 0
+        prior = load_discovery_log()
+        if base_size < LOG_REWRITE_MAX_BYTES and not delta_exists:
+            log = (list(eval_records) + prior)[:cap]
+            _write_log_array(path, log)
+            _clear_delta()
+        else:
+            n_lines = _append_delta(list(eval_records))
+            log = (list(eval_records) + prior)[:cap]
+            if n_lines >= DELTA_COMPACT_LINES:
+                # Drop the delta before the array replace so a crash cannot
+                # load those rows twice. A crash in between loses only the
+                # rows still in memory; the index already has the names.
+                _clear_delta()
+                _write_log_array(path, log)
+        _remember_log(log)
         saved = log
     from hedge_fund.trading.discovery_results import sync_discovery_results
 
@@ -176,8 +308,9 @@ def save_discovery_log(log: list[dict]) -> None:
     """
     with paper_state_lock("discovery"):
         path = discovery_log_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(log, separators=(",", ":")))
+        _write_log_array(path, log)
+        _clear_delta()
+        _remember_log(list(log))
         index, metrics = load_index_and_metrics()
         flags_changed = merge_tested_rows(index, log)
         metrics_changed = merge_tested_metrics(metrics, log)

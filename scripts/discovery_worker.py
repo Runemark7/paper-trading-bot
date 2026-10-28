@@ -44,9 +44,11 @@ import argparse
 import json
 import multiprocessing
 import os
+import queue
 import signal
 import socket
 import sys
+import threading
 import time
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -208,6 +210,12 @@ def _new_eval_pool(
     retest_names: frozenset[str] | set[str] | list[str] | None = None,
     n_trials_retest: int | None = None,
 ):
+    # fork() copies thread state. Stop the post thread first so a child
+    # does not inherit its queue lock. Queued posts stay in the queue
+    # and a later submit starts the thread again.
+    poster = globals().get("_poster")
+    if poster is not None:
+        poster.stop()
     return multiprocessing.Pool(
         processes=n_workers,
         initializer=_init_pool,
@@ -806,7 +814,9 @@ def _plan_batch(max_names: int) -> tuple[list[str], list[str], list[str]]:
 def poll_farm_enabled(base_url: str, last_known: bool = True) -> bool:
     """Ask prod whether the farm should run. Network errors keep last_known."""
     try:
+        started = time.perf_counter()
         summary = _http_json(f"{base_url.rstrip('/')}/api/discovery/summary?compact=1", timeout=20)
+        _log_round_trip("summary", started, summary)
     except Exception:
         return last_known
     return farm_enabled_from_summary(summary, last_known)
@@ -855,7 +865,8 @@ def _load_local_env() -> None:
 
 
 def _claim_remote(base_url: str, token: str, worker_id: str, n: int, parallel: int) -> dict:
-    return _http_json(
+    started = time.perf_counter()
+    body = _http_json(
         f"{base_url.rstrip('/')}/api/discovery/claim",
         token=token,
         data={
@@ -866,6 +877,8 @@ def _claim_remote(base_url: str, token: str, worker_id: str, n: int, parallel: i
         },
         timeout=120,
     )
+    _log_round_trip(f"claim n={n}", started, body)
+    return body
 
 
 def _release_remote(
@@ -879,12 +892,15 @@ def _release_remote(
     payload: dict = {"worker_id": worker_id, "status": status}
     if names is not None:
         payload["names"] = list(names)
-    return _http_json(
+    started = time.perf_counter()
+    body = _http_json(
         f"{base_url.rstrip('/')}/api/discovery/release",
         token=token,
         data=payload,
         timeout=60,
     )
+    _log_round_trip("release", started, body)
+    return body
 
 
 def _release_remote_safe(
@@ -977,6 +993,121 @@ def consider_pause(
     return "pause"
 
 
+# Retries and drain must not follow the eval loop's patched clock.
+_REAL_SLEEP = time.sleep
+_REAL_MONO = time.monotonic
+
+
+class _ResultPoster:
+    """Post ingest and heartbeats off the eval loop.
+
+    Results are retried and acked once the server accepts them. A full
+    queue blocks a result (backpressure) and drops a heartbeat-only post.
+    ``drain`` waits until the queued posts have finished or given up.
+    """
+
+    def __init__(self) -> None:
+        self._q: queue.Queue = queue.Queue(maxsize=64)
+        self._thread: threading.Thread | None = None
+        self._lock = threading.Lock()
+        self._closing = False
+
+    def _ensure(self) -> None:
+        with self._lock:
+            if self._closing:
+                return
+            if self._thread is not None and self._thread.is_alive():
+                return
+            self._thread = threading.Thread(
+                target=self._loop, name="discovery-post", daemon=True,
+            )
+            self._thread.start()
+
+    def stop(self) -> None:
+        """Join the post thread so a later fork does not copy it."""
+        with self._lock:
+            thread = self._thread
+            if thread is None:
+                return
+            self._closing = True
+            self._thread = None
+        self._q.put(None)
+        thread.join(timeout=30)
+        with self._lock:
+            self._closing = False
+
+    def submit(self, item: dict) -> bool:
+        """Queue ``item``. Result posts block when 64 are waiting."""
+        self._ensure()
+        if item.get("ack_name"):
+            self._q.put(item)
+            return True
+        try:
+            self._q.put_nowait(item)
+        except queue.Full:
+            print("discovery_worker: dropping heartbeat, post queue full", flush=True)
+            return False
+        return False
+
+    def _loop(self) -> None:
+        while True:
+            item = self._q.get()
+            try:
+                if item is None:
+                    return
+                self._send(item)
+            finally:
+                self._q.task_done()
+
+    def _send(self, item: dict) -> None:
+        delays = (0.0, 0.5, 1.5)
+        last: Exception | None = None
+        for delay in delays:
+            if delay:
+                _REAL_SLEEP(delay)
+            try:
+                _post_ingest(
+                    item["url"],
+                    item["token"],
+                    item["evals"],
+                    item["extended"],
+                    item["flight"],
+                    clear=item["clear"],
+                    heartbeat=item["heartbeat"],
+                    worker_id=item["worker_id"],
+                    evaluating=item["evaluating"],
+                )
+                ack = item.get("on_ack")
+                if ack is not None:
+                    ack()
+                return
+            except Exception as exc:
+                last = exc
+                print(
+                    f"discovery_worker: post failed ({exc}); retrying",
+                    flush=True,
+                )
+        print(f"discovery_worker: giving up on post ({last})", flush=True)
+
+    def drain(self, timeout: float = 60.0) -> bool:
+        if self._thread is None:
+            return True
+        deadline = _REAL_MONO() + timeout
+        while self._q.unfinished_tasks and _REAL_MONO() < deadline:
+            _REAL_SLEEP(0.01)
+        return self._q.unfinished_tasks == 0
+
+
+_poster = _ResultPoster()
+
+
+def _log_round_trip(label: str, started: float, body: object) -> None:
+    ms = (time.perf_counter() - started) * 1000.0
+    server = body.get("handler_ms") if isinstance(body, dict) else None
+    extra = f" server={server:.0f}ms" if isinstance(server, (int, float)) else ""
+    print(f"discovery_worker: {label} {ms:.0f}ms{extra}", flush=True)
+
+
 def _post_ingest(
     url: str,
     token: str,
@@ -1008,7 +1139,11 @@ def _post_ingest(
         payload["clear_in_flight"] = True
     elif flight:
         payload["in_flight"] = flight
-    return _http_json(url, token=token, data=payload, timeout=90)
+    started = time.perf_counter()
+    body = _http_json(url, token=token, data=payload, timeout=90)
+    kind = "ingest" if evaluations else "heartbeat"
+    _log_round_trip(kind, started, body)
+    return body
 
 
 def _looks_like_bars(rows: object) -> bool:
@@ -1106,23 +1241,29 @@ def run_batch(
     evaluating_names: list[str] = []
     eval_beat = {"sent": False}
 
-    def _ingest(evals, extended, flight, *, clear=False, heartbeat=None, evaluating=None):
+    def _ingest(evals, extended, flight, *, clear=False, heartbeat=None, evaluating=None, ack_name=None):
+        """Queue a prod post. Returns True when ``ack_name`` will be acked on success."""
         if not (ingest_url and token):
-            return
+            return False
         if claim_mode:
             flight = None
             clear = False
-        _post_ingest(
-            ingest_url,
-            token,
-            evals,
-            extended,
-            flight,
-            clear=clear,
-            heartbeat=heartbeat,
-            worker_id=worker_id,
-            evaluating=evaluating,
-        )
+        on_ack = None
+        if ack_name:
+            on_ack = lambda name=ack_name: acked.append(name)
+        return _poster.submit({
+            "url": ingest_url,
+            "token": token,
+            "evals": evals,
+            "extended": extended,
+            "flight": flight,
+            "clear": clear,
+            "heartbeat": heartbeat,
+            "worker_id": worker_id,
+            "evaluating": evaluating,
+            "ack_name": ack_name,
+            "on_ack": on_ack,
+        })
 
     def on_inflight(names_now: list[str]) -> None:
         evaluating_names[:] = list(names_now)
@@ -1222,7 +1363,7 @@ def run_batch(
                     f"sharpe={record.get('sharpe')} trades={record.get('trades')}",
                     flush=True,
                 )
-            _ingest(
+            queued = _ingest(
                 [record],
                 [],
                 {
@@ -1233,8 +1374,10 @@ def run_batch(
                 },
                 heartbeat="running",
                 evaluating=list(evaluating_names),
+                ack_name=name,
             )
-            acked.append(name)
+            if not queued:
+                acked.append(name)
         if not claim_mode:
             write_in_flight(
                 remaining,
@@ -1338,6 +1481,10 @@ def run_batch(
                 _drop_eval_pool()
                 raise
     finally:
+        # Posts ran beside the evals. Wait for them before deciding which
+        # leases were never accepted, so a slow prod round-trip is not a
+        # reason to hand the name to another worker.
+        _poster.drain()
         if not retain_pool:
             _drop_eval_pool()
         if claim_mode:
@@ -1475,6 +1622,7 @@ def main(argv: list[str] | None = None) -> int:
         print("discovery_worker: stopped", flush=True)
         return 0
     finally:
+        _poster.drain()
         if not local_plan:
             _release_remote_safe(base, token, worker_id, status="idle")
         _drop_eval_pool()

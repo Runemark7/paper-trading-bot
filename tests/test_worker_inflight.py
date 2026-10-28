@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -39,6 +40,7 @@ class _ScriptedPool:
         self._inflight = 0
         self.samples: list[int] = []
         self.tasks: list[tuple] = []
+        self.start_times: list[float] = []
 
     def apply_async(self, fn, args):
         name = args[0]
@@ -50,6 +52,7 @@ class _ScriptedPool:
         self.max_inflight = max(self.max_inflight, self._inflight)
         self.samples.append(self._inflight)
         self.tasks.append((name, args[1] if len(args) > 1 else None))
+        self.start_times.append(__import__("time").perf_counter())
         delay = self.ready_after(name, attempt)
         ar = MagicMock()
 
@@ -260,6 +263,37 @@ class InFlightSchedulingTests(unittest.TestCase):
             ],
         )
         self.assertEqual(pending, [])
+
+    def test_slow_post_does_not_hold_the_next_eval(self):
+        """A result POST runs off the eval loop, so the free slot is filled first."""
+        post_exit: dict[str, float] = {}
+        # run_batch patches time.sleep for the scripted clock. Keep the
+        # real sleeper so the post actually occupies the background thread.
+        real_sleep = time.sleep
+        real_now = time.perf_counter
+
+        def slow_post(url, token, evals, extended, flight, **kwargs):
+            real_sleep(0.2)
+            key = evals[0].get("strategy") if evals else "heartbeat"
+            post_exit.setdefault(key, real_now())
+            return {}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            batch = _Batch(
+                Path(tmp),
+                timeout="30",
+                workers=2,
+                names=["a", "b", "c", "d"],
+            )
+            batch.ready_after = lambda name, attempt: 0
+            batch._post = slow_post
+            batch.run()
+
+        names = [name for name, _trials in batch.pools[0].tasks]
+        starts = dict(zip(names, batch.pools[0].start_times))
+        self.assertEqual(names, ["a", "b", "c", "d"])
+        self.assertIn("a", post_exit)
+        self.assertLess(starts["d"], post_exit["a"])
 
     def test_timeout_reruns_sibling_that_is_still_inside_its_deadline(self):
         with tempfile.TemporaryDirectory() as tmp:

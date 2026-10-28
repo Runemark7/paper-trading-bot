@@ -448,14 +448,10 @@ def promote_candidates(candidates: list[dict]) -> dict:
 
 
 def _load_discovery_log() -> list[dict]:
-    path = state_root() / "discovery_log.json"
-    if not path.exists():
-        return []
-    try:
-        data = json.loads(path.read_text())
-    except Exception:
-        return []
-    return data if isinstance(data, list) else []
+    """Display log, including rows still in the append delta."""
+    from hedge_fund.trading.discovery import load_discovery_log
+
+    return load_discovery_log()
 
 
 def _earliest_trade_entry_ts(name: str) -> str | None:
