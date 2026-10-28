@@ -2,7 +2,6 @@ import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import type { Champion, ChampionTradeSummary, ChampionTradesPayload } from "../api/types";
 import { EXIT_RULES, SIZING_RULES } from "../lib/rules";
-import { FORWARD_CAP_DEFAULT } from "../lib/gates";
 import {
   EmptyState,
   ErrorNote,
@@ -36,12 +35,10 @@ export function summaryFor(payload: ChampionTradesPayload | undefined, name: str
 
 export function BookKpis({
   champs,
-  cap,
   trades,
   loading,
 }: {
   champs: Champion[];
-  cap: number;
   trades: ChampionTradesPayload | undefined;
   loading: boolean;
 }) {
@@ -53,7 +50,7 @@ export function BookKpis({
   const open = active.reduce((n, c) => n + c.open, 0);
   return (
     <div className="grid grid-cols-2 gap-2 sm:gap-3 lg:grid-cols-5">
-      <Kpi label="Active champions" value={`${champs.length} / ${cap || FORWARD_CAP_DEFAULT}`} hint="admitted by the owner" loading={loading} />
+      <Kpi label="Active champions" value={String(champs.length)} hint="admitted by the owner" loading={loading} />
       <Kpi
         label="Forward P&L"
         value={usd(pnl, 2, true)}

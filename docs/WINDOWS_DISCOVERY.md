@@ -207,7 +207,7 @@ and no `crypto_history_5m.json` placeholder.
    leased again, except one admin-queued v4 discovery-window buy-and-hold
    retest. Same-token optional `force_admit` (e.g. `["dbl_bot_120"]`)
    seats an existing log row as a paper champion even when beat-B&H still
-   fails, and still refuses past the forward cap of 5.
+   fails. It does not refuse because of how many champions are active.
 
 `worker_id` defaults to `hostname-pid`. Override with `--worker-id` or
 `DISCOVERY_WORKER_ID`.

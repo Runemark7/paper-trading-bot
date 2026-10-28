@@ -153,8 +153,8 @@ export default function Discovery() {
         aside={summary.data ? <Badge tone="neutral">updated {shortAgo(summary.data.as_of)}</Badge> : null}
       >
         A worker farm keeps inventing BTC strategies by randomly combining 2–7 building blocks, backtests each one
-        walk-forward, and runs it through a strict 8-check gate. Passing strategies are proposed; the owner admits up to
-        five as champions for live paper trading.
+        walk-forward, and runs it through a strict 8-check gate. Passing strategies are proposed, awaiting approval.
+        The owner admits champions for live paper trading. There is no limit on how many.
       </PageHeader>
 
       {summary.isError ? <ErrorNote what="discovery status" error={summary.error} stale={Boolean(summary.data)} /> : null}
@@ -171,13 +171,13 @@ export default function Discovery() {
             {
               label: "Proposed",
               value: forward ? forward.eligible : undefined,
-              hint: forward ? `awaiting owner approval · top ${forward.cap} ranked` : "awaiting owner approval",
+              hint: forward ? `${forward.proposed.length} awaiting owner approval` : "awaiting owner approval",
               tone: "gold",
             },
             {
               label: "Admitted",
               value: champs.data ? champs.data.active_count : undefined,
-              hint: `champions trading now · max ${forward?.cap ?? 5}`,
+              hint: "champions trading now",
               tone: "gold",
             },
           ]}

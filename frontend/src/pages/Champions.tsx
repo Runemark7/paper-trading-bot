@@ -78,7 +78,6 @@ export default function Champions() {
   const champs = (qChamps.data?.active_champions ?? []).filter(hasName);
   const evalLimit = qChamps.data?.evaluation_limit ?? 80;
   const forward = qChamps.data?.forward_candidates;
-  const forwardCap = forward?.cap ?? qChamps.data?.forward_champion_cap ?? 5;
   const graduated = (qGrad.data ?? []).filter(hasName);
   const run = status.data?.running_now;
   const prog = status.data?.in_progress;
@@ -140,13 +139,13 @@ export default function Champions() {
         accent="emerald"
         aside={run ? `last cycle ${fmtWhen(run.cycle.last_cycle_at)}` : null}
       >
-        Strategies that passed every Discovery check and were admitted by the owner (up to {forwardCap}). Each one runs
+        Strategies that passed every Discovery check and were admitted by the owner. Each one runs
         its own $10k paper account on live BTC prices — no real money. A champion succeeds if it is profitable after fees.
       </PageHeader>
 
       {qChamps.error && !champs.length ? <ErrorNote what="champions" error={qChamps.error} /> : null}
 
-      <BookKpis champs={champs} cap={forwardCap} trades={qTrades.data} loading={qChamps.isLoading} />
+      <BookKpis champs={champs} trades={qTrades.data} loading={qChamps.isLoading} />
 
       {qChamps.isLoading ? (
         <SkeletonRows rows={3} />
@@ -187,7 +186,7 @@ export default function Champions() {
           = BTC 2 · ETH 1, total 3). Tap a row for lots and the compact BTC/ETH
           chart. After <b>{evalLimit} closed entries</b> the account leaves this list.{" "}
           <code>GRADUATED_PAPER</code> is graduated paper (net P&amp;L &gt; 0 after fees), not live money.
-          Active forward champions are capped at {forwardCap}. Names already on the book stay.
+          There is no limit on how many champions the owner can admit. Names already on the book stay.
           {run?.strategy.mode === "sma_stack_fallback" && (
             <> Pool empty — book is running <code>sma_stack</code> fallback.</>
           )}
@@ -460,12 +459,13 @@ export default function Champions() {
 
       <Card
         title="Proposed — awaiting owner approval"
-        aside={`${forward?.active ?? champs.length} active · ${forward?.open_slots ?? "…"} open of ${forwardCap}`}
+        aside={`${forward?.active ?? champs.length} active`}
       >
         <div className="text-sm text-white/60 mb-3">
           Each name here is proposed, awaiting approval. Ranked by deflated Sharpe, then
-          daily Sharpe, then lower PBO. The top {forwardCap} are a suggestion for the owner.
-          This list does not admit or retire anyone. Buy-and-hold figures stay informational.
+          daily Sharpe, then lower PBO. Every qualified name that is not already active,
+          graduated, or retired is listed. This list does not admit or retire anyone.
+          Buy-and-hold figures stay informational.
         </div>
         {!forward?.proposed?.length ? (
           <Empty>No qualified names are waiting outside the active book.</Empty>

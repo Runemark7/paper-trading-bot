@@ -140,4 +140,3 @@ export const GATE_THRESHOLDS = {
 };
 
 export const HOLDOUT_SPAN = "2025-10-01 → 2026-10-01";
-export const FORWARD_CAP_DEFAULT = 5;

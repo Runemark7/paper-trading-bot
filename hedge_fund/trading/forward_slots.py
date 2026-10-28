@@ -1,26 +1,14 @@
-"""Forward-champion cap and the read-only candidate list. Paper only.
+"""Read-only forward-candidate list. Paper only.
 
-New admissions stop at ``FORWARD_CHAMPION_CAP`` active champions. Names
-already on the book stay; nothing here retires a champion to free a slot.
-The candidate list is a proposal. It does not admit.
+There is no champion cap. Names already on the book stay; nothing here
+retires a champion. The candidate list is a proposal. It does not admit.
 """
 from __future__ import annotations
 
-from hedge_fund.trading.constants import BH_METRIC_ROLE, FORWARD_CHAMPION_CAP
+from hedge_fund.trading.constants import BH_METRIC_ROLE
 
 # Shown on GET /api/champions and in the Champions UI. A proposal is not a seat.
 AWAITING_APPROVAL = "proposed, awaiting approval"
-
-
-def forward_cap_block(active_count: int) -> str | None:
-    """Refusal text when another admission would pass the cap. None if it fits."""
-    active = int(active_count)
-    if active >= FORWARD_CHAMPION_CAP:
-        return (
-            f"forward champion cap is {FORWARD_CHAMPION_CAP}; "
-            f"{active} active; admission refused"
-        )
-    return None
 
 
 def _finite(value: object) -> float | None:
@@ -37,12 +25,14 @@ def _gate_block(row: dict) -> dict:
     return block if isinstance(block, dict) else {}
 
 
-def forward_candidates(*, limit: int = FORWARD_CHAMPION_CAP) -> dict:
+def forward_candidates(*, limit: int | None = None) -> dict:
     """Rank qualified names that are not already forward champions.
 
     Order: deflated Sharpe (high), daily Sharpe (high), PBO (low). Missing
-    numbers sort after numbers that are stored. The top ``limit`` are
-    proposed. This function does not write the pool, the log, or retired.
+    numbers sort after numbers that are stored. Every ranked name is
+    marked proposed. ``limit`` only shortens the displayed list; the
+    default is the full ranking. This function does not write the pool,
+    the log, or retired, and it does not admit.
     """
     from hedge_fund.trading.champions import load_graduated, load_pool, retired_names
     from hedge_fund.trading.discovery import latest_eval_per_strategy, load_discovery_log
@@ -92,27 +82,26 @@ def forward_candidates(*, limit: int = FORWARD_CHAMPION_CAP) -> dict:
         return (-dsr, -daily, pbo, item["strategy"])
 
     ranked.sort(key=_key)
-    shown = ranked[: max(0, int(limit))]
+    if limit is None:
+        shown = list(ranked)
+    else:
+        shown = ranked[: max(0, int(limit))]
     for i, item in enumerate(shown, start=1):
         item["rank"] = i
-    active_n = len(active)
-    open_slots = max(0, FORWARD_CHAMPION_CAP - active_n)
     return {
         "paper_only": True,
-        "cap": FORWARD_CHAMPION_CAP,
-        "active": active_n,
-        "open_slots": open_slots,
+        "active": len(active),
         "eligible": len(ranked),
         "proposed": shown,
         "admitted": [],
         "retired": [],
         "note": (
             "Proposed, awaiting approval. Ranked by deflated Sharpe, then "
-            "daily Sharpe, then lower PBO. A newly qualified pass is not "
-            "seated. Admission is an explicit owner decision (force_admit or "
-            "promote_candidates) and refuses when "
-            f"{FORWARD_CHAMPION_CAP} champions are already active. "
-            "Nothing in this list is admitted or retired. "
-            "Buy-and-hold figures are informational."
+            "daily Sharpe, then lower PBO. Every qualified name that is not "
+            "active, graduated, or retired is proposed. A newly qualified "
+            "pass is not seated. Admission is an explicit owner decision "
+            "(force_admit or promote_candidates) and does not refuse because "
+            "of how many champions are active. Nothing in this list is "
+            "admitted or retired. Buy-and-hold figures are informational."
         ),
     }

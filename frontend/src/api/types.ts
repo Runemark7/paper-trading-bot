@@ -478,9 +478,7 @@ export interface ForwardCandidate {
 
 export interface ForwardCandidates {
   paper_only: boolean;
-  cap: number;
   active: number;
-  open_slots: number;
   eligible: number;
   proposed: ForwardCandidate[];
   admitted: string[];
@@ -492,7 +490,6 @@ export interface ChampionsPayload {
   active_champions: Champion[];
   active_count: number;
   evaluation_limit: number;
-  forward_champion_cap?: number;
   forward_candidates?: ForwardCandidates;
   graduated_count: number;
   graduated: GraduatedStrategy[];
