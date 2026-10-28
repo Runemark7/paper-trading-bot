@@ -141,7 +141,7 @@ export default function Champions() {
         aside={run ? `last cycle ${fmtWhen(run.cycle.last_cycle_at)}` : null}
       >
         Strategies that passed every Discovery check and were admitted by the owner (up to {forwardCap}). Each one runs
-        its own €10k paper account on live BTC prices — no real money. A champion succeeds if it is profitable after fees.
+        its own $10k paper account on live BTC prices — no real money. A champion succeeds if it is profitable after fees.
       </PageHeader>
 
       {qChamps.error && !champs.length ? <ErrorNote what="champions" error={qChamps.error} /> : null}

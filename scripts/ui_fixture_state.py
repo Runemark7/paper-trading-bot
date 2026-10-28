@@ -24,6 +24,7 @@ if str(REPO) not in sys.path:
 from hedge_fund.trading.constants import GATE_RULES  # noqa: E402
 from hedge_fund.trading.store import TradeStore  # noqa: E402
 
+FIXTURE_MARKER = ".ui_fixture_state"
 CHAMPION_A = "h1_ema_abv_50&mom_18b_gt2pc&sma_abv_30&rsi_14_>45"
 CHAMPION_B = "h4_ema_abv_20&mom_18b_gt2pc&sma_abv_30&rsi_14_>50"
 
@@ -159,9 +160,14 @@ def write_trades(root: Path, name: str, trades: list[dict], open_lots: list[dict
 def build(root: Path, seed: int = 7) -> None:
     rng = random.Random(seed)
     now = datetime.now(timezone.utc).replace(microsecond=0)
-    if root.exists():
+    marker = root / FIXTURE_MARKER
+    if root.exists() and any(root.iterdir()):
+        if not marker.exists():
+            # Never wipe a real PAPER_STATE: only a dir this script wrote is replaced.
+            raise SystemExit(f"refusing to overwrite {root}: not empty and not a fixture dir (no {FIXTURE_MARKER})")
         shutil.rmtree(root)
-    root.mkdir(parents=True)
+    root.mkdir(parents=True, exist_ok=True)
+    marker.write_text("sample paper state written by scripts/ui_fixture_state.py\n")
 
     a_since = now - timedelta(days=9, hours=3)
     b_since = now - timedelta(hours=20)
