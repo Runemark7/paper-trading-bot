@@ -6,8 +6,10 @@ connection. P&L on a closed row is the stored value: net of the entry and
 exit taker fee (slippage is already in the fill price).
 
 Per-account reads are cached by the DB file token (main file, WAL, SHM),
-so a poll that finds no new writes does not open SQLite. Nothing here
-writes a DB, the pool, or any discovery state.
+so a rebuild that finds no new writes does not open SQLite. Whole payloads
+come from a single-flight background cache rebuilt at most every
+``MIN_REBUILD_SECONDS`` per (name, limit). Nothing here writes a DB, the
+pool, or any discovery state.
 """
 from __future__ import annotations
 
@@ -20,6 +22,8 @@ from hedge_fund.trading.champions import load_pool
 from hedge_fund.trading.constants import PAPER_START_CASH
 from hedge_fund.trading.open_lots import account_name_from_db, account_slug, paper_book_dbs
 from hedge_fund.trading.store import TradeStore, _db_cache_token
+from hedge_fund.paths import state_root
+from hedge_fund.web.bg_cache import COMPUTING, BackgroundCache, computing_body
 
 MAX_ROWS_PER_ACCOUNT = 500
 DEFAULT_EVENT_LIMIT = 200
@@ -35,9 +39,15 @@ _cache_lock = threading.Lock()
 _CACHE_MAX = 64
 
 
+MIN_REBUILD_SECONDS = 30.0
+COLD_WAIT_SECONDS = 5.0
+_PAYLOADS = BackgroundCache("champion-trades", min_interval=MIN_REBUILD_SECONDS, max_keys=32)
+
+
 def clear_champion_trades_cache() -> None:
     with _cache_lock:
         _cache.clear()
+    _PAYLOADS.clear()
 
 
 def parse_limit(raw: str | None) -> int:
@@ -210,3 +220,13 @@ def champion_trades_payload(name: str | None = None, limit: int = DEFAULT_EVENT_
             "Equity is the account's last snapshot from the live cycle."
         ),
     }
+
+
+def champion_trades_response(name: str | None = None, limit: int = DEFAULT_EVENT_LIMIT) -> tuple[dict, int]:
+    """Body and status for GET /api/champions/trades; 202 while a cold key builds."""
+    wanted = name.strip() if isinstance(name, str) and name.strip() else None
+    key = (str(state_root().resolve()), wanted, int(limit))
+    read = _PAYLOADS.get(key, lambda: champion_trades_payload(wanted, limit=limit), wait_cold=COLD_WAIT_SECONDS)
+    if read.status == COMPUTING:
+        return computing_body("The trade log", retry_after=5, error=read.error, events=[], champions=[]), 202
+    return read.value, 200

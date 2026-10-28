@@ -285,6 +285,10 @@ export interface PairedAxisEffect {
 
 /** Exploratory marginal effects. Does not change the gate. */
 export interface BlockReport {
+  /** "stale" while a newer report is being built; the numbers are still the last good ones. */
+  status?: "ready" | "stale" | string;
+  age_seconds?: number | null;
+  source?: "cycle" | "web" | string;
   paper_only: boolean;
   exploratory: boolean;
   changes_gate: boolean;

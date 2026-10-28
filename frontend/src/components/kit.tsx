@@ -2,6 +2,7 @@ import { useId, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { CATEGORY_LABEL, CATEGORY_TONE, strategyBlocks } from "../lib/rules";
 import { gateInfo } from "../lib/gates";
+import { isComputing } from "../api/client";
 
 /** Hover / focus / tap explainer. Keyboard reachable; no portal, no JS positioning. */
 export function InfoTip({ label, children, align = "center" }: { label: string; children: ReactNode; align?: "center" | "left" | "right" }) {
@@ -128,6 +129,14 @@ export function SkeletonRows({ rows = 3 }: { rows?: number }) {
 
 /** Load error. With last-known data still on screen, say so instead of hiding it. */
 export function ErrorNote({ what, error, stale = false }: { what: string; error: unknown; stale?: boolean }) {
+  if (isComputing(error)) {
+    return (
+      <div role="status" className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-white/60">
+        The server is still computing {what}
+        {stale ? " — showing the last data we had" : ""}. It refreshes on its own.
+      </div>
+    );
+  }
   return (
     <div role="alert" className="rounded-lg border border-rose-400/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-100 break-words">
       Could not load {what}

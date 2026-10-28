@@ -10,8 +10,11 @@ const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       refetchInterval: pollInterval(30_000),
+      // Hidden tabs do not poll; focus refetches anything stale.
+      refetchIntervalInBackground: false,
       staleTime: 15_000,
       // HTTP retry of 502/503/504 is in client.get (once). Do not stack.
+      // A 202 "computing" answer is picked up by the next poll.
       retry: false,
       placeholderData: keepPreviousData,
     },

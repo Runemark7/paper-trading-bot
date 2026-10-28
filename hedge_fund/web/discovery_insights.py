@@ -9,18 +9,18 @@ discovery summary already holds in memory. It reports:
   fewest robustness checks) with the checks they failed,
 * the newest evaluations, slim.
 
-Cached by the display-log fingerprint and rebuilt at most every
-``MIN_REBUILD_SECONDS``. Does not read the results jsonl, mint, claim, or
-touch the gate.
+Served from a single-flight background cache: rebuilt off the request
+thread, at most every ``MIN_REBUILD_SECONDS``, and only when the
+display-log fingerprint moved. Does not read the results jsonl, mint,
+claim, or touch the gate.
 """
 from __future__ import annotations
 
-import threading
-import time
 from datetime import datetime, timezone
 
 from hedge_fund.paths import state_root
 from hedge_fund.trading.constants import GATE_RULES
+from hedge_fund.web.bg_cache import COMPUTING, BackgroundCache, computing_body
 
 MIN_REBUILD_SECONDS = 30.0
 NEAR_MISS_LIMIT = 8
@@ -30,13 +30,12 @@ BASE_GATES = ("trades", "sharpe", "baseline", "windows")
 ROBUST_GATES = ("holdout", "dsr", "pbo", "perturb", "cost")
 GATE_ORDER = BASE_GATES[:3] + ROBUST_GATES + ("windows", "bh_legacy", "ops")
 
-_lock = threading.Lock()
-_cached: dict = {"key": None, "built": 0.0, "payload": None}
+COLD_WAIT_SECONDS = 5.0
+_CACHE = BackgroundCache("discovery-insights", min_interval=MIN_REBUILD_SECONDS, max_keys=2)
 
 
 def clear_insights_cache() -> None:
-    with _lock:
-        _cached.update({"key": None, "built": 0.0, "payload": None})
+    _CACHE.clear()
 
 
 def classify_reason(reason: str) -> str:
@@ -181,18 +180,25 @@ def build_insights(log: list[dict]) -> dict:
     }
 
 
-def discovery_insights_payload() -> dict:
-    from hedge_fund.trading.discovery import discovery_log_fingerprint, load_discovery_log
+def _build_current() -> dict:
+    from hedge_fund.trading.discovery import load_discovery_log
 
-    key = (str(state_root().resolve()), discovery_log_fingerprint())
-    now = time.monotonic()
-    with _lock:
-        payload = _cached["payload"]
-        fresh = _cached["key"] == key
-        recent = now - _cached["built"] < MIN_REBUILD_SECONDS
-        if payload is not None and (fresh or recent) and _cached["key"][0] == key[0]:
-            return payload
-    payload = build_insights(load_discovery_log())
-    with _lock:
-        _cached.update({"key": key, "built": time.monotonic(), "payload": payload})
-    return payload
+    return build_insights(load_discovery_log())
+
+
+def _fingerprint():
+    from hedge_fund.trading.discovery import discovery_log_fingerprint
+
+    return discovery_log_fingerprint()
+
+
+def insights_response() -> tuple[dict, int]:
+    """Body and status for GET /api/discovery/insights; 202 while the first build runs."""
+    read = _CACHE.get(str(state_root().resolve()), _build_current, token=_fingerprint, wait_cold=COLD_WAIT_SECONDS)
+    if read.status == COMPUTING:
+        return computing_body("Discovery insights", retry_after=10, error=read.error), 202
+    return read.value, 200
+
+
+def discovery_insights_payload() -> dict:
+    return insights_response()[0]

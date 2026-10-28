@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { fetchDiscoverySummary, setDiscoveryFarm } from "../api/client";
+import { pollInterval, SUMMARY_POLL_MS } from "../api/poll";
 import type { DiscoveryFarm, DiscoverySummary } from "../api/types";
 import { Badge, Card } from "../components/ui";
 import { fmtWhen } from "./format";
@@ -60,7 +61,8 @@ export default function FarmControl() {
   const q = useQuery<DiscoverySummary, Error>({
     queryKey: ["discovery-summary", "compact"],
     queryFn: () => fetchDiscoverySummary({ compact: true }),
-    refetchInterval: 15_000,
+    refetchInterval: pollInterval(SUMMARY_POLL_MS),
+    refetchIntervalInBackground: false,
   });
   const [savedToken, setSavedToken] = useState(loadToken);
   const [tokenDraft, setTokenDraft] = useState("");

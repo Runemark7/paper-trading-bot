@@ -72,8 +72,10 @@ class LiveCycleGateTests(unittest.TestCase):
 
         with patch.dict(os.environ, {"DISCOVERY_ON_CYCLE": "0", "PAPER_DISCOVERY_MODE": "off"}):
             with patch.object(live_cycle, "_run", side_effect=fake_run):
-                with patch.object(live_cycle, "write_pipeline_stamp"):
+                with patch.object(live_cycle, "write_pipeline_stamp"), \
+                        patch.object(live_cycle, "_spawn_block_report_publish") as spawn:
                     rc = live_cycle.main()
+        spawn.assert_called_once()
         self.assertEqual(rc, 0)
         self.assertNotIn("tournament", labels)
         self.assertIn("run_isolated", labels)
@@ -91,7 +93,8 @@ class LiveCycleGateTests(unittest.TestCase):
 
         with patch.dict(os.environ, {"DISCOVERY_ON_CYCLE": "1"}):
             with patch.object(live_cycle, "_run", side_effect=fake_run):
-                with patch.object(live_cycle, "write_pipeline_stamp"):
+                with patch.object(live_cycle, "write_pipeline_stamp"), \
+                        patch.object(live_cycle, "_spawn_block_report_publish"):
                     live_cycle.main()
         self.assertEqual(labels[0], "tournament")
         self.assertIn("run_isolated", labels)

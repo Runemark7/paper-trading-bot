@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
+import { pollInterval, SUMMARY_POLL_MS } from "../api/poll";
 import { useQuery } from "@tanstack/react-query";
 import { fetchDiscoverySummary } from "../api/client";
 import type { DiscoveryEvaluation, DiscoverySummary } from "../api/types";
@@ -61,7 +62,8 @@ export function DiscoveryTeaser() {
   const q = useQuery<DiscoverySummary, Error>({
     queryKey: ["discovery-summary", "compact"],
     queryFn: () => fetchDiscoverySummary({ compact: true }),
-    refetchInterval: 15_000,
+    refetchInterval: pollInterval(SUMMARY_POLL_MS),
+    refetchIntervalInBackground: false,
   });
   const counts = q.data?.counts;
   const uniqueTested = counts?.unique_tested ?? counts?.tested;
@@ -118,7 +120,8 @@ export default function DiscoveryBuckets() {
   const q = useQuery<DiscoverySummary, Error>({
     queryKey: ["discovery-summary"],
     queryFn: () => fetchDiscoverySummary(),
-    refetchInterval: 15_000,
+    refetchInterval: pollInterval(SUMMARY_POLL_MS),
+    refetchIntervalInBackground: false,
   });
   const [filters, setFilters] = useState<TestedColumnFilters>(EMPTY_TESTED_FILTERS);
   const [sort, setSort] = useState<TestedSort>(DEFAULT_TESTED_SORT);

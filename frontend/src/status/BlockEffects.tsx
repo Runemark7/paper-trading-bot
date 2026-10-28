@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
-import { fetchBlockReport } from "../api/client";
+import { fetchBlockReport, isComputing } from "../api/client";
+import { BLOCKS_POLL_MS } from "../api/poll";
 import type { BlockEffect, PairedAxisEffect } from "../api/types";
 import { Badge, Card, Empty } from "../components/ui";
 
@@ -47,13 +48,18 @@ function AxisRow({ row }: { row: PairedAxisEffect }) {
   );
 }
 
-/** Compact exploratory block effects. Not a gate and not the 15s summary poll. */
+/** Compact exploratory block effects. Not a gate and not the summary poll. */
 export default function BlockEffects() {
   const q = useQuery({
     queryKey: ["discovery-blocks"],
     queryFn: fetchBlockReport,
-    refetchInterval: 60_000,
+    // Server rebuilds at most every 10 min; while it is still computing, look again in a minute.
+    refetchInterval: (query) => (isComputing(query.state.error) ? 60_000 : BLOCKS_POLL_MS),
+    refetchIntervalInBackground: false,
+    staleTime: BLOCKS_POLL_MS,
+    retry: false,
   });
+  const computing = isComputing(q.error) && !q.data;
   const families = (q.data?.families ?? []).slice(0, 8);
   const paired = q.data?.paired ?? [];
 
@@ -67,12 +73,24 @@ export default function BlockEffects() {
       <p className="text-sm text-white/55 mb-3">
         {q.data?.label ||
           "Exploratory. Pre-holdout results only. This report does not change the gate."}
+        {q.data?.age_seconds != null ? (
+          <span className="text-white/40">
+            {" "}
+            Built {Math.max(1, Math.round(q.data.age_seconds / 60))} min ago
+            {q.data.status === "stale" ? "; a refresh is running" : ""}.
+          </span>
+        ) : null}
       </p>
-      {q.isError && (
+      {computing ? (
+        <Empty>
+          The block report is being computed in the background (it scans every stored result, at most
+          once every 10 minutes). It will appear here on its own.
+        </Empty>
+      ) : q.isError && !isComputing(q.error) ? (
         <div className="text-rose-300 text-sm mb-3">
           Could not load /api/discovery/blocks: {String(q.error)}
         </div>
-      )}
+      ) : null}
       {q.isSuccess && q.data.n_results === 0 && (
         <Empty>No current-gate pre-holdout results yet.</Empty>
       )}
