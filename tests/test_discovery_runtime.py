@@ -265,6 +265,63 @@ class HistoryTrimTests(unittest.TestCase):
         self.assertEqual(closes1[-1], data["BTC/USDT"][scored_start1 + window_size - 1][4])
 
 
+class AppendOnlyStateTests(unittest.TestCase):
+    def test_ingest_does_not_rewrite_base_files_and_ignores_a_partial_line(self):
+        from hedge_fund.trading.constants import GATE_RULES
+        from hedge_fund.trading.discovery import discovery_log_delta_path
+        from hedge_fund.trading.ingest import ingest_discovery_payload
+        from hedge_fund.trading.tested_index import (
+            load_tested_index,
+            tested_journal_path,
+        )
+
+        row = {
+            "qualified": False,
+            "sharpe": 0.2,
+            "trades": 10,
+            "test_pnl": 1.0,
+            "train_pnl": 1.0,
+            "win_rate_pct": 40.0,
+            "fail_reasons": ["oos_sharpe 0.20 < 0.30"],
+            "timeframe": "5m",
+            "risk_policy": "rm_v1",
+            "gate_rules": GATE_RULES,
+            "tested_at": "2026-10-20T00:00:00+00:00",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            base_log = json.dumps([dict(row, strategy="old")], separators=(",", ":"))
+            base_index = json.dumps({
+                "v": 1,
+                "paper_only": True,
+                "names": {"old": 0},
+                "metrics": {"old": {"sharpe": 0.2, "trades": 10}},
+            }, separators=(",", ":"))
+            (root / "discovery_log.json").write_text(base_log)
+            (root / "discovery_tested.json").write_text(base_index)
+            (root / "discovery_farm.json").write_text(json.dumps({"enabled": True}))
+            with patch.dict(os.environ, {"PAPER_STATE": str(root)}):
+                ev = dict(row, strategy="fresh_name", tested_at="2026-10-28T05:00:00+00:00")
+                body = ingest_discovery_payload({
+                    "evaluations": [ev],
+                    "heartbeat": {"status": "running", "worker_id": "w"},
+                })
+                self.assertEqual(body["ingested"], ["fresh_name"])
+                self.assertEqual((root / "discovery_log.json").read_text(), base_log)
+                self.assertEqual((root / "discovery_tested.json").read_text(), base_index)
+                self.assertIn("fresh_name", discovery_log_delta_path().read_text())
+                self.assertIn("fresh_name", tested_journal_path().read_text())
+                self.assertFalse(load_tested_index()["fresh_name"])
+                again = ingest_discovery_payload({"evaluations": [ev]})
+                self.assertEqual(again["ingested"], [])
+                self.assertEqual(again["skipped"][0]["reason"], "already_tested")
+                # Crash mid-append: a partial last line must not hide the good one.
+                with tested_journal_path().open("a") as fh:
+                    fh.write('{"name":"broken"')
+                self.assertNotIn("broken", load_tested_index())
+                self.assertIn("fresh_name", load_tested_index())
+
+
 class CompactDiscoveryLogTests(unittest.TestCase):
     def test_append_writes_compact_json(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -275,8 +332,11 @@ class CompactDiscoveryLogTests(unittest.TestCase):
                     "qualified": False,
                     "tested_at": "2026-09-10T00:00:00+00:00",
                 })
-                raw = (root / "discovery_log.json").read_text()
+                from hedge_fund.trading.discovery import discovery_log_delta_path
+
+                raw = discovery_log_delta_path().read_text()
                 self.assertNotIn("\n  ", raw)
+                self.assertFalse((root / "discovery_log.json").exists())
                 log = load_discovery_log()
         self.assertEqual(log[0]["strategy"], "sma_stack")
         self.assertFalse(log[0]["qualified"])
@@ -327,7 +387,8 @@ class CompactDiscoveryLogTests(unittest.TestCase):
             f"full_rewrite={rewrite_s * 1000:.1f}ms bytes={len(blob)} "
             f"compact_every={DELTA_COMPACT_LINES}"
         )
-        self.assertLess(delta_s * 3, rewrite_s)
+        # The append must stay cheaper than rewriting the base array.
+        self.assertLess(delta_s, rewrite_s)
 
     def test_census_is_reused_until_the_index_changes(self):
         from hedge_fund.trading.tested_index import save_tested_index

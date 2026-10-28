@@ -1342,3 +1342,11 @@ This amendment does not rewrite original §§ 1–8 or prior amendments. It does
 **Why.** After the handler split, prod medians were about 2.2–2.4s of CPU per claim and ingest, and the claim held the paper-state lock for about 2.2s. Each request rebuilt canonical keys and cleaned every stored metric. The worker parent also kept window slices as Python lists of floats (about 600MB).
 
 **What changed.** The tested-name set, cleaned metrics, extended sidecar, and leftover queue are cached on the file fingerprint. An append updates those sets in place, so the next claim does not walk the book again. Fail-once for a retried post still sees the name, under the append lock, from that cache. Eval slices stored for the worker are `array('d')`, the same floats in far fewer bytes, so the parent does not keep a second list copy the child already evaluates. Mint rules and results are unchanged.
+
+### Amendment 2026-10-28 — ingest appends, compaction is off the request
+
+This amendment does not rewrite original §§ 1–8 or prior amendments. It does not change a gate threshold, the sealed holdout, cost stress, paper graduation, the mint bans, the 600s eval timeout, or `DISCOVERY_REFILL_BATCH_SIZE` (16). Still paper. Kubernetes resource limits are unchanged.
+
+**Why.** The web container sat on its 500m CPU limit. Each ingest rewrote `discovery_tested.json` (about 2MB) and, every few dozen results, `discovery_log.json` (about 5.6MB).
+
+**What changed.** An ingest appends one JSONL line to `discovery_log_delta.jsonl` and one line to `discovery_tested.jsonl`. It does not rewrite either base file. Readers merge the base (the previous JSON object or array) with those lines. A partial last line, from a crash mid-write, is ignored. The same row in the base and the delta is kept once. A retried ingest still writes nothing the second time. Rescore, requeue, requalify, and the other bulk editors call `save_discovery_log` / `save_tested_index`, which install a new base and drop the journal so they cannot bypass the merge. Compaction runs on a daemon thread once a journal reaches 256KB, not inside the request. The first start still reads a base file that has no journal. Deleting the journal leaves that base as it was. An unchanged champion pool is not rewritten. JSON responses use compact separators.

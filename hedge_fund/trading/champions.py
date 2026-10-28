@@ -96,6 +96,13 @@ def save_pool(st: dict):
         prev = prev_by_name.get(c.get("name"))
         if prev and prev.get("champion_since"):
             c["champion_since"] = prev["champion_since"]
+    if path.exists():
+        try:
+            current = json.loads(path.read_text())
+        except Exception:
+            current = None
+        if current == st:
+            return
     path.write_text(json.dumps(st, indent=2))
 
 
