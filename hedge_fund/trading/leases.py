@@ -84,7 +84,7 @@ from hedge_fund.trading.refill import (
     next_refill_batch,
 )
 from hedge_fund.trading.store import paper_state_lock
-from hedge_fund.trading.tested_index import ensure_tested_index
+from hedge_fund.trading.tested_index import ensure_tested_index, load_tested_index
 from hedge_fund.trading.universe import untested_candidates
 
 logger = logging.getLogger(__name__)
@@ -635,8 +635,9 @@ def _claim_unlocked(
     now = now.astimezone(timezone.utc)
     ensure_tested_index()
     state = load_lease_state()
-    log = load_discovery_log()
-    tested = tested_discovery_names(log)
+    # The index is the fail-once set. A retest-filled claim does not
+    # parse the display log; leftovers still do, inside ``_queue_view``.
+    tested = set(load_tested_index())
     _drop_expired_and_tested(state, now, tested)
     ttl = lease_ttl_seconds(n, parallel)
     if not farm_enabled_unlocked():

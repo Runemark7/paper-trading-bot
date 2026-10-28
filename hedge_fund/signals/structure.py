@@ -59,6 +59,7 @@ rather than silently using close as high/low (no same-series lie).
 from __future__ import annotations
 
 import math
+from collections import deque
 
 NEAR_PCT = 0.002  # 0.20% of close
 NEAR_ATR_MULT = 0.25
@@ -88,6 +89,62 @@ def require_ohlc(
     return highs, lows
 
 
+_SERIES_CACHE_MAX = 128
+_atr_cache: dict[tuple, list[float]] = {}
+_swing_cache: dict[tuple, tuple] = {}
+_donchian_cache: dict[tuple, list[float]] = {}
+
+
+def clear_structure_cache() -> None:
+    """Drop per-tape structure series. The next name on the same lists rebuilds nothing."""
+    _atr_cache.clear()
+    _swing_cache.clear()
+    _donchian_cache.clear()
+
+
+def _remember(cache: dict, key: tuple, value):
+    if len(cache) >= _SERIES_CACHE_MAX:
+        cache.clear()
+    cache[key] = value
+    return value
+
+
+def _atr_series(
+    highs: list[float],
+    lows: list[float],
+    closes: list[float],
+    period: int,
+) -> list[float]:
+    """ATR at every bar. Same window mean as the per-bar loop in ``atr_at``."""
+    n = len(closes)
+    out = [float("nan")] * n
+    if period <= 0 or n <= period:
+        return out
+    trs = [0.0] * n
+    for j in range(1, n):
+        h, l, pc = highs[j], lows[j], closes[j - 1]
+        trs[j] = max(h - l, abs(h - pc), abs(l - pc))
+    acc = sum(trs[1 : period + 1])
+    out[period] = acc / period
+    for i in range(period + 1, n):
+        acc += trs[i] - trs[i - period]
+        out[i] = acc / period
+    return out
+
+
+def _cached_atr_series(
+    highs: list[float],
+    lows: list[float],
+    closes: list[float],
+    period: int,
+) -> list[float]:
+    key = (id(highs), id(lows), id(closes), period, len(closes))
+    hit = _atr_cache.get(key)
+    if hit is not None and len(hit) == len(closes):
+        return hit
+    return _remember(_atr_cache, key, _atr_series(highs, lows, closes, period))
+
+
 def atr_at(
     highs: list[float],
     lows: list[float],
@@ -99,11 +156,7 @@ def atr_at(
     i = _idx(closes, i)
     if i < period or period <= 0:
         return float("nan")
-    trs: list[float] = []
-    for j in range(i - period + 1, i + 1):
-        h, l, pc = highs[j], lows[j], closes[j - 1]
-        trs.append(max(h - l, abs(h - pc), abs(l - pc)))
-    return sum(trs) / len(trs)
+    return _cached_atr_series(highs, lows, closes, period)[i]
 
 
 def near_band(close: float, atr_val: float) -> float:
@@ -131,20 +184,51 @@ def swings_hold(first: float, second: float, atr_val: float) -> bool:
     return abs(second - first) <= hold_band(first, atr_val)
 
 
+def _range_before(values: list[float], n: int, *, high: bool) -> list[float]:
+    """``out[i]`` is max/min of ``values[i-n:i]``. Not enough history → nan.
+
+    One forward pass. Ties keep the extreme value, matching ``max`` / ``min``.
+    """
+    length = len(values)
+    out = [float("nan")] * length
+    if n < 1:
+        return out
+    dq: deque[int] = deque()
+    for i in range(length):
+        while dq and dq[0] < i - n:
+            dq.popleft()
+        if i >= n and dq:
+            out[i] = values[dq[0]]
+        if high:
+            while dq and values[dq[-1]] <= values[i]:
+                dq.pop()
+        else:
+            while dq and values[dq[-1]] >= values[i]:
+                dq.pop()
+        dq.append(i)
+    return out
+
+
+def _donchian_series(values: list[float], n: int, *, high: bool) -> list[float]:
+    key = (id(values), n, high, len(values))
+    hit = _donchian_cache.get(key)
+    if hit is not None and len(hit) == len(values):
+        return hit
+    return _remember(_donchian_cache, key, _range_before(values, n, high=high))
+
+
 def prior_donchian_high(highs: list[float], n: int, i: int) -> float:
     """Max high of the N bars *before* i. Current bar is not in the window."""
     if n < 1 or i < n:
         return float("nan")
-    window = highs[i - n : i]
-    return max(window) if window else float("nan")
+    return _donchian_series(highs, n, high=True)[i]
 
 
 def prior_donchian_low(lows: list[float], n: int, i: int) -> float:
     """Min low of the N bars *before* i. Current bar is not in the window."""
     if n < 1 or i < n:
         return float("nan")
-    window = lows[i - n : i]
-    return min(window) if window else float("nan")
+    return _donchian_series(lows, n, high=False)[i]
 
 
 def don_hi(
@@ -179,6 +263,54 @@ def don_lo(
     return is_near_level(closes[i], level, atr_at(highs, lows, closes, NEAR_ATR_PERIOD, i))
 
 
+def _range_after(values: list[float], k: int, *, high: bool) -> list[float]:
+    """``out[j]`` is max/min of the ``k`` bars after ``j`` (``j+1`` .. ``j+k``)."""
+    n = len(values)
+    rev = _range_before(values[::-1], k, high=high)
+    out = [float("nan")] * n
+    for j in range(n):
+        # k bars after j are the k bars before rev index (n-1-j).
+        src = n - 1 - j
+        if 0 <= src < n:
+            out[j] = rev[src]
+    return out
+
+
+def _pivot_list(values: list[float], k: int, want_high: bool) -> list[tuple[int, float]]:
+    """Confirmed fractal pivots, oldest first. Built once per series and ``k``.
+
+    ``j`` is a pivot when it is the strict unique extreme of
+    ``values[j-k:j+k+1]``. The right-hand ``k`` bars must exist, so the
+    last possible pivot is ``len-1-k``. Callers still hide a pivot until
+    bar ``i`` satisfies ``j+k <= i``.
+    """
+    key = (id(values), k, want_high, len(values))
+    hit = _swing_cache.get(key)
+    if hit is not None and hit[0] is values:
+        return hit[1]
+    n = len(values)
+    if k < 1 or n < 2 * k + 1:
+        pivots: list[tuple[int, float]] = []
+        _remember(_swing_cache, key, (values, pivots))
+        return pivots
+    left = _range_before(values, k, high=want_high)
+    right = _range_after(values, k, high=want_high)
+    pivots = []
+    for j in range(k, n - k):
+        v = values[j]
+        lv = left[j]
+        rv = right[j]
+        if lv != lv or rv != rv:  # nan: window missing
+            continue
+        if want_high:
+            if v > lv and v > rv:
+                pivots.append((j, float(v)))
+        elif v < lv and v < rv:
+            pivots.append((j, float(v)))
+    _remember(_swing_cache, key, (values, pivots))
+    return pivots
+
+
 def confirmed_swings(
     values: list[float],
     k: int,
@@ -192,30 +324,25 @@ def confirmed_swings(
     ``values[j-k:j+k+1]``. Confirmed only when ``j + k <= i`` — the right
     side of the window already exists. A pivot on the decision bar is not
     a swing yet (no lookahead).
+
+    The pivot list for ``(values, k)`` is built once in O(n) and reused
+    for every bar and every later name on that same tape.
     """
-    out: list[tuple[int, float]] = []
     if k < 1 or i < 2 * k:
-        return out
-    for j in range(i - k, k - 1, -1):
-        lo, hi = j - k, j + k
-        extreme = values[j]
-        unique = True
-        for t in range(lo, hi + 1):
-            if t == j:
-                continue
-            if want_high:
-                if values[t] >= extreme:
-                    unique = False
-                    break
-            else:
-                if values[t] <= extreme:
-                    unique = False
-                    break
-        if unique:
-            out.append((j, float(extreme)))
-            if limit is not None and len(out) >= limit:
-                break
-    return out
+        return []
+    pivots = _pivot_list(values, k, want_high)
+    # Rightmost pivot with j+k <= i.
+    lo, hi = 0, len(pivots)
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if pivots[mid][0] + k <= i:
+            lo = mid + 1
+        else:
+            hi = mid
+    if lo == 0:
+        return []
+    start = 0 if limit is None else max(0, lo - limit)
+    return list(reversed(pivots[start:lo]))
 
 
 def last_confirmed_swing(

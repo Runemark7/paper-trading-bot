@@ -93,6 +93,11 @@ def _log_stat_key() -> tuple:
     return (_file_stat(discovery_log_path()), _file_stat(discovery_log_delta_path()))
 
 
+def discovery_log_fingerprint() -> tuple:
+    """Identity of the display log plus its delta. Used to skip a re-merge."""
+    return _log_stat_key()
+
+
 def _read_json_array(path: Path) -> list[dict]:
     if not path.exists():
         return []
@@ -261,7 +266,7 @@ def append_discovery_evaluations(eval_records: list[dict], *, cap: int = DISCOVE
         flags_changed = merge_tested_rows(index, eval_records)
         metrics_changed = merge_tested_metrics(metrics, eval_records)
         if flags_changed or metrics_changed:
-            save_tested_index(index, metrics)
+            save_tested_index(index, metrics, cleaned=True)
         path = discovery_log_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         base_size = path.stat().st_size if path.exists() else 0
@@ -282,6 +287,9 @@ def append_discovery_evaluations(eval_records: list[dict], *, cap: int = DISCOVE
                 _clear_delta()
                 _write_log_array(path, log)
         _remember_log(log)
+        from hedge_fund.trading.tested_index import mark_index_covers_log
+
+        mark_index_covers_log()
         saved = log
     from hedge_fund.trading.discovery_results import sync_discovery_results
 
@@ -315,7 +323,10 @@ def save_discovery_log(log: list[dict]) -> None:
         flags_changed = merge_tested_rows(index, log)
         metrics_changed = merge_tested_metrics(metrics, log)
         if flags_changed or metrics_changed:
-            save_tested_index(index, metrics)
+            save_tested_index(index, metrics, cleaned=True)
+        from hedge_fund.trading.tested_index import mark_index_covers_log
+
+        mark_index_covers_log()
     from hedge_fund.trading.discovery_results import sync_discovery_results
 
     sync_discovery_results(log)

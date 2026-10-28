@@ -50,6 +50,8 @@ class RulesV3BatchTests(unittest.TestCase):
         self._env.start()
         self._uni = patch("hedge_fund.trading.leases.discovery_universe", return_value=["don_hi_30"])
         self._uni.start()
+        self._sched = patch("hedge_fund.trading.leases.schedule_refill_buffer")
+        self._sched.start()
         self.names = ["dip_276b_lt8pc&h4_ema_abv_240", "dip_24b_lt5pc"]
         self._names = patch(
             "hedge_fund.trading.requalify.rules_v2_batch_names", return_value=list(self.names)
@@ -58,6 +60,7 @@ class RulesV3BatchTests(unittest.TestCase):
         self.t0 = datetime(2026, 10, 8, 17, 0, tzinfo=timezone.utc)
 
     def tearDown(self):
+        self._sched.stop()
         self._names.stop()
         self._uni.stop()
         self._env.stop()
