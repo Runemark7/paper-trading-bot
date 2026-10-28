@@ -126,5 +126,38 @@ class SwingParityTests(unittest.TestCase):
         self.assertLess(cached_s, 2.0)
 
 
+class StructureCacheIdentityTests(unittest.TestCase):
+    def test_atr_matches_fresh_window_sum_bitwise(self):
+        from hedge_fund.signals.structure import atr_at
+
+        closes, highs, lows = _tape(3000, seed=3)
+        clear_structure_cache()
+        for i in range(14, len(closes), 7):
+            trs = []
+            for j in range(i - 13, i + 1):
+                h, l, pc = highs[j], lows[j], closes[j - 1]
+                trs.append(max(h - l, abs(h - pc), abs(l - pc)))
+            self.assertEqual(atr_at(highs, lows, closes, 14, i), sum(trs) / len(trs))
+
+    def test_new_same_length_tape_never_reuses_series(self):
+        """live_tape rebuilds same-length lists each tick; freed ids get reused."""
+        from hedge_fund.signals.structure import atr_at, prior_donchian_high
+
+        clear_structure_cache()
+        for seed in range(40):
+            closes, highs, lows = _tape(300, seed=100 + seed)
+            i = 250
+            trs = []
+            for j in range(i - 13, i + 1):
+                h, l, pc = highs[j], lows[j], closes[j - 1]
+                trs.append(max(h - l, abs(h - pc), abs(l - pc)))
+            self.assertEqual(atr_at(highs, lows, closes, 14, i), sum(trs) / len(trs))
+            self.assertEqual(prior_donchian_high(highs, 48, i), max(highs[i - 48 : i]))
+            self.assertEqual(
+                confirmed_swings(lows, 12, i, False, 2), _reference_swings(lows, 12, i, False, 2)
+            )
+            del closes, highs, lows
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -90,9 +90,9 @@ def require_ohlc(
 
 
 _SERIES_CACHE_MAX = 128
-_atr_cache: dict[tuple, list[float]] = {}
+_atr_cache: dict[tuple, tuple] = {}
 _swing_cache: dict[tuple, tuple] = {}
-_donchian_cache: dict[tuple, list[float]] = {}
+_donchian_cache: dict[tuple, tuple] = {}
 
 
 def clear_structure_cache() -> None:
@@ -124,11 +124,11 @@ def _atr_series(
     for j in range(1, n):
         h, l, pc = highs[j], lows[j], closes[j - 1]
         trs[j] = max(h - l, abs(h - pc), abs(l - pc))
-    acc = sum(trs[1 : period + 1])
-    out[period] = acc / period
-    for i in range(period + 1, n):
-        acc += trs[i] - trs[i - period]
-        out[i] = acc / period
+    # Fresh window sum per bar (not a rolling sum): bit-identical to the
+    # old per-bar loop, so near-band comparisons cannot flip on float drift.
+    for i in range(period, n):
+        window = trs[i - period + 1 : i + 1]
+        out[i] = sum(window) / len(window)
     return out
 
 
@@ -140,9 +140,13 @@ def _cached_atr_series(
 ) -> list[float]:
     key = (id(highs), id(lows), id(closes), period, len(closes))
     hit = _atr_cache.get(key)
-    if hit is not None and len(hit) == len(closes):
-        return hit
-    return _remember(_atr_cache, key, _atr_series(highs, lows, closes, period))
+    # The entry keeps its source lists alive, so a freed list's id cannot be
+    # reused by a new tape (live_tape builds fresh same-length lists per tick).
+    if hit is not None and hit[0] is highs and hit[1] is lows and hit[2] is closes:
+        return hit[3]
+    series = _atr_series(highs, lows, closes, period)
+    _remember(_atr_cache, key, (highs, lows, closes, series))
+    return series
 
 
 def atr_at(
@@ -212,9 +216,12 @@ def _range_before(values: list[float], n: int, *, high: bool) -> list[float]:
 def _donchian_series(values: list[float], n: int, *, high: bool) -> list[float]:
     key = (id(values), n, high, len(values))
     hit = _donchian_cache.get(key)
-    if hit is not None and len(hit) == len(values):
-        return hit
-    return _remember(_donchian_cache, key, _range_before(values, n, high=high))
+    # Same identity guard as the pivot cache: the entry pins ``values``.
+    if hit is not None and hit[0] is values:
+        return hit[1]
+    series = _range_before(values, n, high=high)
+    _remember(_donchian_cache, key, (values, series))
+    return series
 
 
 def prior_donchian_high(highs: list[float], n: int, i: int) -> float:
