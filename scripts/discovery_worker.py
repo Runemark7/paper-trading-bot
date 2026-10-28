@@ -490,15 +490,19 @@ def _run_inflight(
     trial_for,
     sleeper=None,
     clock=None,
+    on_inflight=None,
 ) -> None:
     """Keep up to *n_workers* evals in flight.
 
-    The next name is submitted as soon as a slot frees. Each name's
-    deadline is *timeout_s* seconds from its own submit (``timeout_s`` <= 0
-    waits). Only a name that crosses its own deadline is fail-parked.
-    ``pool.terminate`` is process-wide, so any other in-flight name is
-    submitted again with a fresh deadline and is not parked. *finish* runs
-    as each result is ready.
+    The next name is submitted as soon as a slot frees, and that submit
+    happens before *finish* posts the result, so the HTTP post does not
+    leave the core idle. Each name's deadline is *timeout_s* seconds from
+    its own submit (``timeout_s`` <= 0 waits). Only a name that crosses
+    its own deadline is fail-parked. ``pool.terminate`` is process-wide,
+    so any other in-flight name is submitted again with a fresh deadline
+    and is not parked. *finish* runs as each result is ready.
+    ``on_inflight`` sees the names actually submitted, including right
+    after the first launch.
     """
     if sleeper is None:
         sleeper = time.sleep
@@ -519,6 +523,8 @@ def _run_inflight(
             started = clock()
             ar = pool.apply_async(_eval_name, (name, trials, True))
             inflight[name] = (ar, started)
+        if on_inflight is not None:
+            on_inflight(list(inflight))
 
     launch()
     while inflight:
@@ -540,13 +546,17 @@ def _run_inflight(
             ready.append((name, rec))
         for name, rec in ready:
             del inflight[name]
-            finish(name, rec)
+            # Fill the free slot before the result post. The child is
+            # already running while finish() talks to prod.
             if not stuck:
                 launch()
+            finish(name, rec)
         if stuck:
             reason = eval_timeout_reason(timeout_s)
             killed = [name for name in inflight if name not in stuck]
             inflight.clear()
+            if on_inflight is not None:
+                on_inflight([])
             _drop_eval_pool()
             pool = None
             for name in stuck:
@@ -954,6 +964,7 @@ def _post_ingest(
     clear: bool = False,
     heartbeat: str | None = None,
     worker_id: str | None = None,
+    evaluating: list[str] | None = None,
 ) -> dict:
     payload = {
         "evaluations": evaluations,
@@ -967,6 +978,8 @@ def _post_ingest(
         hb = {"status": heartbeat, "source": "windows_worker"}
         if worker_id:
             hb["worker_id"] = worker_id
+        if evaluating is not None:
+            hb["evaluating"] = [n for n in evaluating if isinstance(n, str)]
         payload["heartbeat"] = hb
     if clear:
         payload["clear_in_flight"] = True
@@ -1064,7 +1077,10 @@ def run_batch(
     if added:
         print(f"discovery_worker: refilled {len(added)} names", flush=True)
 
-    def _ingest(evals, extended, flight, *, clear=False, heartbeat=None):
+    evaluating_names: list[str] = []
+    eval_beat = {"sent": False}
+
+    def _ingest(evals, extended, flight, *, clear=False, heartbeat=None, evaluating=None):
         if not (ingest_url and token):
             return
         if claim_mode:
@@ -1079,7 +1095,29 @@ def run_batch(
             clear=clear,
             heartbeat=heartbeat,
             worker_id=worker_id,
+            evaluating=evaluating,
         )
+
+    def on_inflight(names_now: list[str]) -> None:
+        evaluating_names[:] = list(names_now)
+        if eval_beat["sent"] or not names_now:
+            return
+        eval_beat["sent"] = True
+        try:
+            _ingest(
+                [],
+                [],
+                {
+                    "names": list(names_now),
+                    "remaining": list(names_now),
+                    "completed": [],
+                    "batch_size": len(planned),
+                },
+                heartbeat="running",
+                evaluating=list(names_now),
+            )
+        except Exception as exc:
+            print(f"discovery_worker: in-flight heartbeat failed: {exc}", flush=True)
 
     if not planned:
         print("discovery_worker: no never-tested names (recipe dry or all parked)", flush=True)
@@ -1168,6 +1206,7 @@ def run_batch(
                     "batch_size": len(planned),
                 },
                 heartbeat="running",
+                evaluating=list(evaluating_names),
             )
             acked.append(name)
         if not claim_mode:
@@ -1201,7 +1240,9 @@ def run_batch(
                 retest_names, n_trials_retest,
             )
             for name in cheap:
+                evaluating_names[:] = [name]
                 finish(name, _eval_name(name))
+                evaluating_names[:] = []
         else:
             retest = frozenset(retest_names or ())
 
@@ -1227,6 +1268,7 @@ def run_batch(
                     finish=finish,
                     pool_factory=pool_factory,
                     trial_for=trial_for,
+                    on_inflight=on_inflight,
                 )
             except BaseException:
                 _drop_eval_pool()

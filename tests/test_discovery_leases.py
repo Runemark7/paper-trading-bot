@@ -54,15 +54,24 @@ class LeaseQueueTests(unittest.TestCase):
             "DISCOVERY_EVAL_TIMEOUT_SECONDS": "600",
         }
 
-    def test_ttl_is_about_two_batch_times(self):
-        from hedge_fund.trading.leases import lease_ttl_seconds
+    def test_ttl_is_heartbeat_grace_not_batch_length(self):
+        from hedge_fund.trading.farm import FARM_HEARTBEAT_STALE_SECONDS
+        from hedge_fund.trading.leases import (
+            lease_heartbeat_grace_seconds,
+            lease_ttl_seconds,
+            per_name_lease_seconds,
+        )
 
+        grace = FARM_HEARTBEAT_STALE_SECONDS
+        self.assertEqual(lease_heartbeat_grace_seconds(), grace)
+        # 16 names at parallel 1 used to be 2 * 600 * 16 = 19200s (about 5.3h).
+        self.assertEqual(lease_ttl_seconds(16, 1), grace)
+        self.assertEqual(lease_ttl_seconds(4, 2), grace)
+        self.assertEqual(lease_ttl_seconds(2, None), grace)
         with patch.dict(os.environ, {"DISCOVERY_EVAL_TIMEOUT_SECONDS": "600"}):
-            self.assertEqual(lease_ttl_seconds(2, 2), 1200)
-            self.assertEqual(lease_ttl_seconds(4, 2), 2400)
-            self.assertEqual(lease_ttl_seconds(2, None), 1200)
+            self.assertEqual(per_name_lease_seconds(), 1200)
         with patch.dict(os.environ, {"DISCOVERY_EVAL_TIMEOUT_SECONDS": "0"}):
-            self.assertEqual(lease_ttl_seconds(1, 1), 1200)
+            self.assertEqual(per_name_lease_seconds(), 1200)
 
     def test_two_workers_never_share_a_name(self):
         from hedge_fund.trading.leases import claim_discovery_batch, lease_snapshot
@@ -131,7 +140,8 @@ class LeaseQueueTests(unittest.TestCase):
                     first = claim_discovery_batch("linux-1", 2, parallel=2, now=t0)
                     self.assertEqual(set(first["names"]), set(universe))
                     ttl = first["ttl_seconds"]
-                    self.assertEqual(ttl, 1200)
+                    self.assertEqual(ttl, 900)
+                    self.assertEqual(first["per_name_cap_seconds"], 1200)
                     with patch("hedge_fund.trading.leases.next_refill_batch", return_value=[]):
                         blocked = claim_discovery_batch(
                             "jensa-2",
@@ -160,6 +170,138 @@ class LeaseQueueTests(unittest.TestCase):
                         lease_snapshot(t0 + timedelta(seconds=ttl + 2))["active_names"],
                         [],
                     )
+
+    def test_heartbeat_renews_unstarted_names_and_caps_a_started_one(self):
+        from hedge_fund.trading.leases import (
+            claim_discovery_batch,
+            lease_snapshot,
+            touch_worker_unlocked,
+        )
+        from hedge_fund.trading.store import paper_state_lock
+
+        universe = _names(2)
+        t0 = datetime(2026, 10, 7, 12, 0, tzinfo=timezone.utc)
+        with tempfile.TemporaryDirectory() as tmp:
+            env = {
+                **self._env(Path(tmp)),
+                "DISCOVERY_RANDOM_SHARE": "0",
+                "DISCOVERY_PAIRED_SHARE": "0",
+            }
+            with patch.dict(os.environ, env):
+                with patch(
+                    "hedge_fund.trading.leases.discovery_universe",
+                    return_value=universe,
+                ):
+                    with patch("hedge_fund.trading.leases.next_refill_batch", return_value=[]):
+                        first = claim_discovery_batch("linux-1", 2, parallel=1, now=t0)
+                        self.assertEqual(first["ttl_seconds"], 900)
+                        self.assertEqual(len(first["names"]), 2)
+                        started, waiting = first["names"]
+                        with paper_state_lock("discovery"):
+                            touch_worker_unlocked(
+                                "linux-1",
+                                "running",
+                                now=t0 + timedelta(seconds=800),
+                                evaluating=[started],
+                            )
+                        held = claim_discovery_batch(
+                            "jensa-2",
+                            2,
+                            parallel=1,
+                            now=t0 + timedelta(seconds=1699),
+                        )
+                        self.assertEqual(held["names"], [])
+                        with paper_state_lock("discovery"):
+                            touch_worker_unlocked(
+                                "linux-1",
+                                "running",
+                                now=t0 + timedelta(seconds=1600),
+                                evaluating=[started],
+                            )
+                        freed = claim_discovery_batch(
+                            "jensa-2",
+                            1,
+                            parallel=1,
+                            now=t0 + timedelta(seconds=2001),
+                        )
+                        snap = lease_snapshot(t0 + timedelta(seconds=2001))
+        self.assertEqual(freed["names"], [started])
+        by_worker = {row["worker_id"]: set(row["in_flight"]) for row in snap["workers"]}
+        self.assertEqual(by_worker["jensa-2"], {started})
+        self.assertEqual(by_worker["linux-1"], {waiting})
+
+    def test_paused_or_other_worker_does_not_renew(self):
+        from hedge_fund.trading.leases import claim_discovery_batch, touch_worker_unlocked
+        from hedge_fund.trading.store import paper_state_lock
+
+        universe = _names(1)
+        t0 = datetime(2026, 10, 7, 12, 0, tzinfo=timezone.utc)
+        with tempfile.TemporaryDirectory() as tmp:
+            env = {
+                **self._env(Path(tmp)),
+                "DISCOVERY_RANDOM_SHARE": "0",
+                "DISCOVERY_PAIRED_SHARE": "0",
+            }
+            with patch.dict(os.environ, env):
+                with patch(
+                    "hedge_fund.trading.leases.discovery_universe",
+                    return_value=universe,
+                ):
+                    with patch("hedge_fund.trading.leases.next_refill_batch", return_value=[]):
+                        claim_discovery_batch("linux-1", 1, parallel=1, now=t0)
+                        with paper_state_lock("discovery"):
+                            touch_worker_unlocked(
+                                "jensa-2",
+                                "running",
+                                now=t0 + timedelta(seconds=800),
+                            )
+                            touch_worker_unlocked(
+                                "linux-1",
+                                "paused",
+                                now=t0 + timedelta(seconds=850),
+                            )
+                        freed = claim_discovery_batch(
+                            "jensa-2",
+                            1,
+                            parallel=1,
+                            now=t0 + timedelta(seconds=901),
+                        )
+        self.assertEqual(freed["names"], universe)
+
+    def test_sixteen_names_expire_after_the_grace_not_five_hours(self):
+        from hedge_fund.trading.leases import claim_discovery_batch
+
+        universe = _names(16)
+        t0 = datetime(2026, 10, 7, 12, 0, tzinfo=timezone.utc)
+        with tempfile.TemporaryDirectory() as tmp:
+            env = {
+                **self._env(Path(tmp)),
+                "DISCOVERY_RANDOM_SHARE": "0",
+                "DISCOVERY_PAIRED_SHARE": "0",
+            }
+            with patch.dict(os.environ, env):
+                with patch(
+                    "hedge_fund.trading.leases.discovery_universe",
+                    return_value=universe,
+                ):
+                    with patch("hedge_fund.trading.leases.next_refill_batch", return_value=[]):
+                        first = claim_discovery_batch("linux-1", 16, parallel=1, now=t0)
+                        self.assertEqual(len(first["names"]), 16)
+                        self.assertEqual(first["ttl_seconds"], 900)
+                        blocked = claim_discovery_batch(
+                            "jensa-2",
+                            16,
+                            parallel=1,
+                            now=t0 + timedelta(seconds=899),
+                        )
+                        freed = claim_discovery_batch(
+                            "jensa-2",
+                            16,
+                            parallel=1,
+                            now=t0 + timedelta(seconds=901),
+                        )
+        self.assertEqual(blocked["names"], [])
+        self.assertEqual(set(freed["names"]), set(universe))
 
     def test_ingest_clears_lease_and_fail_once_holds(self):
         from hedge_fund.trading.ingest import ingest_discovery_payload
@@ -314,6 +456,11 @@ class LeaseHttpTests(unittest.TestCase):
         return raw.status, json.loads(raw.read().decode())
 
     def test_claim_requires_token_and_concurrent_posts_are_disjoint(self):
+        # The buffer mint is a daemon. This test deletes PAPER_STATE when
+        # it returns, so leave that thread unstarted.
+        sched = patch("hedge_fund.trading.leases.schedule_refill_buffer")
+        sched.start()
+        self.addCleanup(sched.stop)
         httpd, thread, port = self._start()
         try:
             universe = _names(8)
@@ -470,11 +617,13 @@ class WorkerClaimModeTests(unittest.TestCase):
                 None,
                 heartbeat="running",
                 worker_id="jensa-9",
+                evaluating=["don_hi_6"],
             )
         data = http.call_args.kwargs["data"]
         self.assertEqual(data["worker_id"], "jensa-9")
         self.assertEqual(data["heartbeat"]["worker_id"], "jensa-9")
         self.assertEqual(data["heartbeat"]["status"], "running")
+        self.assertEqual(data["heartbeat"]["evaluating"], ["don_hi_6"])
         self.assertNotIn("paper-secret-token", json.dumps(data))
 
     def test_default_worker_id_uses_hostname_and_pid(self):

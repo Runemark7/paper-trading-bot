@@ -146,10 +146,14 @@ and no `crypto_history_5m.json` placeholder.
 2. `POST /api/discovery/claim` `{worker_id, n, parallel}` with
    `X-Discovery-Token`. Prod returns up to `n` never-tested names that are
    not already leased, and records a lease (`worker_id`, `claimed_at`,
-   `expires_at`). TTL is about 2× the worst-case batch
-   (2 × `DISCOVERY_EVAL_TIMEOUT_SECONDS` × ceil(n / parallel)), which still
-   covers every name using its full timeout. A dead worker's names return
-   to the pool when the lease expires.
+   `expires_at`). The lease lasts one heartbeat grace
+   (`FARM_HEARTBEAT_STALE_SECONDS`, 15 minutes) past this worker's last
+   heartbeat, not `2 × timeout × ceil(n / parallel)`. A name the worker
+   reports in `heartbeat.evaluating` is also capped at
+   `2 × DISCOVERY_EVAL_TIMEOUT_SECONDS` from the moment that name started
+   (default 1200s). A dead worker's names return to the pool about 15
+   minutes after its last heartbeat, including names it had not started.
+   A live worker's heartbeat keeps the names it has not started yet.
    If the unleased pool cannot cover `n`, or never-tested work is below
    twice the active lease capacity, prod refills `discovery_extended.json`.
    The recipe runs first (`iter_recipe_names` / `next_refill_batch`). When

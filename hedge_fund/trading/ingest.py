@@ -330,11 +330,15 @@ def ingest_discovery_payload(payload: dict) -> dict:
         hb = payload.get("heartbeat")
         status = None
         worker_id = None
+        evaluating = None
         if isinstance(hb, dict):
             status = hb.get("status")
             raw_id = hb.get("worker_id")
             if isinstance(raw_id, str):
                 worker_id = raw_id
+            raw_evaluating = hb.get("evaluating")
+            if isinstance(raw_evaluating, list):
+                evaluating = raw_evaluating
         elif hb:
             status = str(hb)
         if not worker_id and isinstance(payload.get("worker_id"), str):
@@ -342,7 +346,11 @@ def ingest_discovery_payload(payload: dict) -> dict:
         if isinstance(hb, dict) or hb or worker_id:
             apply_heartbeat_unlocked(str(status) if status else None)
         if worker_id:
-            touch_worker_unlocked(worker_id, str(status) if status else None)
+            touch_worker_unlocked(
+                worker_id,
+                str(status) if status else None,
+                evaluating=evaluating,
+            )
 
         flight = payload.get("in_flight")
         if payload.get("clear_in_flight"):
