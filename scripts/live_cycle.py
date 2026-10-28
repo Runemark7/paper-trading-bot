@@ -5,6 +5,7 @@ SEQUENCE:
 2. Isolated €10k paper cycle across champion accounts
 3. Sync live results / graduation
 4. Print status report (pod logs; optional Telegram later)
+5. Spawn a detached, niced block-report publish for the web Discovery page
 
 Discovery walk-forwards do **not** run on the 1 CPU / 1.5GiB cycle sidecar
 unless ``DISCOVERY_ON_CYCLE=1`` or ``PAPER_DISCOVERY_MODE=on``. Default is
@@ -16,6 +17,7 @@ but do not block the rest of the cycle.
 """
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -83,7 +85,28 @@ def main() -> int:
         write_pipeline_stamp("idle", "finished")
     except Exception as exc:
         print(f"live_cycle: idle stamp failed: {exc}", flush=True)
+    _spawn_block_report_publish()
     return rc
+
+
+def _spawn_block_report_publish() -> None:
+    """Refresh discovery_blocks.json for web without holding up the next cycle.
+
+    Detached and niced so the 300s bar cadence does not move. The child
+    rate-limits itself (10 min) and exits at once if another publish holds
+    the lock. ``BLOCK_REPORT_PUBLISH=0`` turns it off.
+    """
+    if os.environ.get("BLOCK_REPORT_PUBLISH", "1").strip().lower() in ("0", "false", "off", "no"):
+        return
+    try:
+        subprocess.Popen(
+            [sys.executable, str(ROOT / "scripts" / "block_report.py"), "--publish", "--nice", "10"],
+            cwd=str(ROOT),
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except Exception as exc:
+        print(f"live_cycle: block report publish not started: {exc}", flush=True)
 
 
 if __name__ == "__main__":

@@ -1307,3 +1307,28 @@ def records_by_name() -> dict[str, dict]:
         finally:
             if fh is not None:
                 fh.close()
+
+
+def iter_public_rows(prefilter=None):
+    """Read-only stream of public rows, one at a time.
+
+    The locks are held only to snapshot the in-memory map and open the
+    jsonl. Lines are read back afterwards through that handle, so ingest
+    is not blocked for the whole pass and a rewrite (``os.replace``) does
+    not move the offsets under us. ``prefilter(slim_row)`` skips the disk
+    read for rows the caller would drop anyway.
+    """
+    with _lock, _ResultsLock(exclusive=False):
+        items = list(_load_map().values())
+        try:
+            fh = discovery_results_path().open("rb")
+        except OSError:
+            fh = None
+    try:
+        for row in items:
+            if prefilter is not None and not prefilter(row):
+                continue
+            yield _public_row(row, fh)
+    finally:
+        if fh is not None:
+            fh.close()
