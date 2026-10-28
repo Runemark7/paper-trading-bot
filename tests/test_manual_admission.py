@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from hedge_fund.trading.constants import FORWARD_CHAMPION_CAP, GATE_RULES
+from hedge_fund.trading.constants import GATE_RULES
 from hedge_fund.trading.gate_v4 import v4_pass_attestation
 
 
@@ -33,7 +33,7 @@ def _eval(name, *, qualified=True):
 
 
 class ManualAdmitTests(unittest.TestCase):
-    def test_ingest_does_not_seat_and_explicit_admit_respects_the_cap(self):
+    def test_ingest_does_not_seat_and_explicit_admit_does(self):
         from hedge_fund.trading.champions import load_pool, save_pool
         from hedge_fund.trading.forward_slots import AWAITING_APPROVAL, forward_candidates
         from hedge_fund.trading.ingest import ingest_discovery_payload
@@ -65,7 +65,9 @@ class ManualAdmitTests(unittest.TestCase):
         self.assertEqual(ranked["proposed"][0]["status"], AWAITING_APPROVAL)
         self.assertEqual(seated["admitted"], ["fresh_pass"])
         self.assertEqual(after, ["kept_a", "kept_b", "fresh_pass"])
-        self.assertEqual(FORWARD_CHAMPION_CAP, 5)
+        import hedge_fund.trading.constants as constants
+
+        self.assertFalse(hasattr(constants, "FORWARD_CHAMPION_CAP"))
 
     def test_ui_shows_the_proposal_phrase(self):
         root = Path(__file__).resolve().parents[1]

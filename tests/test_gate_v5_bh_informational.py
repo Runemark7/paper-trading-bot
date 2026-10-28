@@ -12,7 +12,6 @@ from unittest.mock import patch
 from hedge_fund.trading.constants import (
     DISCOVERY_N_WINDOWS,
     DSR_MIN_PROBABILITY,
-    FORWARD_CHAMPION_CAP,
     GATE_RULES,
     HOLDOUT_END_MS,
     HOLDOUT_MIN_TRADES,
@@ -131,7 +130,9 @@ class UnchangedV4ChecksTests(unittest.TestCase):
         self.assertEqual(DSR_MIN_PROBABILITY, 0.95)
         self.assertEqual(PBO_MAX, 0.20)
         self.assertEqual(stress_fees(), (0.002, 0.0007))
-        self.assertEqual(FORWARD_CHAMPION_CAP, 5)
+        import hedge_fund.trading.constants as constants
+
+        self.assertFalse(hasattr(constants, "FORWARD_CHAMPION_CAP"))
 
     def test_trial_count_is_backtested_plus_one_and_skips_ops_parks(self):
         payload = {

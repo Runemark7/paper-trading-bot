@@ -229,10 +229,10 @@ MIN_BACKTEST_TRADES = 30  # OOS trades across all windows (not train+test)
 TRADE_EVALUATION_LIMIT = 80
 # No MAX_ACTIVE_CHAMPIONS. The 2026-09-01 20-slot arena starved prod's 31
 # grandfathered names (needed = 20 - 31 <= 0) and stays deleted.
-# FORWARD_CHAMPION_CAP is a different rule: new admissions stop at 5 active
-# forward champions. Names already on the book are not retired to get under
-# it. Admission stays a manual owner decision.
-FORWARD_CHAMPION_CAP = 5
+# No FORWARD_CHAMPION_CAP. Alexander, 2026-10-28 20:09 CET: there is no
+# limit on champions. The 2026-10-27 cap of 5 is deleted. No admission
+# path refuses because of how many champions are active. Admission stays
+# a manual owner decision. Names already on the book are not retired.
 # No DISCOVER_BATCH_SIZE. The old random sample of 30 (shuffle 30 and
 # ignore the rest) stays deleted. Leftovers still drain 24/7, but each
 # live_cycle tournament invocation takes a time-shared slice so a 60-name

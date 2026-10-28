@@ -317,9 +317,9 @@ class QualTapeTests(unittest.TestCase):
 
 
 class PoolAdmitTests(unittest.TestCase):
-    def test_pool_above_cap_refuses_new_names_and_keeps_the_book(self):
+    def test_pool_of_31_still_admits_new_names_and_keeps_the_book(self):
         from hedge_fund.trading.champions import load_pool, promote_candidates, save_graduated, save_pool
-        from hedge_fund.trading.constants import FORWARD_CHAMPION_CAP
+        import hedge_fund.trading.constants as constants
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -335,16 +335,11 @@ class PoolAdmitTests(unittest.TestCase):
                     {"strategy": "dbl_bot_12&sma_abv_50"},
                 ])
                 pool = load_pool()["champions"]
-        self.assertEqual(out["added"], [])
-        self.assertEqual(out["active_count"], 31)
-        self.assertEqual([c["name"] for c in pool], before)
-        self.assertEqual(
-            [row["reason"] for row in out["refused"]],
-            [
-                f"forward champion cap is {FORWARD_CHAMPION_CAP}; 31 active; admission refused",
-                f"forward champion cap is {FORWARD_CHAMPION_CAP}; 31 active; admission refused",
-            ],
-        )
+        self.assertFalse(hasattr(constants, "FORWARD_CHAMPION_CAP"))
+        self.assertEqual(out["added"], ["dbl_bot_12", "dbl_bot_12&sma_abv_50"])
+        self.assertEqual(out["refused"], [])
+        self.assertEqual(out["active_count"], 33)
+        self.assertEqual([c["name"] for c in pool], before + ["dbl_bot_12", "dbl_bot_12&sma_abv_50"])
 
     def test_replenish_still_runs_when_pool_has_31(self):
         from hedge_fund.trading.champions import save_pool

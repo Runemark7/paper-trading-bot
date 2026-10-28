@@ -6,8 +6,8 @@ Fail-once: a name that already has any discovery_log row is skipped
 seated. On ingest, parked rows that now pass on stored aggregates
 (Sharpe / trades / sma) are flipped the same way and stay proposals.
 Buy-and-hold is not a fail reason. Seating is the explicit
-``force_admit`` list (token gated) or ``promote_candidates``. Both
-refuse past the forward cap. Champions are only removed by the
+``force_admit`` list (token gated) or ``promote_candidates``. Neither
+refuses because of how many champions are active. Champions are only removed by the
 one-per-family rule (``families.py``): a twin is parked to
 ``retired.json``. Paper only.
 """
@@ -27,7 +27,6 @@ from hedge_fund.trading.discovery import (
     tested_discovery_names,
     write_in_flight,
 )
-from hedge_fund.trading.forward_slots import forward_cap_block
 from hedge_fund.trading.families import (
     admit_blocked_names,
     enforce_champion_families_unlocked,
@@ -186,10 +185,6 @@ def _apply_force_admit(
         if row is None:
             skipped.append({"strategy": name, "reason": "not_in_discovery_log"})
             continue
-        block = forward_cap_block(len(st.get("champions") or []))
-        if block:
-            skipped.append({"strategy": name, "reason": block})
-            continue
         row["qualified"] = True
         row["force_admitted_at"] = stamp
         row["force_admit_source"] = source
@@ -279,11 +274,11 @@ def ingest_discovery_payload(payload: dict) -> dict:
     """Apply a worker batch. Caller must already have checked the ingest token.
 
     Returns counts. A qualified pass is listed under ``proposed`` and is
-    not seated. ``force_admit`` is the explicit seat and still enforces
-    the forward cap. Parks family twins of names that were seated
-    (families.py); never deletes. May flip a parked log row to qualified
-    when stored aggregates now pass (all-windows veto dropped). That flip
-    is also a proposal.
+    not seated. ``force_admit`` is the explicit seat and does not refuse
+    because of how many champions are active. Parks family twins of names
+    that were seated (families.py); never deletes. May flip a parked log
+    row to qualified when stored aggregates now pass (all-windows veto
+    dropped). That flip is also a proposal and does not seat.
     """
     if not isinstance(payload, dict):
         raise ValueError("payload must be an object")

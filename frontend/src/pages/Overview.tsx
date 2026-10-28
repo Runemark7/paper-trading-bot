@@ -21,7 +21,6 @@ import {
   usd,
 } from "../components/kit";
 import TradeLog from "../components/TradeLog";
-import { FORWARD_CAP_DEFAULT } from "../lib/gates";
 import { championDetailPath } from "../status/championPath";
 import { farmStatusLabel } from "../status/FarmControl";
 import {
@@ -39,8 +38,8 @@ const JOURNEY = [
   { step: "Generate", text: "Randomly combine 2–7 building blocks into an entry rule." },
   { step: "Backtest", text: "18 walk-forward windows of 5-minute BTC data, with fees." },
   { step: "Gate v5", text: "8 strict checks against luck, overfitting and costs." },
-  { step: "Propose", text: "Passers are ranked; the top 5 are proposed." },
-  { step: "Admit", text: "The owner hand-picks up to 5 champions." },
+  { step: "Propose", text: "Every passer is ranked and marked proposed, awaiting approval." },
+  { step: "Admit", text: "The owner admits champions by hand. There is no limit on how many." },
   { step: "Forward test", text: "Paper-trade live Binance prices. Win = profit after fees." },
 ];
 
@@ -60,7 +59,6 @@ export default function Overview() {
   const tested = counts?.unique_tested ?? counts?.tested;
   const passed = counts?.tested_pass;
   const active = champs.data?.active_champions ?? [];
-  const cap = champs.data?.forward_candidates?.cap ?? champs.data?.forward_champion_cap ?? FORWARD_CAP_DEFAULT;
   const proposed = champs.data?.forward_candidates?.proposed?.length ?? 0;
   const summaries = trades.data?.champions ?? [];
   const forwardPnl = summaries.length
@@ -113,10 +111,10 @@ export default function Overview() {
         />
         <Kpi
           label="Active champions"
-          value={champs.data ? `${active.length} / ${cap}` : "—"}
+          value={champs.data ? String(active.length) : "—"}
           loading={champs.isPending}
           hint={champs.data ? (proposed ? `${proposed} proposed, awaiting approval` : "none awaiting approval") : undefined}
-          info={<InfoTip label="Active champions">Passing strategies the owner admitted for forward testing. At most {cap} at a time.</InfoTip>}
+          info={<InfoTip label="Active champions">Passing strategies the owner admitted for forward testing. There is no limit on how many.</InfoTip>}
         />
         <Kpi
           label="Forward P&L after fees"

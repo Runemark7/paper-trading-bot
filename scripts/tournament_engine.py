@@ -8,7 +8,7 @@
    diagnostic (all_windows_nonneg), not a fail reason. Risk policy: rm_v1.
 3. A 5m-qualified name is logged and proposed. It is not seated.
    Seating is an explicit admit (``force_admit`` / ``promote_candidates``)
-   and stops at the forward cap. Static universe size (~40–120) is the
+   and does not stop because of how many champions are active. Static universe size (~40–120) is the
    compiled list bound; auto-refill appends a handful of never-tested
    names to discovery_extended.json when leftovers run dry.
 4. Graduation: TRADE_EVALUATION_LIMIT (80) closed paper trades vs B&H.

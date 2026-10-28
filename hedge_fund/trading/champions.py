@@ -1,9 +1,9 @@
 """Champion pool manager — continuous pipeline.
 
 Rules (hedge_fund.trading.constants — do not document different numbers):
-1. New admissions stop at FORWARD_CHAMPION_CAP (5) active forward champions.
-   The revoked 20-slot arena stays deleted. Names already on the book are
-   not retired to get under the cap. Universe size is still the mint bound.
+1. There is no cap on active forward champions (the 2026-10-27 cap of 5
+   is deleted, and the revoked 20-name arena stays deleted). Names already
+   on the book are not retired. Universe size is still the mint bound.
 2. Evaluation threshold: TRADE_EVALUATION_LIMIT (80) closed paper trades.
    Net paper P&L > 0 after taker fee and slippage → GRADUATED_PAPER
    (graduated paper, not live trading). Else REJECTED_NEGATIVE_PNL.
@@ -24,13 +24,12 @@ from hedge_fund.paths import state_root
 from hedge_fund.trading.buy_and_hold import buy_and_hold_from_trades
 from hedge_fund.trading.constants import (
     BH_METRIC_ROLE,
-    FORWARD_CHAMPION_CAP,
     GRADUATED_PAPER,
     PAPER_START_CASH,
     REJECTED_NEGATIVE_PNL,
     TRADE_EVALUATION_LIMIT,
 )
-from hedge_fund.trading.forward_slots import forward_cap_block, forward_candidates
+from hedge_fund.trading.forward_slots import forward_candidates
 from hedge_fund.trading.open_lots import account_slug, attach_open_lots
 from hedge_fund.trading.store import TradeStore, connect_sqlite, paper_state_lock
 
@@ -408,11 +407,13 @@ def _collect_live_results_unlocked() -> dict:
 
 
 def promote_candidates(candidates: list[dict]) -> dict:
-    """Explicit owner seat. Admits named 5m candidates until the forward cap.
+    """Explicit owner seat. Admits every named candidate that is not already
+    active, graduated, or retired.
 
     Ingest does not call this. A qualified pass stays on the proposal
-    list until an owner runs this or ``force_admit``. Does not retire
-    anyone.
+    list until an owner runs this or ``force_admit``. Does not refuse
+    because of how many champions are active. Does not retire anyone.
+    ``refused`` stays in the result and is empty: count is not a reason.
     """
     st = load_pool()
     grad_list = load_graduated()
@@ -424,10 +425,6 @@ def promote_candidates(candidates: list[dict]) -> dict:
     for cand in candidates:
         name = cand.get("strategy")
         if not name or name in existing:
-            continue
-        block = forward_cap_block(len(st["champions"]))
-        if block:
-            refused.append({"strategy": name, "reason": block})
             continue
         st["champions"].append({
             "name": name,
@@ -571,7 +568,6 @@ def pool_status(*, read_only: bool = False) -> dict:
         "active_champions": champs,
         "active_count": len(st["champions"]),
         "evaluation_limit": TRADE_EVALUATION_LIMIT,
-        "forward_champion_cap": FORWARD_CHAMPION_CAP,
         "forward_candidates": forward_candidates(),
         "graduated_count": len(grad),
         "graduated": grad,

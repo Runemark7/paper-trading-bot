@@ -1,4 +1,4 @@
-"""Forward champion cap and the read-only candidate ranking. Paper only."""
+"""Read-only forward candidates. There is no champion cap. Paper only."""
 from __future__ import annotations
 
 import json
@@ -8,8 +8,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from hedge_fund.trading.constants import FORWARD_CHAMPION_CAP, GATE_RULES
-from hedge_fund.trading.forward_slots import forward_cap_block
+from hedge_fund.trading.constants import GATE_RULES
 from hedge_fund.trading.gate_v4 import v4_pass_attestation
 
 
@@ -58,22 +57,17 @@ def _eval(name: str, *, qualified: bool) -> dict:
     return row
 
 
-class CapMessageTests(unittest.TestCase):
-    def test_message_names_the_cap_and_the_active_count(self):
-        self.assertIsNone(forward_cap_block(4))
-        self.assertEqual(
-            forward_cap_block(5),
-            "forward champion cap is 5; 5 active; admission refused",
-        )
-        self.assertEqual(
-            forward_cap_block(31),
-            "forward champion cap is 5; 31 active; admission refused",
-        )
-        self.assertEqual(FORWARD_CHAMPION_CAP, 5)
+class NoCapTests(unittest.TestCase):
+    def test_forward_champion_cap_is_gone(self):
+        import hedge_fund.trading.constants as constants
+        import hedge_fund.trading.forward_slots as slots
+
+        self.assertFalse(hasattr(constants, "FORWARD_CHAMPION_CAP"))
+        self.assertFalse(hasattr(slots, "forward_cap_block"))
 
 
 class PromoteAndIngestTests(unittest.TestCase):
-    def test_two_active_stay_and_the_fifth_seat_is_refused(self):
+    def test_two_active_stay_and_further_names_are_seated(self):
         from hedge_fund.trading.champions import load_pool, promote_candidates, save_pool
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -87,15 +81,12 @@ class PromoteAndIngestTests(unittest.TestCase):
                     {"strategy": "new_4"},
                 ])
                 names = [c["name"] for c in load_pool()["champions"]]
-        self.assertEqual(out["added"], ["new_1", "new_2", "new_3"])
-        self.assertEqual(names, ["kept_a", "kept_b", "new_1", "new_2", "new_3"])
-        self.assertEqual(out["active_count"], 5)
-        self.assertEqual(out["refused"], [{
-            "strategy": "new_4",
-            "reason": "forward champion cap is 5; 5 active; admission refused",
-        }])
+        self.assertEqual(out["added"], ["new_1", "new_2", "new_3", "new_4"])
+        self.assertEqual(names, ["kept_a", "kept_b", "new_1", "new_2", "new_3", "new_4"])
+        self.assertEqual(out["active_count"], 6)
+        self.assertEqual(out["refused"], [])
 
-    def test_ingest_logs_a_pass_past_the_cap_and_does_not_seat_it(self):
+    def test_ingest_logs_a_pass_and_does_not_seat_it(self):
         from hedge_fund.trading.champions import load_pool, save_pool
         from hedge_fund.trading.discovery import load_discovery_log
         from hedge_fund.trading.ingest import ingest_discovery_payload
@@ -106,52 +97,80 @@ class PromoteAndIngestTests(unittest.TestCase):
                 save_pool({"champions": [_champ(f"n{i}") for i in range(4)], "synced_until": ""})
                 first = ingest_discovery_payload({"evaluations": [_eval("seat_me", qualified=True)]})
                 second = ingest_discovery_payload({"evaluations": [_eval("wait_me", qualified=True)]})
+                names_before = [c["name"] for c in load_pool()["champions"]]
                 seated = ingest_discovery_payload({"evaluations": [], "force_admit": ["seat_me"]})
-                refused = ingest_discovery_payload({"evaluations": [], "force_admit": ["wait_me"]})
+                also = ingest_discovery_payload({"evaluations": [], "force_admit": ["wait_me"]})
                 names = [c["name"] for c in load_pool()["champions"]]
                 logged = {row["strategy"]: row["qualified"] for row in load_discovery_log()}
         self.assertEqual(first["admitted"], [])
         self.assertEqual(first["proposed"], ["seat_me"])
         self.assertEqual(second["admitted"], [])
         self.assertEqual(second["proposed"], ["wait_me"])
+        self.assertEqual(names_before, ["n0", "n1", "n2", "n3"])
         self.assertEqual(seated["force_admitted"], ["seat_me"])
         self.assertEqual(seated["admitted"], ["seat_me"])
-        self.assertEqual(refused["admitted"], [])
-        self.assertIn(
-            {"strategy": "wait_me", "reason": "forward champion cap is 5; 5 active; admission refused"},
-            refused["skipped"],
-        )
-        self.assertEqual(names, ["n0", "n1", "n2", "n3", "seat_me"])
+        self.assertEqual(also["force_admitted"], ["wait_me"])
+        self.assertEqual(also["admitted"], ["wait_me"])
+        self.assertEqual(names, ["n0", "n1", "n2", "n3", "seat_me", "wait_me"])
         self.assertTrue(logged["seat_me"])
         self.assertTrue(logged["wait_me"])
 
-    def test_force_admit_refuses_before_it_rewrites_the_row(self):
-        from hedge_fund.trading.champions import save_pool
+    def test_sixth_and_fiftieth_force_admit_and_qualified_ingest_is_not_seated(self):
+        from hedge_fund.trading.champions import load_pool, save_pool
         from hedge_fund.trading.discovery import load_discovery_log, save_discovery_log
         from hedge_fund.trading.ingest import ingest_discovery_payload
 
-        parked = _eval("parked_name", qualified=False)
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with patch.dict(os.environ, {"PAPER_STATE": str(root)}):
                 save_pool({"champions": [_champ(f"n{i}") for i in range(5)], "synced_until": ""})
-                save_discovery_log([parked])
-                out = ingest_discovery_payload({"evaluations": [], "force_admit": ["parked_name"]})
-                row = load_discovery_log()[0]
-                pool = json.loads((root / "champions.json").read_text())
-        self.assertEqual(out["force_admitted"], [])
-        self.assertEqual(out["admitted"], [])
-        self.assertIn(
-            {"strategy": "parked_name", "reason": "forward champion cap is 5; 5 active; admission refused"},
-            out["skipped"],
-        )
-        self.assertFalse(row["qualified"])
-        self.assertNotIn("force_admitted_at", row)
-        self.assertEqual(len(pool["champions"]), 5)
+                save_discovery_log([
+                    _eval("seat_sixth", qualified=False),
+                    _eval("seat_fiftieth", qualified=False),
+                ])
+                fresh = ingest_discovery_payload({
+                    "evaluations": [_eval("fresh_pass", qualified=True)],
+                })
+                after_ingest = [c["name"] for c in load_pool()["champions"]]
+                sixth = ingest_discovery_payload({
+                    "evaluations": [],
+                    "force_admit": ["seat_sixth"],
+                })
+                after_sixth = [c["name"] for c in load_pool()["champions"]]
+                st = load_pool()
+                while len(st["champions"]) < 49:
+                    st["champions"].append(_champ(f"pad{len(st['champions'])}"))
+                save_pool(st)
+                fiftieth = ingest_discovery_payload({
+                    "evaluations": [],
+                    "force_admit": ["seat_fiftieth"],
+                })
+                names = [c["name"] for c in load_pool()["champions"]]
+                logged = {row["strategy"]: row for row in load_discovery_log()}
+        self.assertEqual(fresh["admitted"], [])
+        self.assertEqual(fresh["proposed"], ["fresh_pass"])
+        self.assertEqual(fresh["admission"], "manual")
+        self.assertNotIn("fresh_pass", after_ingest)
+        self.assertEqual(len(after_ingest), 5)
+        self.assertEqual(sixth["force_admitted"], ["seat_sixth"])
+        self.assertEqual(sixth["admitted"], ["seat_sixth"])
+        self.assertEqual(len(after_sixth), 6)
+        self.assertEqual(after_sixth[-1], "seat_sixth")
+        self.assertEqual(fiftieth["force_admitted"], ["seat_fiftieth"])
+        self.assertEqual(fiftieth["admitted"], ["seat_fiftieth"])
+        self.assertEqual(len(names), 50)
+        self.assertEqual(names[-1], "seat_fiftieth")
+        self.assertNotIn("fresh_pass", names)
+        self.assertTrue(logged["seat_sixth"]["qualified"])
+        self.assertIn("force_admitted_at", logged["seat_sixth"])
+        self.assertTrue(logged["seat_fiftieth"]["qualified"])
+        self.assertIn("force_admitted_at", logged["seat_fiftieth"])
+        self.assertTrue(logged["fresh_pass"]["qualified"])
+        self.assertNotIn("force_admitted_at", logged["fresh_pass"])
 
 
 class CandidateRankingTests(unittest.TestCase):
-    def test_top_five_are_proposed_and_nobody_is_admitted(self):
+    def test_every_qualified_name_is_proposed_and_nobody_is_admitted(self):
         from hedge_fund.trading.champions import pool_status, save_graduated, save_pool
         from hedge_fund.trading.discovery import save_discovery_log
         from hedge_fund.trading.forward_slots import forward_candidates
@@ -169,6 +188,7 @@ class CandidateRankingTests(unittest.TestCase):
             {**_qualified("ops_name", dsr=0.99, daily=9.0, pbo=0.0), "ops_park": True},
             {**_qualified("fail_name", dsr=0.99, daily=9.0, pbo=0.0), "qualified": False},
         ]
+        expected = ["c_best_daily", "b_better_pbo", "a_tie", "d_next_dsr", "f_fifth", "e_missing_dsr"]
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with patch.dict(os.environ, {"PAPER_STATE": str(root)}):
@@ -181,15 +201,13 @@ class CandidateRankingTests(unittest.TestCase):
                 }))
                 save_discovery_log(rows)
                 ranked = forward_candidates()
+                limited = forward_candidates(limit=2)
                 status = pool_status(read_only=True)
-        self.assertEqual(
-            [row["strategy"] for row in ranked["proposed"]],
-            ["c_best_daily", "b_better_pbo", "a_tie", "d_next_dsr", "f_fifth"],
-        )
+        self.assertEqual([row["strategy"] for row in ranked["proposed"]], expected)
         self.assertEqual(ranked["eligible"], 6)
         self.assertEqual(ranked["active"], 2)
-        self.assertEqual(ranked["open_slots"], 3)
-        self.assertEqual(ranked["cap"], 5)
+        self.assertNotIn("cap", ranked)
+        self.assertNotIn("open_slots", ranked)
         self.assertEqual(ranked["admitted"], [])
         self.assertEqual(ranked["retired"], [])
         for row in ranked["proposed"]:
@@ -197,6 +215,10 @@ class CandidateRankingTests(unittest.TestCase):
             self.assertFalse(row["admitted"])
             self.assertEqual(row["status"], "proposed, awaiting approval")
             self.assertEqual(row["bh_role"], "informational")
-        self.assertEqual(status["forward_champion_cap"], 5)
+        self.assertEqual([row["strategy"] for row in limited["proposed"]], expected[:2])
+        self.assertEqual(limited["eligible"], 6)
+        self.assertNotIn("forward_champion_cap", status)
         self.assertEqual(status["forward_candidates"]["proposed"], ranked["proposed"])
+        self.assertNotIn("cap", status["forward_candidates"])
+        self.assertNotIn("open_slots", status["forward_candidates"])
         self.assertEqual(status["active_count"], 2)
