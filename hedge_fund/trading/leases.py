@@ -265,13 +265,16 @@ LEASES_PER_LANE = 2
 ABSENT_PARALLEL_LEASE_CAP = 12
 
 
-def worker_lease_count(state: dict, worker_id: str) -> int:
+def worker_lease_count(state: dict, worker_id: str, now: datetime | None = None) -> int:
+    """Leases this worker holds. With ``now``, stale unstarted leases do not count."""
     leases = state.get("leases") if isinstance(state, dict) else None
     if not isinstance(leases, dict):
         return 0
     held = 0
     for record in leases.values():
         if isinstance(record, dict) and record.get("worker_id") == worker_id:
+            if now is not None and is_stale_unstarted(record, now):
+                continue
             held += 1
     return held
 
@@ -296,9 +299,14 @@ def worker_lease_cap(state: dict, worker_id: str, parallel: int | None) -> int:
     return LEASES_PER_LANE * int(width)
 
 
-def lease_room(state: dict, worker_id: str, parallel: int | None) -> int:
-    """How many more discovery leases this worker may hold."""
-    return max(0, worker_lease_cap(state, worker_id, parallel) - worker_lease_count(state, worker_id))
+def lease_room(state: dict, worker_id: str, parallel: int | None, now: datetime | None = None) -> int:
+    """How many more discovery leases this worker may hold.
+
+    With ``now``, an unstarted lease nobody has reported for
+    ``UNSTARTED_STALE_SECONDS`` (a lost claim reply) does not use room.
+    """
+    held = worker_lease_count(state, worker_id, now)
+    return max(0, worker_lease_cap(state, worker_id, parallel) - held)
 
 
 def _status(value: object, default: str) -> str:
@@ -336,31 +344,105 @@ def lease_ttl_seconds(n: int, parallel: int | None = None) -> int:
     return lease_heartbeat_grace_seconds()
 
 
+# A claim the worker never received (502/504/restart mid-response) leaves
+# leases that no heartbeat will ever report. Such an unstarted lease is not
+# renewed, never outlives ``claimed_at + per_name_lease_seconds()``, stops
+# counting toward ``lease_room`` after ``UNSTARTED_STALE_SECONDS``, and is
+# dropped by the owner's next idle-and-empty heartbeat (or, for a worker
+# that reports its local queue, by any heartbeat that leaves it out once
+# ``ORPHAN_GRACE_SECONDS`` have passed since the claim).
+UNSTARTED_STALE_SECONDS = 300
+# Longer than the worker's 120s claim timeout, so a reply still on the wire
+# is not mistaken for an orphan.
+ORPHAN_GRACE_SECONDS = 180
+
+RENEW = "renew"
+KEEP = "keep"
+DROP = "drop"
+
+
+def _lease_time(record: dict, key: str) -> datetime | None:
+    raw = record.get(key)
+    return parse_tested_at(raw) if isinstance(raw, str) else None
+
+
+def unstarted_hard_cap(record: dict) -> datetime | None:
+    claimed = _lease_time(record, "claimed_at")
+    if claimed is None:
+        return None
+    return claimed + timedelta(seconds=per_name_lease_seconds())
+
+
+def is_stale_unstarted(record: dict, now: datetime) -> bool:
+    """Unstarted and not reported queued for ``UNSTARTED_STALE_SECONDS``."""
+    if not isinstance(record, dict) or record.get("started_at"):
+        return False
+    seen = _lease_time(record, "queued_seen_at") or _lease_time(record, "claimed_at")
+    if seen is None:
+        return True
+    return (now - seen).total_seconds() >= UNSTARTED_STALE_SECONDS
+
+
+def heartbeat_lease_action(
+    record: dict,
+    now: datetime,
+    *,
+    name: str,
+    status: str,
+    evaluating: set[str] | None,
+    queued: set[str] | None,
+) -> str:
+    """What one heartbeat does to one of the sender's leases.
+
+    ``evaluating`` / ``queued`` are the names the heartbeat lists (``None``
+    when the field was not sent; old workers never send ``queued``). Only
+    listed names renew. A started lease from an old worker's heartbeat that
+    carries no ``evaluating`` list still renews (up to its cap). An idle
+    heartbeat with nothing listed drops every unstarted lease.
+    """
+    if (evaluating is not None and name in evaluating) or (queued is not None and name in queued):
+        return RENEW
+    started = bool(record.get("started_at"))
+    if started:
+        if evaluating is None and status != "idle":
+            return RENEW
+        return KEEP
+    if status == "idle" and not evaluating and not queued:
+        return DROP
+    if queued is not None:
+        claimed = _lease_time(record, "claimed_at")
+        if claimed is None or (now - claimed).total_seconds() >= ORPHAN_GRACE_SECONDS:
+            return DROP
+    return KEEP
+
+
 def bump_lease_expiry(
     record: dict,
     now: datetime,
     *,
     name: str,
     evaluating: set[str] | None,
+    queued: set[str] | None = None,
 ) -> None:
     """Push one lease out from ``now``. A started name stops at its cap.
 
     ``evaluating`` is the set of names this heartbeat says are in flight.
     The first such heartbeat records ``started_at``. A later heartbeat
-    does not move that timestamp. Names left out of the set stay
-    unstarted and keep renewing with the grace, so a live worker's
-    queue is not cut off at the cap before those evals begin.
+    does not move that timestamp. A name listed in ``queued`` (leased,
+    waiting for a slot) renews too, but an unstarted lease never runs
+    past ``claimed_at + per_name_lease_seconds()``.
     """
     if evaluating is not None and name in evaluating and not record.get("started_at"):
         record["started_at"] = _iso(now)
+    if queued is not None and name in queued:
+        record["queued_seen_at"] = _iso(now)
     horizon = now + timedelta(seconds=lease_heartbeat_grace_seconds())
-    started_raw = record.get("started_at")
-    started = parse_tested_at(started_raw) if isinstance(started_raw, str) else None
+    started = _lease_time(record, "started_at")
     if started is not None:
         hard = started + timedelta(seconds=per_name_lease_seconds())
-        record["expires_at"] = _iso(min(horizon, hard))
     else:
-        record["expires_at"] = _iso(horizon)
+        hard = unstarted_hard_cap(record)
+    record["expires_at"] = _iso(min(horizon, hard) if hard is not None else horizon)
 
 
 def _stat_fp(path: Path) -> tuple | None:
@@ -840,7 +922,7 @@ def _claim_unlocked(
     rest = n - len(requal)
     # Discovery leases only. Requalify lives in its own file. A worker
     # cannot hold more than two names per lane, so lease-ahead stays bounded.
-    rest = min(rest, lease_room(state, worker_id, parallel))
+    rest = min(rest, lease_room(state, worker_id, parallel, now))
     expires = now + timedelta(seconds=ttl)
     retest: list[str] = []
     schedule = False
@@ -1166,41 +1248,65 @@ def clear_leases_unlocked(names: Iterable[str]) -> list[str]:
     return released
 
 
+def _name_set(value: object) -> set[str] | None:
+    if isinstance(value, (list, tuple, set)):
+        return {n for n in value if isinstance(n, str) and n}
+    return None
+
+
 def touch_worker_unlocked(
     worker_id: object,
     status: object = None,
     *,
     now: datetime | None = None,
     evaluating: object = None,
-) -> None:
-    """Record a per-worker heartbeat and renew that worker's leases.
+    queued: object = None,
+) -> list[str]:
+    """Record a per-worker heartbeat; renew or drop that worker's leases.
 
     Invalid ids are ignored. Caller holds the paper-state lock. A
-    ``paused`` heartbeat updates ``last_seen`` and does not move
-    ``expires_at``. ``evaluating`` is the names this worker currently
-    has in flight; the first time a leased name appears there, its
-    per-name cap starts.
+    ``paused`` heartbeat updates ``last_seen`` and does not touch leases.
+    ``evaluating`` is the names in flight (the first time a leased name
+    appears there its per-name cap starts); ``queued`` is names leased and
+    waiting for a slot. See :func:`heartbeat_lease_action` for which leases
+    renew. Returns the discovery and requalify names dropped as orphans.
     """
     if not isinstance(worker_id, str) or not _WORKER_ID_RE.match(worker_id.strip()):
-        return
+        return []
     wid = worker_id.strip()
     clock = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     cleaned = _status(status, "running")
     state = load_lease_state()
     _touch(state, wid, cleaned, clock)
-    ev: set[str] | None = None
-    if isinstance(evaluating, (list, tuple, set)):
-        ev = {n for n in evaluating if isinstance(n, str) and n}
+    ev = _name_set(evaluating)
+    queue = _name_set(queued)
+    dropped: list[str] = []
     if cleaned != "paused":
-        for name, lease in state["leases"].items():
-            if isinstance(lease, dict) and lease.get("worker_id") == wid:
-                bump_lease_expiry(lease, clock, name=name, evaluating=ev)
+        leases = state["leases"]
+        for name in list(leases):
+            lease = leases[name]
+            if not isinstance(lease, dict) or lease.get("worker_id") != wid:
+                continue
+            action = heartbeat_lease_action(
+                lease, clock, name=name, status=cleaned, evaluating=ev, queued=queue,
+            )
+            if action == RENEW:
+                bump_lease_expiry(lease, clock, name=name, evaluating=ev, queued=queue)
+            elif action == DROP:
+                del leases[name]
+                dropped.append(name)
     _prune_workers(state, clock)
     save_lease_state(state)
     if cleaned != "paused":
         from hedge_fund.trading.requalify import refresh_requalify_leases_unlocked
 
-        refresh_requalify_leases_unlocked(wid, clock, ev)
+        dropped.extend(refresh_requalify_leases_unlocked(wid, clock, ev, queued=queue, status=cleaned))
+    if dropped:
+        print(
+            f"leases: dropped {len(dropped)} unreported unstarted lease(s) for {wid}",
+            flush=True,
+        )
+    return dropped
 
 
 def _active_map(state: dict, now: datetime) -> tuple[dict[str, dict], int]:

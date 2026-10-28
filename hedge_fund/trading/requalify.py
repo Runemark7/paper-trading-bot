@@ -335,30 +335,47 @@ def refresh_requalify_leases_unlocked(
     worker_id: str,
     now: datetime,
     evaluating: set[str] | None,
-) -> None:
-    """Renew this worker's requalify leases from a heartbeat.
+    *,
+    queued: set[str] | None = None,
+    status: str = "running",
+) -> list[str]:
+    """Renew or drop this worker's requalify leases from a heartbeat.
 
-    Same grace and per-name cap as discovery leases. A missing file is
-    a no-op. Caller holds the discovery lock. Does not add an attempt.
+    Same rules as discovery leases (``heartbeat_lease_action``). A dropped
+    name goes back to the queue without adding an attempt. A missing file
+    is a no-op. Caller holds the discovery lock. Returns dropped names.
     """
     if not requalify_path().exists():
-        return
-    from hedge_fund.trading.leases import bump_lease_expiry
+        return []
+    from hedge_fund.trading.leases import DROP, RENEW, bump_lease_expiry, heartbeat_lease_action
 
     now = now.astimezone(timezone.utc)
     state = load_requalify_state()
     changed = False
+    dropped: list[str] = []
     for name, meta in state["names"].items():
         if not isinstance(meta, dict) or meta.get("status") != "leased":
             continue
         if meta.get("worker_id") != worker_id:
             continue
-        before = (meta.get("expires_at"), meta.get("started_at"))
-        bump_lease_expiry(meta, now, name=name, evaluating=evaluating)
-        if (meta.get("expires_at"), meta.get("started_at")) != before:
+        action = heartbeat_lease_action(
+            meta, now, name=name, status=status, evaluating=evaluating, queued=queued,
+        )
+        if action == RENEW:
+            before = (meta.get("expires_at"), meta.get("started_at"))
+            bump_lease_expiry(meta, now, name=name, evaluating=evaluating, queued=queued)
+            if (meta.get("expires_at"), meta.get("started_at")) != before:
+                changed = True
+        elif action == DROP:
+            meta.pop("worker_id", None)
+            meta.pop("expires_at", None)
+            meta["attempts"] = max(0, int(meta.get("attempts") or 0) - 1)
+            meta["status"] = "queued"
+            dropped.append(name)
             changed = True
     if changed:
         save_requalify_state(state)
+    return dropped
 
 
 def release_requalify_unlocked(worker_id: str, names: list[str] | None) -> list[str]:

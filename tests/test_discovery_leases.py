@@ -195,7 +195,7 @@ class LeaseQueueTests(unittest.TestCase):
                         [],
                     )
 
-    def test_heartbeat_renews_unstarted_names_and_caps_a_started_one(self):
+    def test_heartbeat_renews_reported_names_up_to_their_caps(self):
         from hedge_fund.trading.leases import (
             claim_discovery_batch,
             lease_snapshot,
@@ -227,32 +227,33 @@ class LeaseQueueTests(unittest.TestCase):
                                 "running",
                                 now=t0 + timedelta(seconds=800),
                                 evaluating=[started],
+                                queued=[waiting],
                             )
                         held = claim_discovery_batch(
-                            "jensa-2",
-                            2,
-                            parallel=1,
-                            now=t0 + timedelta(seconds=1699),
+                            "jensa-2", 2, parallel=1, now=t0 + timedelta(seconds=1100),
                         )
                         self.assertEqual(held["names"], [])
+                        # A queued name is renewed, but never past claimed_at + per-name cap.
+                        queued_freed = claim_discovery_batch(
+                            "jensa-2", 1, parallel=1, now=t0 + timedelta(seconds=1201),
+                        )
+                        self.assertEqual(queued_freed["names"], [waiting])
                         with paper_state_lock("discovery"):
                             touch_worker_unlocked(
                                 "linux-1",
                                 "running",
                                 now=t0 + timedelta(seconds=1600),
                                 evaluating=[started],
+                                queued=[],
                             )
                         freed = claim_discovery_batch(
-                            "jensa-2",
-                            1,
-                            parallel=1,
-                            now=t0 + timedelta(seconds=2001),
+                            "jensa-2", 1, parallel=1, now=t0 + timedelta(seconds=2001),
                         )
                         snap = lease_snapshot(t0 + timedelta(seconds=2001))
         self.assertEqual(freed["names"], [started])
         by_worker = {row["worker_id"]: set(row["in_flight"]) for row in snap["workers"]}
-        self.assertEqual(by_worker["jensa-2"], {started})
-        self.assertEqual(by_worker["linux-1"], {waiting})
+        self.assertEqual(by_worker["jensa-2"], {started, waiting})
+        self.assertNotIn(started, by_worker.get("linux-1", set()))
 
     def test_paused_or_other_worker_does_not_renew(self):
         from hedge_fund.trading.leases import claim_discovery_batch, touch_worker_unlocked

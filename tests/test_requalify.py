@@ -187,25 +187,24 @@ class RequalifyTests(unittest.TestCase):
             with patch("hedge_fund.trading.leases.schedule_refill_buffer"):
                 first = claim_discovery_batch("omarchy-1", 4, parallel=1, now=self.t0)
                 self.assertEqual(len(first["requalify"]), 4)
-                name0 = first["requalify"][0]
+                name0, *waiting = first["requalify"]
                 with paper_state_lock("discovery"):
-                    touch_worker_unlocked(
-                        "omarchy-1",
-                        "running",
-                        now=self.t0 + timedelta(seconds=100),
-                        evaluating=[name0],
-                    )
-                    touch_worker_unlocked(
-                        "omarchy-1",
-                        "running",
-                        now=self.t0 + timedelta(seconds=950),
-                        evaluating=[name0],
-                    )
+                    for at in (100, 950):
+                        touch_worker_unlocked(
+                            "omarchy-1",
+                            "running",
+                            now=self.t0 + timedelta(seconds=at),
+                            evaluating=[name0],
+                            queued=waiting,
+                        )
+                held = claim_discovery_batch("omarchy-2", 4, parallel=1, now=self.t0 + timedelta(seconds=1101))
+                self.assertEqual(held["requalify"], [])
+                queued_capped = claim_discovery_batch(
+                    "omarchy-2", 4, parallel=1, now=self.t0 + timedelta(seconds=1201),
+                )
+                self.assertEqual(set(queued_capped["requalify"]), set(waiting))
                 later = claim_discovery_batch(
-                    "omarchy-2",
-                    4,
-                    parallel=1,
-                    now=self.t0 + timedelta(seconds=1301),
+                    "omarchy-3", 4, parallel=1, now=self.t0 + timedelta(seconds=1301),
                 )
         self.assertEqual(later["requalify"], [name0])
 

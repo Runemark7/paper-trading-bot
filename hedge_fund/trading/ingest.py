@@ -217,6 +217,7 @@ def _touch_heartbeat_and_flight(payload: dict) -> None:
     status = None
     worker_id = None
     evaluating = None
+    queued = None
     if isinstance(hb, dict):
         status = hb.get("status")
         raw_id = hb.get("worker_id")
@@ -225,6 +226,9 @@ def _touch_heartbeat_and_flight(payload: dict) -> None:
         raw_evaluating = hb.get("evaluating")
         if isinstance(raw_evaluating, list):
             evaluating = raw_evaluating
+        raw_queued = hb.get("queued")
+        if isinstance(raw_queued, list):
+            queued = raw_queued
     elif hb:
         status = str(hb)
     if not worker_id and isinstance(payload.get("worker_id"), str):
@@ -236,6 +240,7 @@ def _touch_heartbeat_and_flight(payload: dict) -> None:
             worker_id,
             str(status) if status else None,
             evaluating=evaluating,
+            queued=queued,
         )
 
     flight = payload.get("in_flight")
