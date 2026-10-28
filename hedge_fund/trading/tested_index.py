@@ -36,6 +36,9 @@ def tested_index_path() -> Path:
 
 _doc_guard = threading.Lock()
 _doc_cache: dict = {"key": None, "data": None}
+# Flags, cleaned metrics, and the name set for the cached document.
+# Rebuilt when the file fingerprint changes, not on every claim.
+_derived: dict = {"key": None, "flags": None, "metrics": None, "names": None}
 # (log fingerprint, index fingerprint) already merged into the index.
 _covers: tuple | None = None
 
@@ -90,15 +93,55 @@ def _metrics_from_document(data: dict | None) -> dict[str, TestedMetric]:
     return _clean_metrics(raw)
 
 
+def _store_derived(key, flags: dict[str, bool], metrics: dict) -> None:
+    _derived["key"] = key
+    _derived["flags"] = flags
+    _derived["metrics"] = metrics
+    _derived["names"] = set(flags)
+
+
+def _derived_now() -> dict:
+    """Flags and cleaned metrics for the current file. Cleaned once per fingerprint."""
+    key = tested_index_fingerprint()
+    if (
+        key is not None
+        and _derived.get("key") == key
+        and isinstance(_derived.get("flags"), dict)
+        and isinstance(_derived.get("metrics"), dict)
+    ):
+        return _derived
+    data = _read_document() or {}
+    flags = _flags_from_document(data)
+    raw = data.get("metrics") if isinstance(data, dict) else None
+    metrics = raw if isinstance(raw, dict) and _derived.get("key") == key else None
+    if metrics is None:
+        metrics = _metrics_from_document(data)
+    _store_derived(key, flags, metrics)
+    return _derived
+
+
+def tested_name_set() -> set[str]:
+    """Names in the tested-name index. Do not mutate the returned set."""
+    names = _derived_now().get("names")
+    return names if isinstance(names, set) else set()
+
+
 def load_tested_index() -> dict[str, bool]:
-    """Read the bool ``names`` map. Missing or corrupt → empty. Does not migrate."""
-    return _flags_from_document(_read_document())
+    """Read the bool ``names`` map. Missing or corrupt → empty. Does not migrate.
+
+    A copy, so a caller can overlay a log without changing the cache.
+    """
+    return dict(_derived_now()["flags"])
 
 
 def load_index_and_metrics() -> tuple[dict[str, bool], dict[str, TestedMetric]]:
-    """One read of the file: fail-once flags and the slim metrics map."""
-    data = _read_document()
-    return _flags_from_document(data), _metrics_from_document(data)
+    """One read of the file: fail-once flags and the slim metrics map.
+
+    Copies. The cleaned metrics are cached with the file fingerprint, so a
+    claim does not re-validate every stored sharpe.
+    """
+    derived = _derived_now()
+    return dict(derived["flags"]), dict(derived["metrics"])
 
 
 def _finite_number(value: object) -> float | None:
@@ -163,7 +206,7 @@ def load_tested_metrics() -> dict[str, TestedMetric]:
     ``load_tested_index``. This returns the slim sharpe/trades/ops_park
     map, not a full evaluation record.
     """
-    return _metrics_from_document(_read_document())
+    return dict(_derived_now()["metrics"])
 
 
 def save_tested_index(
@@ -215,9 +258,18 @@ def write_tested_document(payload: dict) -> None:
         tmp = path.with_suffix(".json.tmp")
         tmp.write_text(blob)
         os.replace(tmp, path)
+    _remember_payload(payload)
+
+
+def _remember_payload(payload: dict) -> None:
+    """Cache the document we just wrote, including cleaned flags and metrics."""
+    flags = _flags_from_document(payload)
+    raw = payload.get("metrics") if isinstance(payload, dict) else None
+    metrics = raw if isinstance(raw, dict) else {}
     with _doc_guard:
         _doc_cache["key"] = tested_index_fingerprint()
         _doc_cache["data"] = payload
+    _store_derived(_doc_cache["key"], flags, metrics)
 
 
 def encode_tested_document(payload: dict) -> str:
@@ -238,9 +290,7 @@ def commit_tested_blob(blob: str, payload: dict) -> None:
         tmp = path.with_suffix(".json.tmp")
         tmp.write_text(blob)
         os.replace(tmp, path)
-    with _doc_guard:
-        _doc_cache["key"] = tested_index_fingerprint()
-        _doc_cache["data"] = payload
+    _remember_payload(payload)
 
 
 def merge_tested_rows(index: dict[str, bool], rows: list) -> bool:

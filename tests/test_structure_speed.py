@@ -131,6 +131,24 @@ class SwingParityTests(unittest.TestCase):
         self.assertLess(cached_s, 2.0)
 
 
+class CompactTapeParityTests(unittest.TestCase):
+    def test_array_tape_matches_lists(self):
+        from array import array
+
+        from scripts.discovery_worker import _compact_sample
+
+        closes, highs, lows = _tape(900, seed=4)
+        sample = {"BTC/USDT": (closes, highs, lows, 100, 600)}
+        compact = _compact_sample(sample)
+        got = compact["BTC/USDT"]
+        self.assertIsInstance(got[0], array)
+        name = "don_hi_48&near_swing_hi_24"
+        self.assertEqual(
+            _pack(backtest(closes, highs, lows, name)),
+            _pack(backtest(got[0], got[1], got[2], name)),
+        )
+
+
 class StructureCacheBudgetTests(unittest.TestCase):
     def test_bytes_stay_under_budget_across_many_names(self):
         from array import array

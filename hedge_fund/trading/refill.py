@@ -943,22 +943,43 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def load_extended_names() -> list[str]:
-    """Persisted refill names. Missing/corrupt → empty (static universe still runs)."""
+_extended_cache: dict = {"key": None, "names": None}
+
+
+def _extended_fingerprint() -> tuple | None:
     path = extended_path()
-    if not path.exists():
-        return []
     try:
-        data = json.loads(path.read_text())
-    except (OSError, ValueError):
-        return []
-    if isinstance(data, list):
-        return [n for n in data if isinstance(n, str) and n.strip()]
-    if isinstance(data, dict):
-        raw = data.get("names") or []
-        if isinstance(raw, list):
-            return [n for n in raw if isinstance(n, str) and n.strip()]
-    return []
+        st = path.stat()
+    except OSError:
+        return None
+    return (str(path), st.st_mtime_ns, st.st_size)
+
+
+def load_extended_names() -> list[str]:
+    """Persisted refill names. Missing/corrupt → empty (static universe still runs).
+
+    Cached by file fingerprint. The returned list is the cache; callers iterate it.
+    """
+    key = _extended_fingerprint()
+    cached = _extended_cache.get("names")
+    if key is not None and _extended_cache.get("key") == key and isinstance(cached, list):
+        return list(cached)
+    path = extended_path()
+    names: list[str] = []
+    if path.exists():
+        try:
+            data = json.loads(path.read_text())
+        except (OSError, ValueError):
+            data = None
+        if isinstance(data, list):
+            names = [n for n in data if isinstance(n, str) and n.strip()]
+        elif isinstance(data, dict):
+            raw = data.get("names") or []
+            if isinstance(raw, list):
+                names = [n for n in raw if isinstance(n, str) and n.strip()]
+    _extended_cache["key"] = key
+    _extended_cache["names"] = names
+    return names
 
 
 def load_extended_meta() -> dict:
@@ -1006,11 +1027,27 @@ def save_extended_names(
     return path
 
 
+_universe_cache: dict = {"key": None, "names": None}
+
+
 def discovery_universe(extra: Iterable[str] | None = None) -> list[str]:
-    """Static generate_universe() plus persisted refill names (sorted unique)."""
-    names = set(generate_universe())
+    """Static generate_universe() plus persisted refill names (sorted unique).
+
+    The no-argument form is cached on the extended-file fingerprint. Passing
+    ``extra`` skips the cache (tests and one-off overlays).
+    """
     if extra is None:
-        extra = load_extended_names()
+        key = _extended_fingerprint()
+        cached = _universe_cache.get("names")
+        if key is not None and _universe_cache.get("key") == key and isinstance(cached, list):
+            return cached
+        names = set(generate_universe())
+        names.update(n for n in load_extended_names() if n and isinstance(n, str))
+        out = sorted(names)
+        _universe_cache["key"] = key
+        _universe_cache["names"] = out
+        return out
+    names = set(generate_universe())
     names.update(n for n in extra if n and isinstance(n, str))
     return sorted(names)
 

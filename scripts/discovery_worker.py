@@ -442,7 +442,15 @@ def _load_eval_bundle(history_stamp: dict | None, n_windows: int, *, claim_mode:
             holdout_bh = holdout_benchmarks(holdout)
         except Exception:
             holdout_bh = None
-    del data
+    del data, btc_rows, eth_rows
+    # Python lists of floats are what made the parent ~600MB. The child
+    # evaluates these slices; compact them once so the parent does not
+    # keep a second, fatter copy of the same bars.
+    slices = [_compact_sample(sample) for sample in slices]
+    if eth_slices:
+        eth_slices = [_compact_sample(sample) for sample in eth_slices]
+    if holdout:
+        holdout = _compact_sample(holdout)
     if len(slices) != n_windows:
         raise SystemExit("history too short for qualification windows")
     return {
@@ -1156,6 +1164,26 @@ def _post_ingest(
     kind = "ingest" if evaluations else "heartbeat"
     _log_round_trip(kind, started, body)
     return body
+
+
+def _compact_sample(sample: dict) -> dict:
+    """OHLC tuples as ``array('d')``. Same floats, far fewer bytes than lists."""
+    from array import array
+
+    if not isinstance(sample, dict):
+        return sample
+    out = {}
+    for sym, tape in sample.items():
+        if isinstance(tape, tuple) and len(tape) >= 3:
+            def as_d(values, _array=array):
+                if isinstance(values, _array) and values.typecode == "d":
+                    return values
+                return _array("d", values)
+
+            out[sym] = (as_d(tape[0]), as_d(tape[1]), as_d(tape[2]), *tape[3:])
+        else:
+            out[sym] = tape
+    return out
 
 
 def _looks_like_bars(rows: object) -> bool:
