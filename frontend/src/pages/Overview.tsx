@@ -35,9 +35,9 @@ import {
 } from "../status/format";
 
 const JOURNEY = [
-  { step: "Generate", text: "Randomly combine 2–7 building blocks into an entry rule." },
-  { step: "Backtest", text: "18 walk-forward windows of 5-minute BTC data, with fees." },
-  { step: "Gate v5", text: "8 strict checks against luck, overfitting and costs." },
+  { step: "Library", text: "A fixed list of cited daily BTC rules. The random mint is off." },
+  { step: "Backtest", text: "Daily bars, long or flat, exit when the signal turns off, with fees." },
+  { step: "Gate v6", text: "8 strict checks against luck, overfitting and costs. The trade floors are unchanged." },
   { step: "Propose", text: "Every passer is ranked and marked proposed, awaiting approval." },
   { step: "Admit", text: "The owner admits champions by hand. There is no limit on how many." },
   { step: "Forward test", text: "Paper-trade live Binance prices. Win = profit after fees." },
@@ -81,8 +81,8 @@ export default function Overview() {
             Searching for a Bitcoin trading strategy that survives honest testing.
           </h1>
           <p className="mt-3 text-[15px] sm:text-base leading-relaxed text-white/70">
-            PaperBot is a research bot. A farm of workers invents strategies by randomly combining simple
-            building blocks, then tries hard to prove each one is a fluke. The rare survivors become{" "}
+            PaperBot is a research bot. It scores a fixed library of cited daily Bitcoin strategies and
+            tries hard to prove each one is a fluke. The rare survivors become{" "}
             <span className="text-amber-200">champions</span> and trade live Binance prices — with simulated
             money, never real funds.
           </p>
