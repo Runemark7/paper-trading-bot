@@ -107,7 +107,7 @@ export default function Overview() {
           loading={disc.isPending}
           tone="accent"
           hint={tested && passed != null ? `${((passed / tested) * 100).toFixed(2)}% of tested` : undefined}
-          info={<InfoTip label="Passed the gate">Cleared every gate v5 check: trades, Sharpe, baseline, sealed holdout, deflated Sharpe, overfitting, robustness and cost stress.</InfoTip>}
+          info={<InfoTip label="Passed the gate">Cleared every gate v6 check: trades, Sharpe, baseline, sealed holdout, deflated Sharpe, overfitting, robustness and cost stress.</InfoTip>}
         />
         <Kpi
           label="Active champions"
@@ -138,8 +138,8 @@ export default function Overview() {
           <div className="text-xs font-semibold uppercase tracking-[0.14em] text-indigo-300">Part 1 · Discovery</div>
           <h2 className="mt-1 text-xl font-semibold text-white">The search</h2>
           <p className="mt-2 text-sm leading-relaxed text-white/65">
-            Workers draw 2–7 building blocks (trend, momentum, dips, RSI, breakouts, higher-timeframe filters),
-            backtest the combination walk-forward, and run it through gate v5. Almost everything fails — that is the point.
+            The current search is a fixed library of cited daily BTC strategies, long or flat, exiting when the
+            signal turns off. Each one is scored once under gate v6. Almost everything fails — that is the point.
           </p>
           <div className="mt-4 grid grid-cols-3 gap-2 text-center">
             {[

@@ -15,6 +15,7 @@ import type {
   ChartSymbol,
   ChampionTradesPayload,
   DiscoveryInsights,
+  LibraryTable,
 } from "./types";
 
 /** 5m live tape. 288 bars/day. Default 3 calendar days; hard cap 7 days. */
@@ -165,6 +166,10 @@ export function fetchBlockReport(): Promise<BlockReport> {
 
 export function fetchDiscoveryInsights(): Promise<DiscoveryInsights> {
   return get<DiscoveryInsights>("/api/discovery/insights");
+}
+
+export function fetchDiscoveryLibrary(): Promise<LibraryTable> {
+  return get<LibraryTable>("/api/discovery/library");
 }
 
 export function fetchChampionTrades(opts?: { name?: string; limit?: number }): Promise<ChampionTradesPayload> {

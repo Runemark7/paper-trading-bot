@@ -1,6 +1,8 @@
 /**
- * Gate v5 checks in plain words. Thresholds mirror hedge_fund/trading/constants.py
- * (GATE_RULES gate_v5_btc_holdout_dsr_pbo_20261027). Display only; the server decides.
+ * Gate v6 checks in plain words. Thresholds mirror hedge_fund/trading/constants.py
+ * (GATE_RULES gate_v6_library_signal_exit_20261028). The same floors score the
+ * daily strategy library; the 5m champions still use the rm_v1 engine.
+ * Display only; the server decides.
  */
 
 export type GateKey =
@@ -95,7 +97,7 @@ const EXTRA: GateInfo[] = [
     key: "bh_legacy",
     label: "Buy-and-hold (old rule)",
     rule: "info only under v5",
-    plain: "An older gate required beating buy-and-hold. Gate v5 reports buy-and-hold for context only.",
+    plain: "An older gate required beating buy-and-hold. Gate v6 reports buy-and-hold for context only.",
     stage: "other",
   },
   {
