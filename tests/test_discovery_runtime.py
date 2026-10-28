@@ -494,6 +494,97 @@ class ClaimIngestHotPathTests(unittest.TestCase):
         self.assertLess(sorted(ingest_ms)[1], 250)
         self.assertLess(sorted(claim_ms)[1], 250)
 
+    def test_prod_sized_claim_does_not_rescan_after_ingest(self):
+        """19.8k tested names: a later claim must not re-canonicalise the book."""
+        import time
+
+        from hedge_fund.trading.constants import GATE_RULES
+        from hedge_fund.trading.handler_timing import handler_frame
+        from hedge_fund.trading.ingest import ingest_discovery_payload
+        from hedge_fund.trading.leases import claim_discovery_batch
+
+        n_tested, n_log, n_ext = 12000, 6000, 10000
+        tested = [
+            f"sma_abv_{20 + (i % 30) * 5}&mom_{(i % 15) * 6 + 12}b_gt2pc&n{i}"
+            for i in range(n_tested)
+        ]
+        row = {
+            "qualified": False,
+            "sharpe": 0.2,
+            "trades": 40,
+            "test_pnl": 1.0,
+            "train_pnl": 1.0,
+            "win_rate_pct": 40.0,
+            "fail_reasons": ["oos_sharpe 0.20 < 0.30"],
+            "timeframe": "5m",
+            "risk_policy": "rm_v1",
+            "gate_rules": GATE_RULES,
+            "tested_at": "2026-10-20T00:00:00+00:00",
+        }
+        rows = []
+        for name in tested[:n_log]:
+            item = dict(row)
+            item["strategy"] = name
+            rows.append(item)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "discovery_log.json").write_text(json.dumps(rows, separators=(",", ":")))
+            (root / "discovery_tested.json").write_text(json.dumps({
+                "v": 1,
+                "paper_only": True,
+                "names": {name: 0 for name in tested},
+                "metrics": {name: {"sharpe": 0.2, "trades": 30} for name in tested},
+            }, separators=(",", ":")))
+            (root / "discovery_extended.json").write_text(json.dumps({
+                "names": tested[:n_ext],
+                "batches_emitted": 3,
+            }, separators=(",", ":")))
+            (root / "champions.json").write_text(json.dumps({
+                "champions": [{"name": tested[0]}],
+                "synced_until": "",
+            }))
+            (root / "discovery_farm.json").write_text(json.dumps({"enabled": True}))
+            with patch.dict(os.environ, {"PAPER_STATE": str(root)}):
+                claim_discovery_batch("zealous-lion", 2, parallel=2, gate_rules=GATE_RULES, require_gate_rules=True)
+                first = dict(row)
+                first["strategy"] = "fresh_warm&sma_abv_50&mom_18b_gt2pc"
+                first["tested_at"] = "2026-10-28T04:00:00+00:00"
+                ingest_discovery_payload({
+                    "evaluations": [first],
+                    "heartbeat": {"status": "running", "worker_id": "zealous-lion"},
+                })
+                fresh = dict(row)
+                fresh["strategy"] = "fresh_after&sma_abv_50&mom_24b_gt2pc"
+                fresh["tested_at"] = "2026-10-28T04:01:00+00:00"
+                with handler_frame():
+                    t0 = time.perf_counter()
+                    ing = ingest_discovery_payload({
+                        "evaluations": [fresh],
+                        "heartbeat": {"status": "running", "worker_id": "zealous-lion"},
+                    })
+                    ingest_s = time.perf_counter() - t0
+                self.assertEqual(ing["ingested"], [fresh["strategy"]])
+                again = ingest_discovery_payload({
+                    "evaluations": [fresh],
+                    "heartbeat": {"status": "running", "worker_id": "zealous-lion"},
+                })
+                self.assertEqual(again["ingested"], [])
+                self.assertEqual(again["skipped"][0]["reason"], "already_tested")
+                t0 = time.perf_counter()
+                body = claim_discovery_batch(
+                    "zealous-lion", 2, parallel=2, gate_rules=GATE_RULES, require_gate_rules=True,
+                )
+                claim_s = time.perf_counter() - t0
+        timing = body["timing_ms"]
+        self.assertLess(timing["lock_hold"], 100)
+        self.assertLess(timing["work"], 200)
+        self.assertNotIn(fresh["strategy"], body["names"])
+        self.assertLess(ingest_s, 1.0)
+        self.assertLess(claim_s, 0.2)
+        ing_timing = ing["timing_ms"]
+        self.assertLess(ing_timing["lock_hold"], 100)
+        self.assertLess(ing_timing["work"], 200)
+
 
 if __name__ == "__main__":
     unittest.main()

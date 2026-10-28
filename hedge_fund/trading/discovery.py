@@ -465,6 +465,12 @@ def append_discovery_evaluations(
         for row in eval_records
         if isinstance(row, dict) and isinstance(row.get("strategy"), str)
     }
+    for name in fresh:
+        remember_tested_name(name)
+    from hedge_fund.trading.leases import note_queue_tested
+
+    for name in fresh:
+        note_queue_tested(name)
     sync_discovery_results(eval_records, fresh=fresh)
     return saved
 
@@ -610,12 +616,78 @@ def failed_discovery_names(log: list[dict] | None = None) -> set[str]:
     return failed
 
 
+# (log fingerprint, index fingerprint) -> names already evaluated.
+_tested_names_cache: dict = {"fp": None, "names": None}
+
+
+def cached_tested_names() -> set[str]:
+    """Index ∪ display log. Do not mutate. Rebuilt when either file changes.
+
+    ``ensure_tested_index`` still folds a log that was written without the
+    index, which is what a direct log write migrates on read.
+    """
+    from hedge_fund.paths import state_root
+    from hedge_fund.trading.tested_index import (
+        ensure_tested_index,
+        tested_index_fingerprint,
+        tested_name_set,
+    )
+
+    fp = (str(state_root()), discovery_log_fingerprint(), tested_index_fingerprint())
+    names = _tested_names_cache.get("names")
+    if _tested_names_cache.get("fp") == fp and isinstance(names, set):
+        return names
+    # A log written without the index is folded in here, then the set is cached.
+    ensure_tested_index()
+    fp = (str(state_root()), discovery_log_fingerprint(), tested_index_fingerprint())
+    names = _tested_names_cache.get("names")
+    if _tested_names_cache.get("fp") == fp and isinstance(names, set):
+        return names
+    found = set(tested_name_set())
+    for row in load_discovery_log():
+        if not isinstance(row, dict):
+            continue
+        name = row.get("strategy")
+        if isinstance(name, str) and name:
+            found.add(name)
+    _tested_names_cache["fp"] = fp
+    _tested_names_cache["names"] = found
+    return found
+
+
+def remember_tested_name(name: str) -> None:
+    """The name was just written. Keep an already-built set in sync.
+
+    A cold cache is left cold so the next read rebuilds from disk instead
+    of trusting a set that only contains this name.
+    """
+    if not isinstance(name, str) or not name:
+        return
+    names = _tested_names_cache.get("names")
+    old = _tested_names_cache.get("fp")
+    if not isinstance(names, set) or not isinstance(old, tuple):
+        return
+    from hedge_fund.paths import state_root
+    from hedge_fund.trading.tested_index import tested_index_fingerprint
+
+    fp = (str(state_root()), discovery_log_fingerprint(), tested_index_fingerprint())
+    if old[0] != fp[0]:
+        _tested_names_cache["fp"] = None
+        _tested_names_cache["names"] = None
+        return
+    names.add(name)
+    _tested_names_cache["fp"] = fp
+
+
 def tested_discovery_names(log: list[dict] | None = None) -> set[str]:
     """Strategy names already evaluated (any outcome).
 
     Uncapped tested-name index, union any names in ``log``. Trimming
     ``discovery_log.json`` does not make a name eligible again.
+    A copy, so the caller can add a name it is about to append.
     """
+    if log is None:
+        return set(cached_tested_names())
     return set(flags_for_skip(log))
 
 

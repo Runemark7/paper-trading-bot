@@ -340,7 +340,7 @@ def ingest_discovery_payload(payload: dict) -> dict:
         # Fail-once is the index union the display log (including the delta).
         # The parsed log is cached, so this is not a fresh multi-megabyte parse
         # on every result.
-        already = tested_discovery_names(load_discovery_log())
+        already = tested_discovery_names()
         st = load_pool()
         grads = load_graduated()
         existing = {c["name"] for c in (st.get("champions") or []) if c.get("name")}
@@ -399,7 +399,15 @@ def ingest_discovery_payload(payload: dict) -> dict:
         if retest_name is None:
 
             def _still_untested(name=name):
-                return name not in tested_discovery_names(load_discovery_log())
+                # The index cache is updated before the append lock is
+                # released, so a retried post sees the name without
+                # merging the display log again.
+                from hedge_fund.trading.discovery import cached_tested_names
+                from hedge_fund.trading.tested_index import tested_name_set
+
+                if name in tested_name_set():
+                    return False
+                return name not in cached_tested_names()
 
             wrote = append_discovery_evaluation(rec, still_valid=_still_untested)
         else:

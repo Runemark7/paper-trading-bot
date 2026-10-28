@@ -320,6 +320,73 @@ def bump_lease_expiry(
         record["expires_at"] = _iso(horizon)
 
 
+def _stat_fp(path: Path) -> tuple | None:
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    return (str(path), st.st_mtime_ns, st.st_size)
+
+
+def _queue_fingerprint() -> tuple:
+    """Files that change who is claimable. Lease file is not one of them."""
+    from hedge_fund.paths import state_root
+    from hedge_fund.trading.discovery import discovery_log_fingerprint
+    from hedge_fund.trading.refill import extended_path
+    from hedge_fund.trading.tested_index import tested_index_fingerprint
+
+    root = state_root()
+    # The directory is part of the key: two empty temp dirs both stat as
+    # missing, and must not share one leftover queue.
+    return (
+        str(root),
+        discovery_log_fingerprint(),
+        tested_index_fingerprint(),
+        _stat_fp(extended_path()),
+        _stat_fp(root / "champions.json"),
+        _stat_fp(root / "graduated.json"),
+        _stat_fp(root / "retired.json"),
+    )
+
+
+# Full rebuild of the leftover queue is the multi-second claim cost.
+# After the first build, an append updates the sets in place and stamps
+# the new fingerprint, so the next claim does not re-canonicalise.
+_QUEUE: dict = {
+    "fp": None,
+    "base": None,
+    "blocked": None,
+    "universe": None,
+    "seen_canon": None,
+}
+
+
+def note_queue_tested(name: str) -> None:
+    """A name was just stored. Drop it from the cached leftover queue."""
+    if not isinstance(name, str) or not name or _QUEUE.get("fp") is None:
+        return
+    current = _queue_fingerprint()
+    cached = _QUEUE.get("fp")
+    if not isinstance(cached, tuple) or not current or cached[0] != current[0]:
+        _QUEUE["fp"] = None
+        _QUEUE["base"] = None
+        return
+    blocked = _QUEUE.get("blocked")
+    if isinstance(blocked, set):
+        blocked.add(name)
+    base = _QUEUE.get("base")
+    if isinstance(base, list):
+        _QUEUE["base"] = [n for n in base if n != name]
+    seen = _QUEUE.get("seen_canon")
+    if isinstance(seen, set):
+        from hedge_fund.trading.mint_quality import canonical_name
+
+        key = canonical_name(name)
+        if key:
+            seen.add(key)
+    _QUEUE["fp"] = _queue_fingerprint()
+
+
 def _blocked_names(log: list[dict]) -> set[str]:
     st = load_pool()
     grads = load_graduated()
@@ -505,27 +572,50 @@ def _book_names() -> set[str]:
 
 
 def _queue_view(state: dict) -> dict:
-    """Unleased never-tested names. Does not mint."""
+    """Unleased never-tested names. Does not mint.
+
+    The canonical scan of every tested and extended name is cached until
+    the log, index, extended sidecar, or champion files change. Leasing
+    a name only filters that list.
+    """
+    active = set(state["leases"])
+    fp = _queue_fingerprint()
+    if _QUEUE.get("fp") == fp and isinstance(_QUEUE.get("base"), list):
+        # Keep the base list. A lease hides a name only while it is active,
+        # so an expired lease can be claimed again without a full rescan.
+        claimable = [n for n in _QUEUE["base"] if n not in active]
+        return {
+            "claimable": claimable,
+            "blocked": _QUEUE["blocked"],
+            "universe": _QUEUE["universe"],
+            "active": active,
+            "seen_canon": _QUEUE["seen_canon"],
+        }
     log = load_discovery_log()
     blocked = _blocked_names(log)
-    active = set(state["leases"])
     universe = discovery_universe()
     record_untested_mint_skips(universe, blocked)
     leftovers = untested_candidates(blocked, universe)
     ordered = prioritize_leftovers(leftovers, log)
     seen_canon = canonical_key_set(blocked)
-    claimable: list[str] = []
+    base: list[str] = []
     for name in ordered:
-        if name in active or mint_block_reason(name, seen_canon):
+        if mint_block_reason(name, seen_canon):
             continue
-        claimable.append(name)
+        base.append(name)
         key = canonical_name(name)
         if key:
             seen_canon.add(key)
+    universe_set = set(universe)
+    _QUEUE["fp"] = fp
+    _QUEUE["base"] = base
+    _QUEUE["blocked"] = blocked
+    _QUEUE["universe"] = universe_set
+    _QUEUE["seen_canon"] = seen_canon
     return {
-        "claimable": claimable,
+        "claimable": [n for n in base if n not in active],
         "blocked": blocked,
-        "universe": set(universe),
+        "universe": universe_set,
         "active": active,
         "seen_canon": seen_canon,
     }
@@ -580,6 +670,9 @@ def _append_minted(view: dict, added: list[str]) -> list[str]:
             continue
         claimable.append(name)
         kept.append(name)
+        base = _QUEUE.get("base")
+        if isinstance(base, list) and name not in base:
+            base.append(name)
         key = canonical_name(name)
         if key:
             seen_canon.add(key)
