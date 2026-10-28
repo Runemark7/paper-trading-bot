@@ -95,7 +95,12 @@ class SwingParityTests(unittest.TestCase):
         original = structure.confirmed_swings
         structure.confirmed_swings = _reference_swings
         try:
-            slow = [backtest(closes, highs, lows, name) for name in names]
+            slow = []
+            for name in names:
+                # Drop the precomputed series so this pass calls the scan.
+                pred = parse_strategy(name)
+                pred.spec = None
+                slow.append(backtest(closes, highs, lows, pred))
         finally:
             structure.confirmed_swings = original
         self.assertEqual([_pack(r) for r in fast], [_pack(r) for r in slow])
@@ -124,6 +129,42 @@ class SwingParityTests(unittest.TestCase):
         cached_s = time.perf_counter() - started
         print(f"TIMING cached near_swing_lo_90 {cached_s*1000:.1f}ms")
         self.assertLess(cached_s, 2.0)
+
+
+class StructureCacheBudgetTests(unittest.TestCase):
+    def test_bytes_stay_under_budget_across_many_names(self):
+        from array import array
+
+        from hedge_fund.signals.precompute import signal_series
+        from hedge_fund.signals.series_cache import (
+            CACHE_BUDGET_BYTES,
+            cache_nbytes,
+            cache_put,
+            clear_series_cache,
+        )
+
+        clear_structure_cache()
+        names = [
+            f"dbl_bot_{k}&near_swing_lo_{k}&don_hi_{k}&sma_abv_{p}"
+            for k in (12, 24, 36, 48, 60, 72, 90)
+            for p in (20, 50, 120, 200)
+        ]
+        for seed in range(12):
+            closes, highs, lows = _tape(2500, seed)
+            for name in names:
+                signal_series(name, closes, highs, lows)
+                self.assertLessEqual(cache_nbytes(), CACHE_BUDGET_BYTES)
+        self.assertGreater(cache_nbytes(), 0)
+        self.assertLessEqual(cache_nbytes(), 150 * 1024 * 1024)
+
+        # A burst of large series is evicted by bytes, not by entry count.
+        clear_series_cache()
+        for i in range(40):
+            buf = array("d", [float(i)]) * 1_000_000  # 8MB
+            cache_put(("budget", i), buf)
+            self.assertLessEqual(cache_nbytes(), CACHE_BUDGET_BYTES)
+        self.assertGreater(cache_nbytes(), 0)
+        self.assertLessEqual(cache_nbytes(), CACHE_BUDGET_BYTES)
 
 
 class StructureCacheIdentityTests(unittest.TestCase):

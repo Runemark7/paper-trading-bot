@@ -468,14 +468,28 @@ class ClaimIngestHotPathTests(unittest.TestCase):
                     })
                     ingest_ms.append((time.perf_counter() - t0) * 1000)
                 claim_ms = []
+                last = None
                 for _ in range(3):
                     t0 = time.perf_counter()
                     body = claim_discovery_batch("zealous-lion", 2, parallel=2)
                     claim_ms.append((time.perf_counter() - t0) * 1000)
                     self.assertEqual(len(body["names"]), 2)
+                    last = body
+                from hedge_fund.trading.handler_timing import handler_frame
+
+                with handler_frame():
+                    timed = ingest_discovery_payload({
+                        "evaluations": [],
+                        "heartbeat": {"status": "running", "worker_id": "zealous-lion"},
+                    })
+        self.assertIsNotNone(last)
+        for key in ("lock_wait", "io", "work", "lock_hold"):
+            self.assertIn(key, last["timing_ms"])
+            self.assertIn(key, timed["timing_ms"])
         print(
             f"TIMING warm_ingest_ms={['%.1f' % v for v in ingest_ms]} "
-            f"warm_claim_ms={['%.1f' % v for v in claim_ms]}"
+            f"warm_claim_ms={['%.1f' % v for v in claim_ms]} "
+            f"claim_steps={last['timing_ms']} ingest_steps={timed['timing_ms']}"
         )
         self.assertLess(sorted(ingest_ms)[1], 250)
         self.assertLess(sorted(claim_ms)[1], 250)

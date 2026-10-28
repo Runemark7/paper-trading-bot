@@ -671,16 +671,22 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 import time
 
+                from hedge_fund.trading.handler_timing import handler_frame
                 from hedge_fund.trading.ingest import ingest_discovery_payload
 
                 t0 = time.perf_counter()
-                body = ingest_discovery_payload(payload)
+                with handler_frame() as frame:
+                    body = ingest_discovery_payload(payload)
                 elapsed = (time.perf_counter() - t0) * 1000.0
+                snap = frame.snapshot(elapsed)
                 if isinstance(body, dict):
-                    body["handler_ms"] = round(elapsed, 1)
+                    body["handler_ms"] = snap["total"]
+                    body["handler_ms_breakdown"] = snap
                 n = len(body.get("ingested") or []) if isinstance(body, dict) else 0
                 print(
-                    f"discovery ingest {elapsed:.0f}ms ingested={n} "
+                    f"discovery ingest {snap['total']:.0f}ms ingested={n} "
+                    f"lock_wait={snap['lock_wait']:.0f} io={snap['io']:.0f} "
+                    f"work={snap['work']:.0f} hold={snap['lock_hold']:.0f} "
                     f"phases={body.get('timing_ms') if isinstance(body, dict) else {}}",
                     flush=True,
                 )
@@ -701,21 +707,30 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 import time
 
+                from hedge_fund.trading.handler_timing import handler_frame
                 from hedge_fund.trading.leases import claim_discovery_batch
 
                 t0 = time.perf_counter()
-                body = claim_discovery_batch(
-                    payload.get("worker_id"),
-                    payload.get("n"),
-                    parallel=payload.get("parallel") if "parallel" in payload else None,
-                    gate_rules=payload.get("gate_rules"),
-                    require_gate_rules=True,
-                )
+                with handler_frame() as frame:
+                    body = claim_discovery_batch(
+                        payload.get("worker_id"),
+                        payload.get("n"),
+                        parallel=payload.get("parallel") if "parallel" in payload else None,
+                        gate_rules=payload.get("gate_rules"),
+                        require_gate_rules=True,
+                    )
                 elapsed = (time.perf_counter() - t0) * 1000.0
+                snap = frame.snapshot(elapsed)
                 if isinstance(body, dict):
-                    body["handler_ms"] = round(elapsed, 1)
+                    body["handler_ms"] = snap["total"]
+                    body["handler_ms_breakdown"] = snap
                 n = len(body.get("names") or []) if isinstance(body, dict) else 0
-                print(f"discovery claim {elapsed:.0f}ms names={n}", flush=True)
+                print(
+                    f"discovery claim {snap['total']:.0f}ms names={n} "
+                    f"lock_wait={snap['lock_wait']:.0f} io={snap['io']:.0f} "
+                    f"work={snap['work']:.0f} hold={snap['lock_hold']:.0f}",
+                    flush=True,
+                )
                 self._send_json(body)
             except ValueError as exc:
                 self._send_json({"ok": False, "error": str(exc), "paper_only": True}, 400)
