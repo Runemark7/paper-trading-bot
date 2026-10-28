@@ -107,8 +107,8 @@ backstop only**. The worker keeps `--workers` evals in flight and starts
 the next leased name as soon as one finishes. A name still running after
 its own 600s is fail-parked `eval_timeout after 600s`. That recycles the
 pool; any other name that was in flight is evaluated again and is not
-parked. Names not yet started stay leased until this process stops, and
-shutdown releases those leases. The process pool and the loaded tape are
+parked. Names not yet started stay leased while the worker lists them in
+`heartbeat.queued`, and shutdown releases those leases. The process pool and the loaded tape are
 reused across claims. The tape is read again only when its hash changes.
 Set the timeout to `0` to disable.
 
@@ -153,10 +153,29 @@ and no `crypto_history_5m.json` placeholder.
    `2 × DISCOVERY_EVAL_TIMEOUT_SECONDS` from the moment that name started
    (default 1200s). A dead worker's names return to the pool about 15
    minutes after its last heartbeat, including names it had not started.
-   A live worker's heartbeat keeps the names it has not started yet.
+   A heartbeat renews only the names it lists in `heartbeat.evaluating`
+   or `heartbeat.queued` (leased, waiting for a slot). An unstarted name
+   never outlives `claimed_at + 2 × DISCOVERY_EVAL_TIMEOUT_SECONDS`.
+   **Lost claim replies.** If the web pod 502s/504s or restarts after the
+   lease is written, the worker never learns those names. Prod frees them
+   without a manual `POST /api/discovery/release`. An `idle` heartbeat
+   with nothing listed drops all of that worker's unstarted leases. A
+   heartbeat that sends `queued` drops unstarted names it leaves out once
+   180s have passed since their claim. An unstarted name nobody has
+   reported for 300s stops counting toward the worker's `2 × parallel`
+   lease room. Started names still renew up to their cap, including from
+   older workers whose heartbeats carry no lists.
    The worker asks for at least `--workers` names. While those evals run
-   it claims another wave, so a finished slot starts the next name
-   without waiting for the whole claim to drain. Pending buy-and-hold
+   it keeps one more wave leased behind them, so a finished slot starts
+   the next name without waiting on a claim. Top-ups are batched. A worker
+   does not claim while a full wave is already queued. It waits until half
+   a wave is missing, unless a slot would sit idle. It counts finished
+   names whose ingest is not acknowledged yet, since prod still counts
+   those leases. After an empty or short reply it waits 30s (doubling to
+   240s) before asking again. A failed claim (5xx or timeout) releases all
+   of the worker's leases and backs off (honouring `Retry-After`). Startup
+   releases them too, so a restart under the same `worker_id` does not
+   inherit names it does not know. Pending buy-and-hold
    retests and fresh names share that pool. A retest's trial count is
    `n_backtested`, not `n_backtested + 1`.
    If the unleased pool cannot cover `n`, or never-tested work is below
