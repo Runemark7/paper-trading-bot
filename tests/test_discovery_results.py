@@ -811,3 +811,84 @@ class ResultMemoryTests(unittest.TestCase):
                 full = records_by_name()["wide"]
         self.assertIn("windows", full)
         self.assertEqual(full["windows"][0]["blob"], "x" * 2000)
+
+    def _fresh_state(self):
+        from hedge_fund.trading import discovery_results as results
+
+        results._bound = None
+        results._map = None
+        results._map_pos = None
+        results._seed_view = None
+
+    def test_unchanged_windows_do_not_rewrite_a_slim_row(self):
+        from hedge_fund.trading.discovery_results import discovery_results_path, sync_discovery_results
+
+        row = _eval(
+            "same",
+            qualified=False,
+            tested_at="2026-10-08T03:00:00+00:00",
+            windows=[{"i": 1, "pnl": 0.5}, {"i": 2, "pnl": -1.25}],
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.dict(os.environ, {"PAPER_STATE": tmp}):
+                self._fresh_state()
+                sync_discovery_results([row], fresh={"same"})
+                size = discovery_results_path().stat().st_size
+                sync_discovery_results([dict(row)], fresh={"same"})
+                self.assertEqual(discovery_results_path().stat().st_size, size)
+                # A cold process (map rebuilt from the jsonl) behaves the same.
+                self._fresh_state()
+                sync_discovery_results([dict(row)], fresh={"same"})
+                self.assertEqual(discovery_results_path().stat().st_size, size)
+                changed = dict(row, windows=[{"i": 1, "pnl": 0.5}])
+                sync_discovery_results([changed], fresh={"same"})
+                self.assertGreater(discovery_results_path().stat().st_size, size)
+
+    def test_seed_view_keeps_window_count_for_slim_rows(self):
+        from hedge_fund.trading import discovery_results as results
+        from hedge_fund.trading.discovery_results import discovery_results_path, load_seed_view
+
+        # A legacy line: window payload but no regimes_tested.
+        line = dict(_eval(
+            "counted",
+            qualified=False,
+            tested_at="2026-10-08T03:00:00+00:00",
+            windows=[{"i": 1}, {"i": 2}, {"i": 3}],
+        ), regimes_tested=None)
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.dict(os.environ, {"PAPER_STATE": tmp}):
+                self._fresh_state()
+                path = discovery_results_path()
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(json.dumps(line) + "\n")
+                with results._lock:
+                    results._load_map()
+                view = load_seed_view()
+        self.assertEqual(view["counted"].get("regimes_tested"), 3)
+
+    def test_index_flip_keeps_window_payload_on_disk(self):
+        from hedge_fund.trading import discovery_results as results
+        from hedge_fund.trading.discovery_results import records_by_name, sync_discovery_results
+
+        row = _eval(
+            "flip",
+            qualified=False,
+            tested_at="2026-10-08T03:00:00+00:00",
+            windows=[{"i": 1, "pnl": 2.0}],
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.dict(os.environ, {"PAPER_STATE": tmp}):
+                self._fresh_state()
+                sync_discovery_results([row], fresh={"flip"})
+                self._fresh_state()
+                with results._lock:
+                    with results._ResultsLock(exclusive=True):
+                        current = results._load_map()
+                        results._apply_rows(current, [], index={"flip": True})
+                full = records_by_name()["flip"]
+        self.assertTrue(full["qualified"])
+        self.assertEqual(full.get("windows"), [{"i": 1, "pnl": 2.0}])
+
+
+if __name__ == "__main__":
+    unittest.main()
