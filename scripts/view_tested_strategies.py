@@ -9,12 +9,12 @@ STATE_DIR = str(state_root())
 LOG_FILE = os.path.join(STATE_DIR, "discovery_log.json")
 
 def main():
-    if not os.path.exists(LOG_FILE):
-        print("No discovery evaluation logs found yet. Run tournament_engine.py first.")
-        return
+    from hedge_fund.trading.discovery import load_discovery_log
 
+    # Base array plus the append-only delta; reading the .json alone misses
+    # every row since the last compaction.
     try:
-        data = json.load(open(LOG_FILE))
+        data = load_discovery_log()
     except Exception as e:
         print(f"Error reading log file: {e}")
         return

@@ -9,6 +9,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from hedge_fund.trading.store import paper_state_lock
+
 from hedge_fund.signals.dynamic import (
     _ema_series,
     _sma_series,
@@ -787,3 +789,243 @@ class IngestRaceTests(unittest.TestCase):
         self.assertEqual(state["inner"]["ingested"], ["race_a"])
         self.assertEqual(outer["ingested"], [])
         self.assertEqual(outer["skipped"], [{"strategy": "race_a", "reason": "already_tested"}])
+
+
+def _journal_row(name: str, *, qualified: bool = False, sharpe: float = 0.1, at: str = "2026-10-28T05:00:00+00:00") -> dict:
+    return {
+        "strategy": name,
+        "qualified": qualified,
+        "sharpe": sharpe,
+        "trades": 9,
+        "tested_at": at,
+    }
+
+
+def _cold_caches() -> None:
+    """Forget every in-process view so the next read comes from disk."""
+    from hedge_fund.trading import discovery, tested_index
+
+    tested_index._derived["key"] = None
+    tested_index._doc_cache["key"] = None
+    tested_index._doc_cache["data"] = None
+    tested_index._covers = None
+    discovery._log_cache["key"] = None
+    discovery._log_cache["rows"] = None
+    discovery._tested_names_cache["fp"] = None
+    discovery._tested_names_cache["names"] = None
+
+
+class AppendOnlyCrashAndRaceTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        self._env = patch.dict(os.environ, {"PAPER_STATE": str(self.root)})
+        self._env.start()
+        # Compaction is driven explicitly in these tests.
+        self._sched = patch("hedge_fund.trading.discovery.schedule_state_compact", lambda: None)
+        self._sched.start()
+        _cold_caches()
+
+    def tearDown(self):
+        self._sched.stop()
+        self._env.stop()
+        _cold_caches()
+        self._tmp.cleanup()
+
+    def test_row_appended_after_a_partial_line_is_kept(self):
+        from hedge_fund.trading.discovery import (
+            append_discovery_evaluations,
+            discovery_log_delta_path,
+            load_discovery_log,
+        )
+        from hedge_fund.trading.tested_index import load_tested_index, tested_journal_path
+
+        append_discovery_evaluations([_journal_row("first")])
+        with discovery_log_delta_path().open("a") as fh:
+            fh.write('{"strategy":"torn"')
+        with tested_journal_path().open("a") as fh:
+            fh.write('{"name":"torn"')
+        append_discovery_evaluations([_journal_row("second", at="2026-10-28T05:01:00+00:00")])
+        _cold_caches()
+        names = [r["strategy"] for r in load_discovery_log()]
+        self.assertEqual(names, ["second", "first"])
+        index = load_tested_index()
+        self.assertIn("second", index)
+        self.assertIn("first", index)
+        self.assertNotIn("torn", index)
+
+    def test_bulk_index_edit_survives_crash_before_journal_drop(self):
+        from hedge_fund.trading.discovery import append_discovery_evaluations
+        from hedge_fund.trading.store import paper_state_lock
+        from hedge_fund.trading.tested_index import (
+            load_index_and_metrics,
+            load_tested_index,
+            save_tested_index,
+            tested_journal_path,
+        )
+
+        append_discovery_evaluations([_journal_row("flip")])
+        self.assertTrue(tested_journal_path().exists())
+        real_unlink = Path.unlink
+
+        def crash_unlink(self_path, *a, **k):
+            if self_path.name == "discovery_tested.jsonl":
+                raise OSError("simulated crash before the journal drop")
+            return real_unlink(self_path, *a, **k)
+
+        with paper_state_lock("discovery"):
+            index, metrics = load_index_and_metrics()
+            index["flip"] = True
+            index["added"] = False  # different name set -> base replace
+            with patch.object(Path, "unlink", crash_unlink):
+                save_tested_index(index, metrics, cleaned=True)
+        self.assertTrue(tested_journal_path().exists())
+        _cold_caches()
+        index = load_tested_index()
+        self.assertTrue(index["flip"])
+        self.assertIn("added", index)
+        # The stale journal is replaced by the next append, not extended.
+        append_discovery_evaluations([_journal_row("later", at="2026-10-28T06:00:00+00:00")])
+        _cold_caches()
+        index = load_tested_index()
+        self.assertTrue(index["flip"])
+        self.assertIn("later", index)
+
+    def test_bulk_log_edit_survives_crash_before_delta_drop(self):
+        from hedge_fund.trading.discovery import (
+            append_discovery_evaluations,
+            discovery_log_path,
+            load_discovery_log,
+        )
+
+        append_discovery_evaluations([_journal_row("row")])
+        edited = [dict(_journal_row("row"), qualified=True)]
+        # save_discovery_log installed the edited base, then the process died.
+        discovery_log_path().write_text(json.dumps(edited))
+        _cold_caches()
+        log = load_discovery_log()
+        self.assertEqual(len(log), 1)
+        self.assertTrue(log[0]["qualified"])
+
+    def test_compaction_keeps_rows_appended_during_encode(self):
+        import hedge_fund.trading.discovery as disc
+        from hedge_fund.trading.tested_index import load_tested_index, tested_journal_path
+
+        for i in range(6):
+            disc.append_discovery_evaluations(
+                [_journal_row(f"n{i}", at=f"2026-10-28T05:0{i}:00+00:00")]
+            )
+        real_json = disc.json
+        fired = []
+
+        class RacingJson:
+            def __getattr__(self, attr):
+                return getattr(real_json, attr)
+
+            def dumps(self, obj, *a, **k):
+                if isinstance(obj, list) and not fired:
+                    fired.append(1)
+                    disc.append_discovery_evaluations(
+                        [_journal_row("raced", at="2026-10-28T05:30:00+00:00")]
+                    )
+                return real_json.dumps(obj, *a, **k)
+
+        with patch.object(disc, "LOG_REWRITE_MAX_BYTES", 16), patch.object(disc, "json", RacingJson()):
+            disc.compact_discovery_state()
+        self.assertTrue(fired)
+        _cold_caches()
+        names = [r["strategy"] for r in disc.load_discovery_log()]
+        self.assertIn("raced", names)
+        self.assertIn("raced", load_tested_index())
+        with patch.object(disc, "LOG_REWRITE_MAX_BYTES", 16):
+            disc.compact_discovery_state()
+        self.assertFalse(disc.discovery_log_delta_path().exists())
+        self.assertFalse(tested_journal_path().exists())
+        _cold_caches()
+        names = [r["strategy"] for r in disc.load_discovery_log()]
+        self.assertEqual(sorted(names), sorted([f"n{i}" for i in range(6)] + ["raced"]))
+        self.assertEqual(len(load_tested_index()), 7)
+
+    def test_in_place_index_patch_sees_another_process_line(self):
+        from hedge_fund.trading.discovery import append_discovery_evaluations
+        from hedge_fund.trading.tested_index import tested_journal_path, tested_name_set
+
+        append_discovery_evaluations([_journal_row("a")])
+        self.assertIn("a", tested_name_set())  # warm merged view
+        # Another container appends a line without touching this process.
+        with tested_journal_path().open("a") as fh:
+            fh.write(json.dumps({"name": "other", "q": 0}) + "\n")
+        append_discovery_evaluations([_journal_row("b", at="2026-10-28T05:02:00+00:00")])
+        names = tested_name_set()
+        self.assertIn("other", names)
+        self.assertIn("b", names)
+
+
+    def test_same_size_same_mtime_base_swap_is_seen(self):
+        from hedge_fund.trading.discovery import append_discovery_evaluations
+        from hedge_fund.trading.tested_index import (
+            tested_index_document,
+            tested_index_path,
+            tested_name_set,
+            write_tested_document,
+        )
+
+        with paper_state_lock("discovery"):
+            write_tested_document(tested_index_document({"aaaa": False}, {}))
+        self.assertEqual(tested_name_set(), {"aaaa"})
+        path = tested_index_path()
+        st = path.stat()
+        # Another process installs a same-size base within one mtime tick.
+        doc = json.loads(path.read_text())
+        doc["jgen"] = "f" * 32
+        doc["names"] = {"bbbb": 0}
+        tmp = path.with_name("other.tmp")
+        tmp.write_text(json.dumps(doc, separators=(",", ":")))
+        os.replace(tmp, path)
+        os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns))
+        self.assertEqual(path.stat().st_size, st.st_size)
+        self.assertEqual(tested_name_set(), {"bbbb"})
+        append_discovery_evaluations([_journal_row("c")])
+        self.assertEqual(tested_name_set(), {"bbbb", "c"})
+
+
+class AppendOnlyMultiProcessTests(unittest.TestCase):
+    def test_concurrent_writers_with_compaction_lose_nothing(self):
+        import subprocess
+        import sys
+
+        script = (
+            "import sys, threading\n"
+            "import hedge_fund.trading.discovery as d\n"
+            "d.LOG_REWRITE_MAX_BYTES = 1500\n"
+            "w = sys.argv[1]\n"
+            "for i in range(40):\n"
+            "    d.append_discovery_evaluations([{'strategy': f'{w}_{i}', 'qualified': False,"
+            " 'sharpe': 0.1, 'trades': 3, 'tested_at': f'2026-10-28T05:{i:02d}:00+00:00'}])\n"
+            "for t in threading.enumerate():\n"
+            "    if t.name == 'discovery-compact':\n"
+            "        t.join()\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            env = dict(os.environ, PAPER_STATE=tmp)
+            procs = [
+                subprocess.Popen([sys.executable, "-c", script, f"w{k}"], env=env)
+                for k in range(4)
+            ]
+            for p in procs:
+                self.assertEqual(p.wait(timeout=240), 0)
+            with patch.dict(os.environ, {"PAPER_STATE": tmp}):
+                _cold_caches()
+                from hedge_fund.trading.discovery import compact_discovery_state, load_discovery_log
+                from hedge_fund.trading.tested_index import load_tested_index
+
+                expected = {f"w{k}_{i}" for k in range(4) for i in range(40)}
+                names = [r["strategy"] for r in load_discovery_log()]
+                self.assertEqual(len(names), len(set(names)))
+                self.assertEqual(set(names), expected)
+                self.assertEqual(set(load_tested_index()), expected)
+                compact_discovery_state()
+                _cold_caches()
+                self.assertEqual(set(load_tested_index()), expected)
+                self.assertEqual({r["strategy"] for r in load_discovery_log()}, expected)
+                _cold_caches()

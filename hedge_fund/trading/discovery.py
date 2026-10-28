@@ -16,6 +16,7 @@ left off so the next live_cycle continues fairly.
 from __future__ import annotations
 
 import json
+import sys
 import os
 import threading
 from datetime import datetime, timezone
@@ -87,7 +88,7 @@ def _file_stat(path: Path) -> tuple | None:
         st = path.stat()
     except OSError:
         return None
-    return (str(path), st.st_mtime_ns, st.st_size)
+    return (str(path), st.st_mtime_ns, st.st_size, st.st_ino)
 
 
 def _log_stat_key() -> tuple:
@@ -141,26 +142,38 @@ def _read_delta_newest_first(path: Path) -> list[dict]:
     return rows
 
 
+def _row_key(row: dict) -> tuple | None:
+    name = row.get("strategy")
+    tested = row.get("tested_at")
+    if isinstance(name, str) and name and isinstance(tested, str) and tested:
+        return (name, tested)
+    return None
+
+
 def _read_discovery_log() -> list[dict]:
-    """Base array plus delta. Newest first. Same row in both is kept once."""
+    """Base array plus delta. Newest first. Same row in both is kept once.
+
+    When a ``(strategy, tested_at)`` row is in both, the base copy wins: a
+    base is only ever written from a merged view (compaction, or a bulk
+    edit such as requalify), so it is the newer version of that row. A
+    crash after the base install and before the delta drop then cannot
+    revert a bulk edit. Rows without a ``tested_at`` are never collapsed.
+    """
     base = _read_json_array(discovery_log_path())
     extra = _read_delta_newest_first(discovery_log_delta_path())
     if not extra:
         return base
+    in_base = {key for key in map(_row_key, base) if key is not None}
     seen: set[tuple] = set()
-    out: list[dict] = []
-    for row in extra + base:
-        name = row.get("strategy")
-        tested = row.get("tested_at")
-        if isinstance(name, str) and name:
-            key = (name, tested if isinstance(tested, str) else None)
-            if key in seen:
+    fresh: list[dict] = []
+    for row in extra:
+        key = _row_key(row)
+        if key is not None:
+            if key in in_base or key in seen:
                 continue
             seen.add(key)
-        out.append(row)
-        if len(out) >= DISCOVERY_LOG_CAP:
-            break
-    return out
+        fresh.append(row)
+    return (fresh + base)[:DISCOVERY_LOG_CAP]
 
 
 def _remember_log(rows: list[dict]) -> None:
@@ -268,7 +281,22 @@ def _append_delta(records: list[dict]) -> None:
     """
     path = discovery_log_delta_path()
     path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        size = path.stat().st_size
+    except OSError:
+        size = 0
+    partial = False
+    if size:
+        try:
+            with path.open("rb") as raw:
+                raw.seek(size - 1)
+                partial = raw.read(1) != b"\n"
+        except OSError:
+            partial = False
     with path.open("a") as fh:
+        if partial:
+            # A crash left a partial line. Close it so the next row parses.
+            fh.write("\n")
         for row in reversed(records):
             fh.write(json.dumps(row, separators=(",", ":")) + "\n")
         fh.flush()
@@ -408,11 +436,13 @@ def _compact_worker() -> None:
     global _compact_scheduled
     try:
         compact_discovery_state()
+    except Exception as exc:  # noqa: BLE001 - a failed fold retries on the next append
+        print(f"discovery compact failed: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
     finally:
         with _compact_guard:
             _compact_scheduled = False
-        if _log_compact_due() or _index_compact_due():
-            schedule_state_compact()
+    # No immediate retry: if an append raced the encode, the next append
+    # schedules another pass. Retrying here would spin re-reading the files.
 
 
 def compact_discovery_state() -> None:
@@ -421,8 +451,8 @@ def compact_discovery_state() -> None:
     Holds the lock only to snapshot and to install. Encoding happens
     outside it. If an append lands in between, the install is skipped.
     A crash after the base rename and before the journal unlink is safe:
-    the log reader drops a row already in the base, and a tested-index
-    line applied twice is the same name and the same values.
+    the log reader drops a delta row already in the base, and the tested
+    journal carries the base's ``jgen`` so a stale journal is ignored.
     """
     _compact_log()
     _compact_tested_index()
@@ -452,16 +482,15 @@ def _compact_tested_index() -> None:
         return
     from hedge_fund.trading.tested_index import (
         _derived_now,
-        _file_stat as _index_stat,
         tested_index_document,
-        tested_index_path,
+        tested_index_fingerprint,
         tested_journal_path,
         write_tested_document,
     )
 
     with paper_state_lock("discovery"):
-        journal_fp = _index_stat(tested_journal_path())
-        base_fp = _index_stat(tested_index_path())
+        # Includes the base generation and journal header, not just stat.
+        fp = tested_index_fingerprint()
         derived = _derived_now()
         flags = dict(derived["flags"])
         metrics = dict(derived["metrics"])
@@ -470,10 +499,7 @@ def _compact_tested_index() -> None:
         {name: metrics[name] for name in sorted(metrics)},
     )
     with paper_state_lock("discovery"):
-        if (
-            _index_stat(tested_journal_path()) != journal_fp
-            or _index_stat(tested_index_path()) != base_fp
-        ):
+        if tested_index_fingerprint() != fp:
             return
         write_tested_document(payload)
         try:

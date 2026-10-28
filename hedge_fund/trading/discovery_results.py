@@ -148,7 +148,7 @@ def write_result_counts_header(*, tested_pass: int, tested_fail: int) -> None:
         int(tested_fail),
         0,
     )
-    tmp = path.with_suffix(".ix.tmp")
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
     tmp.write_bytes(blob)
     os.replace(tmp, path)
     _reset_if_moved()
@@ -410,7 +410,7 @@ def _write_index(rows: dict[str, dict]) -> None:
             parts.append(_REF.pack(int(row.get("_offset") or 0), int(row.get("_length") or 0), unix, flags))
     path = discovery_results_index_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".ix.tmp")
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
     tmp.write_bytes(b"".join(parts))
     os.replace(tmp, path)
     _invalidate_counts()
