@@ -713,7 +713,6 @@ def _claim_unlocked(
         "claimed_at": _iso(now),
         "leases_active": len(state["leases"]),
         "requalify": list(requal),
-        "trials": _trial_census_safe(),
         "_schedule_refill": schedule,
     }
 
@@ -771,8 +770,30 @@ def claim_discovery_batch(
     if require_gate_rules and gate_rules != GATE_RULES:
         return stale_rules_response(wid, count, gate_rules)
     clock = now or datetime.now(timezone.utc)
-    with paper_state_lock("discovery"):
-        body = _claim_unlocked(wid, count, parallel=par, now=clock)
+    from contextlib import nullcontext
+
+    from hedge_fund.trading.handler_timing import current_frame, handler_frame
+    from hedge_fund.trading.tested_index import ensure_tested_index
+
+    # The display-log merge runs before the claim lock. Inside the lock,
+    # ensure only re-checks the fingerprint, so a warm retest claim does
+    # not parse the log while everyone else waits.
+    own = current_frame() is None
+    with handler_frame() if own else nullcontext(current_frame()) as frame:
+        if frame is not None:
+            frame.step("ensure")
+        ensure_tested_index()
+        if frame is not None:
+            frame.step("lock")
+        with paper_state_lock("discovery"):
+            body = _claim_unlocked(wid, count, parallel=par, now=clock)
+        if frame is not None:
+            frame.step("census")
+        # Trial count is read-only and cached by the index fingerprint.
+        # It does not need to sit inside the lease lock.
+        body["trials"] = _trial_census_safe()
+        if frame is not None:
+            body["timing_ms"] = frame.snapshot()
     if body.pop("_schedule_refill", False):
         schedule_refill_buffer()
     return body

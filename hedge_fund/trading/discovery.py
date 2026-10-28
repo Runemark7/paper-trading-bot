@@ -219,10 +219,24 @@ def evals_on_utc_date(log: list[dict], day: datetime | None = None) -> int:
 
 
 def _write_log_array(path: Path, log: list[dict]) -> None:
+    from hedge_fund.trading.handler_timing import io_timer
+
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(log, separators=(",", ":")))
-    os.replace(tmp, path)
+    with io_timer():
+        blob = json.dumps(log, separators=(",", ":"))
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(blob)
+        os.replace(tmp, path)
+
+
+def _write_log_blob(path: Path, blob: str) -> None:
+    from hedge_fund.trading.handler_timing import io_timer
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with io_timer():
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(blob)
+        os.replace(tmp, path)
 
 
 def _append_delta(records: list[dict]) -> int:
@@ -248,7 +262,123 @@ def _clear_delta() -> None:
         pass
 
 
-def append_discovery_evaluations(eval_records: list[dict], *, cap: int = DISCOVERY_LOG_CAP) -> list[dict]:
+def _commit_append_locked(
+    eval_records: list[dict],
+    *,
+    cap: int,
+    index_blob: str | None = None,
+    index_payload: dict | None = None,
+    log_blob: str | None = None,
+    prepared: dict | None = None,
+) -> list[dict]:
+    """Write one append. Caller holds ``paper_state_lock``.
+
+    When ``prepared`` is set, the JSON was encoded outside the lock and
+    the fingerprints must still match. Otherwise this reads and encodes
+    under the lock (the nested-lock path).
+    """
+    from hedge_fund.trading.tested_index import (
+        commit_tested_blob,
+        mark_index_covers_log,
+        save_tested_index,
+    )
+
+    path = discovery_log_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if prepared is None:
+        index, metrics = load_index_and_metrics()
+        flags_changed = merge_tested_rows(index, eval_records)
+        metrics_changed = merge_tested_metrics(metrics, eval_records)
+        if flags_changed or metrics_changed:
+            save_tested_index(index, metrics, cleaned=True)
+        base_size = path.stat().st_size if path.exists() else 0
+        delta = discovery_log_delta_path()
+        delta_exists = delta.exists() and delta.stat().st_size > 0
+        prior = load_discovery_log()
+        log = (list(eval_records) + prior)[:cap]
+        if base_size < LOG_REWRITE_MAX_BYTES and not delta_exists:
+            _write_log_array(path, log)
+            _clear_delta()
+        else:
+            n_lines = _append_delta(list(eval_records))
+            if n_lines >= DELTA_COMPACT_LINES:
+                # Drop the delta before the array replace so a crash cannot
+                # load those rows twice. A crash in between loses only the
+                # rows still in memory; the index already has the names.
+                _clear_delta()
+                _write_log_array(path, log)
+    else:
+        if index_blob is not None and index_payload is not None:
+            commit_tested_blob(index_blob, index_payload)
+        log = prepared["log"]
+        if prepared["rewrite"]:
+            _write_log_blob(path, log_blob or "")
+            _clear_delta()
+        else:
+            n_lines = _append_delta(list(eval_records))
+            if n_lines >= DELTA_COMPACT_LINES:
+                _clear_delta()
+                if log_blob is None:
+                    _write_log_array(path, log)
+                else:
+                    _write_log_blob(path, log_blob)
+    _remember_log(log)
+    mark_index_covers_log()
+    return log
+
+
+def _prepare_append(eval_records: list[dict], cap: int) -> dict:
+    """Snapshot the append under the lock. Encode happens after release."""
+    from hedge_fund.trading.tested_index import tested_index_document, tested_index_fingerprint
+
+    index, metrics = load_index_and_metrics()
+    index = dict(index)
+    metrics = dict(metrics)
+    flags_changed = merge_tested_rows(index, eval_records)
+    metrics_changed = merge_tested_metrics(metrics, eval_records)
+    path = discovery_log_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    base_size = path.stat().st_size if path.exists() else 0
+    delta = discovery_log_delta_path()
+    delta_exists = delta.exists() and delta.stat().st_size > 0
+    prior = load_discovery_log()
+    rewrite = base_size < LOG_REWRITE_MAX_BYTES and not delta_exists
+    log = (list(eval_records) + prior)[:cap]
+    existing_lines = 0
+    if not rewrite and delta_exists:
+        try:
+            with delta.open() as fh:
+                existing_lines = sum(1 for line in fh if line.strip())
+        except OSError:
+            existing_lines = 0
+    will_compact = (not rewrite) and (
+        existing_lines + len(eval_records) >= DELTA_COMPACT_LINES
+    )
+    payload = None
+    if flags_changed or metrics_changed:
+        cleaned = {
+            name: metrics[name]
+            for name in sorted(metrics)
+            if isinstance(name, str) and name
+        }
+        payload = tested_index_document(index, cleaned)
+    return {
+        "index_fp": tested_index_fingerprint(),
+        "log_fp": discovery_log_fingerprint(),
+        "rewrite": rewrite,
+        "will_compact": will_compact,
+        "log": log,
+        "payload": payload,
+    }
+
+
+def append_discovery_evaluations(
+    eval_records: list[dict],
+    *,
+    cap: int = DISCOVERY_LOG_CAP,
+    after_commit=None,
+    still_valid=None,
+) -> list[dict]:
     """Prepend records (newest-first) and cap the display log.
 
     The tested-name index is updated from these records only. A name that
@@ -258,39 +388,76 @@ def append_discovery_evaluations(eval_records: list[dict], *, cap: int = DISCOVE
     A small display file is rewritten in place. Once it is past
     ``LOG_REWRITE_MAX_BYTES``, further rows are one jsonl line each and
     folded back into the array every ``DELTA_COMPACT_LINES`` appends.
+
+    When this thread does not already hold the paper-state lock, the
+    JSON encode runs outside the lock. The lock is taken again only to
+    write the bytes, and only if neither file changed. ``after_commit``
+    runs inside that write, before the lock is released, so a retest can
+    leave the pending set in the same critical section as the index write.
+
+    ``still_valid`` (optional) is re-checked under the lock before the
+    snapshot and before a locked fallback write. When it returns False the
+    rows are not appended (a concurrent ingest already wrote this name),
+    and ``None`` is returned. Every append changes the display-log
+    fingerprint, so a duplicate landing between the snapshot and the
+    write forces a retry that re-runs the check.
     """
     if not eval_records:
         return load_discovery_log()
-    with paper_state_lock("discovery"):
-        index, metrics = load_index_and_metrics()
-        flags_changed = merge_tested_rows(index, eval_records)
-        metrics_changed = merge_tested_metrics(metrics, eval_records)
-        if flags_changed or metrics_changed:
-            save_tested_index(index, metrics, cleaned=True)
-        path = discovery_log_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        base_size = path.stat().st_size if path.exists() else 0
-        delta = discovery_log_delta_path()
-        delta_exists = delta.exists() and delta.stat().st_size > 0
-        prior = load_discovery_log()
-        if base_size < LOG_REWRITE_MAX_BYTES and not delta_exists:
-            log = (list(eval_records) + prior)[:cap]
-            _write_log_array(path, log)
-            _clear_delta()
-        else:
-            n_lines = _append_delta(list(eval_records))
-            log = (list(eval_records) + prior)[:cap]
-            if n_lines >= DELTA_COMPACT_LINES:
-                # Drop the delta before the array replace so a crash cannot
-                # load those rows twice. A crash in between loses only the
-                # rows still in memory; the index already has the names.
-                _clear_delta()
-                _write_log_array(path, log)
-        _remember_log(log)
-        from hedge_fund.trading.tested_index import mark_index_covers_log
+    from hedge_fund.trading.store import paper_lock_held
+    from hedge_fund.trading.tested_index import tested_index_fingerprint
 
-        mark_index_covers_log()
-        saved = log
+    if paper_lock_held():
+        with paper_state_lock("discovery"):
+            if still_valid is not None and not still_valid():
+                return None
+            saved = _commit_append_locked(eval_records, cap=cap)
+            if after_commit is not None:
+                after_commit()
+    else:
+        saved = None
+        for _attempt in range(8):
+            with paper_state_lock("discovery"):
+                if still_valid is not None and not still_valid():
+                    return None
+                prepared = _prepare_append(eval_records, cap)
+            from hedge_fund.trading.handler_timing import io_timer
+
+            with io_timer():
+                index_blob = (
+                    json.dumps(prepared["payload"], separators=(",", ":"))
+                    if prepared["payload"] is not None
+                    else None
+                )
+                log_blob = (
+                    json.dumps(prepared["log"], separators=(",", ":"))
+                    if prepared["rewrite"] or prepared["will_compact"]
+                    else None
+                )
+            with paper_state_lock("discovery"):
+                if (
+                    tested_index_fingerprint() != prepared["index_fp"]
+                    or discovery_log_fingerprint() != prepared["log_fp"]
+                ):
+                    continue
+                saved = _commit_append_locked(
+                    eval_records,
+                    cap=cap,
+                    index_blob=index_blob,
+                    index_payload=prepared["payload"],
+                    log_blob=log_blob,
+                    prepared=prepared,
+                )
+                if after_commit is not None:
+                    after_commit()
+                break
+        if saved is None:
+            with paper_state_lock("discovery"):
+                if still_valid is not None and not still_valid():
+                    return None
+                saved = _commit_append_locked(eval_records, cap=cap)
+                if after_commit is not None:
+                    after_commit()
     from hedge_fund.trading.discovery_results import sync_discovery_results
 
     fresh = {
@@ -302,9 +469,17 @@ def append_discovery_evaluations(eval_records: list[dict], *, cap: int = DISCOVE
     return saved
 
 
-def append_discovery_evaluation(record: dict, *, cap: int = DISCOVERY_LOG_CAP) -> list[dict]:
+def append_discovery_evaluation(
+    record: dict,
+    *,
+    cap: int = DISCOVERY_LOG_CAP,
+    after_commit=None,
+    still_valid=None,
+) -> list[dict] | None:
     """Append one finished evaluation now. Crash-safe mid-batch progress."""
-    return append_discovery_evaluations([record], cap=cap)
+    return append_discovery_evaluations(
+        [record], cap=cap, after_commit=after_commit, still_valid=still_valid
+    )
 
 
 def save_discovery_log(log: list[dict]) -> None:

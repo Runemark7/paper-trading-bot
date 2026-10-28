@@ -75,12 +75,11 @@ def rsi(vals, period=14, i=None):
     return 100.0 - (100.0 / (1.0 + rs))
 
 
-_ATR_CACHE_MAX = 256
-_atr_series_cache: dict[tuple, list[float]] = {}
-
-
 def clear_atr_cache() -> None:
-    _atr_series_cache.clear()
+    """Stop-ATR shares the structure series budget."""
+    from hedge_fund.signals.series_cache import clear_series_cache
+
+    clear_series_cache()
 
 
 def clear_qual_caches() -> None:
@@ -110,17 +109,10 @@ def _atr_series(highs, lows, closes, period=14):
 
 
 def _cached_atr_series(highs, lows, closes, period=14):
-    n = len(closes)
-    c0 = closes[0] if n else 0.0
-    c1 = closes[-1] if n else 0.0
-    key = (id(highs), id(lows), id(closes), period, n, c0, c1)
-    hit = _atr_series_cache.get(key)
-    if hit is None or len(hit) != n:
-        if len(_atr_series_cache) >= _ATR_CACHE_MAX:
-            _atr_series_cache.clear()
-        hit = _atr_series(highs, lows, closes, period)
-        _atr_series_cache[key] = hit
-    return hit
+    """ATR for stops. Same series as the structure near-band, one copy."""
+    from hedge_fund.signals.structure import atr_series
+
+    return atr_series(highs, lows, closes, period)
 
 
 def atr(highs, lows, closes, period=14, i=None):
@@ -339,8 +331,16 @@ def backtest(closes, highs, lows, strategy, start_cash=10_000.0,
     last_sample_i = -1
     lots: list[dict] = []  # {qty, entry, stop, opened}
     pred = strategy if callable(strategy) and not isinstance(strategy, str) else parse_strategy(strategy)
+    spec = strategy.strip() if isinstance(strategy, str) else getattr(pred, "spec", None)
+    flags = None
+    if isinstance(spec, str) and spec:
+        from hedge_fund.signals.precompute import signal_series
+
+        flags = signal_series(spec, closes, highs, lows)
     risk = RiskManager(risk_frac=risk_frac, initial_equity=start_cash)
     atr_vals = _cached_atr_series(highs, lows, closes, ATR_PERIOD)
+    n_high = len(highs) if highs is not None else 0
+    n_low = len(lows) if lows is not None else 0
 
     warmup = max(long_stack[2], momentum_lookback, 14, 20) + 2
     start = 0 if score_from is None else max(0, int(score_from))
@@ -382,9 +382,12 @@ def backtest(closes, highs, lows, strategy, start_cash=10_000.0,
 
     for i in range(trade_start, end):
         cur = closes[i]
-        take = eval_predicate(pred, closes, i, highs=highs, lows=lows)
-        high_i = highs[i] if i < len(highs) else cur
-        low_i = lows[i] if i < len(lows) else cur
+        if flags is not None:
+            take = bool(flags[i])
+        else:
+            take = eval_predicate(pred, closes, i, highs=highs, lows=lows)
+        high_i = highs[i] if i < n_high else cur
+        low_i = lows[i] if i < n_low else cur
 
         still_open = []
         exited_this_bar = False

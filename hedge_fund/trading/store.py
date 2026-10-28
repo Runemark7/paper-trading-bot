@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
+import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -145,6 +146,17 @@ def sqlite_write_lock(db_path: Path):
 _PAPER_LOCK_DEPTH = threading.local()
 
 
+def paper_lock_held(name: str = "discovery") -> bool:
+    """True when this thread already holds ``paper_state_lock(name)``."""
+    from hedge_fund.paths import state_root
+
+    lock_path = state_root() / f".{name}.lock"
+    depths = getattr(_PAPER_LOCK_DEPTH, "depths", None)
+    if not depths:
+        return False
+    return depths.get(str(lock_path), 0) > 0
+
+
 @contextmanager
 def paper_state_lock(name: str = "discovery"):
     """Serialize JSON writers on the paper-state dir (ingest vs collect).
@@ -167,11 +179,17 @@ def paper_state_lock(name: str = "discovery"):
         finally:
             depths[key] -= 1
         return
+    from hedge_fund.trading.handler_timing import add_lock_hold, add_lock_wait
+
+    waited = time.perf_counter()
     with _exclusive_file_lock(lock_path):
+        add_lock_wait(time.perf_counter() - waited)
         depths[key] = 1
+        held = time.perf_counter()
         try:
             yield
         finally:
+            add_lock_hold(time.perf_counter() - held)
             depths[key] = 0
 
 

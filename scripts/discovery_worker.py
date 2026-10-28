@@ -1104,7 +1104,19 @@ _poster = _ResultPoster()
 def _log_round_trip(label: str, started: float, body: object) -> None:
     ms = (time.perf_counter() - started) * 1000.0
     server = body.get("handler_ms") if isinstance(body, dict) else None
-    extra = f" server={server:.0f}ms" if isinstance(server, (int, float)) else ""
+    detail = body.get("handler_ms_breakdown") if isinstance(body, dict) else None
+    if isinstance(detail, dict):
+        extra = (
+            f" server={detail.get('total')}ms"
+            f" lock_wait={detail.get('lock_wait')}ms"
+            f" io={detail.get('io')}ms"
+            f" work={detail.get('work')}ms"
+            f" hold={detail.get('lock_hold')}ms"
+        )
+    elif isinstance(server, (int, float)):
+        extra = f" server={server:.0f}ms"
+    else:
+        extra = ""
     print(f"discovery_worker: {label} {ms:.0f}ms{extra}", flush=True)
 
 

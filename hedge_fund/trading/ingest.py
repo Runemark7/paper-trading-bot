@@ -258,6 +258,15 @@ def _touch_heartbeat_and_flight(payload: dict) -> None:
 
 def _timing(started: float, phases: dict) -> dict:
     phases["total"] = round((time.perf_counter() - started) * 1000, 1)
+    from hedge_fund.trading.handler_timing import current_frame
+
+    frame = current_frame()
+    if frame is not None:
+        snap = frame.snapshot()
+        phases["lock_wait"] = snap["lock_wait"]
+        phases["io"] = snap["io"]
+        phases["work"] = snap["work"]
+        phases["lock_hold"] = snap["lock_hold"]
     return phases
 
 
@@ -325,6 +334,7 @@ def ingest_discovery_payload(payload: dict) -> dict:
             "timing_ms": _timing(started, phases),
         }
 
+    to_append: list[tuple[dict, str | None]] = []
     with paper_state_lock("discovery"):
         requal_state = load_requalify_state() if requalify_path().exists() else None
         # Fail-once is the index union the display log (including the delta).
@@ -362,15 +372,16 @@ def ingest_discovery_payload(payload: dict) -> dict:
                     skipped.append({"strategy": name, "reason": "already_tested"})
                     continue
                 # One fresh v5 row. The name stays a single census entry.
-                # A pass is proposed, not seated.
+                # A pass is proposed, not seated. The index write and the
+                # pending-retest clear share one lock (after_commit) so a
+                # claim cannot lease the name again between them.
                 stamp_retest_result(rec, entry)
-                append_discovery_evaluation(rec)
-                complete_retest_unlocked(name, tested_at=rec.get("tested_at"))
+                to_append.append((rec, name))
                 ingested.append(name)
                 if rec["qualified"]:
                     proposed.append(name)
                 continue
-            append_discovery_evaluation(rec)
+            to_append.append((rec, None))
             already.add(name)
             ingested.append(name)
             if rec["qualified"]:
@@ -379,6 +390,39 @@ def ingest_discovery_payload(payload: dict) -> dict:
         if requalify_recorded:
             save_requalify_state(requal_state)
 
+    # The fail-once check above ran under an earlier lock. Re-check it under
+    # the append lock so a concurrent ingest (e.g. a retried post) of the
+    # same name cannot write a second row.
+    t_append = time.perf_counter()
+    for rec, retest_name in to_append:
+        name = rec["strategy"]
+        if retest_name is None:
+
+            def _still_untested(name=name):
+                return name not in tested_discovery_names(load_discovery_log())
+
+            wrote = append_discovery_evaluation(rec, still_valid=_still_untested)
+        else:
+            tested_at = rec.get("tested_at")
+
+            def _close_retest(name=retest_name, stamp=tested_at):
+                complete_retest_unlocked(name, tested_at=stamp)
+
+            def _still_pending(name=retest_name):
+                return retest_entry(name) is not None
+
+            wrote = append_discovery_evaluation(
+                rec, after_commit=_close_retest, still_valid=_still_pending
+            )
+        if wrote is None:
+            if name in ingested:
+                ingested.remove(name)
+            if name in proposed:
+                proposed.remove(name)
+            skipped.append({"strategy": name, "reason": "already_tested"})
+    mark("append", t_append)
+
+    with paper_state_lock("discovery"):
         scan = _park_scan_due(force=qualified_in or bool(raw_force))
         t_scan = time.perf_counter()
         if scan:

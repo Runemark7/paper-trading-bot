@@ -468,14 +468,28 @@ class ClaimIngestHotPathTests(unittest.TestCase):
                     })
                     ingest_ms.append((time.perf_counter() - t0) * 1000)
                 claim_ms = []
+                last = None
                 for _ in range(3):
                     t0 = time.perf_counter()
                     body = claim_discovery_batch("zealous-lion", 2, parallel=2)
                     claim_ms.append((time.perf_counter() - t0) * 1000)
                     self.assertEqual(len(body["names"]), 2)
+                    last = body
+                from hedge_fund.trading.handler_timing import handler_frame
+
+                with handler_frame():
+                    timed = ingest_discovery_payload({
+                        "evaluations": [],
+                        "heartbeat": {"status": "running", "worker_id": "zealous-lion"},
+                    })
+        self.assertIsNotNone(last)
+        for key in ("lock_wait", "io", "work", "lock_hold"):
+            self.assertIn(key, last["timing_ms"])
+            self.assertIn(key, timed["timing_ms"])
         print(
             f"TIMING warm_ingest_ms={['%.1f' % v for v in ingest_ms]} "
-            f"warm_claim_ms={['%.1f' % v for v in claim_ms]}"
+            f"warm_claim_ms={['%.1f' % v for v in claim_ms]} "
+            f"claim_steps={last['timing_ms']} ingest_steps={timed['timing_ms']}"
         )
         self.assertLess(sorted(ingest_ms)[1], 250)
         self.assertLess(sorted(claim_ms)[1], 250)
@@ -483,3 +497,53 @@ class ClaimIngestHotPathTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class IngestRaceTests(unittest.TestCase):
+    """The fail-once check and the append run under separate locks. A second
+    ingest of the same name that lands in between must not add a second row."""
+
+    def _row(self, name: str, stamp: str) -> dict:
+        return {
+            "strategy": name,
+            "qualified": False,
+            "sharpe": 0.11,
+            "trades": 8,
+            "test_pnl": -1.0,
+            "train_pnl": 0.0,
+            "win_rate_pct": 40.0,
+            "fail_reasons": ["oos_sharpe 0.11 < 0.30"],
+            "timeframe": "5m",
+            "risk_policy": "rm_v1",
+            "gate_rules": "gate_v5_btc_holdout_dsr_pbo_20261027",
+            "tested_at": stamp,
+        }
+
+    def test_concurrent_duplicate_ingest_writes_one_row(self):
+        import hedge_fund.trading.ingest as ingest_mod
+        from hedge_fund.trading.ingest import ingest_discovery_payload
+
+        original = ingest_mod.append_discovery_evaluation
+        payload = {"evaluations": [self._row("race_a", "2026-10-28T02:00:00+00:00")]}
+        state = {"raced": False, "inner": None}
+
+        def racing_append(rec, **kwargs):
+            # Before the outer ingest appends, a retried post of the same
+            # name runs end to end (it passed the same stale check).
+            if not state["raced"]:
+                state["raced"] = True
+                state["inner"] = ingest_discovery_payload(payload)
+            return original(rec, **kwargs)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "champions.json").write_text(json.dumps({"champions": [], "synced_until": ""}))
+            with patch.dict(os.environ, {"PAPER_STATE": str(root)}), patch.object(
+                ingest_mod, "append_discovery_evaluation", racing_append
+            ):
+                outer = ingest_discovery_payload(payload)
+                rows = [r for r in load_discovery_log() if r.get("strategy") == "race_a"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(state["inner"]["ingested"], ["race_a"])
+        self.assertEqual(outer["ingested"], [])
+        self.assertEqual(outer["skipped"], [{"strategy": "race_a", "reason": "already_tested"}])

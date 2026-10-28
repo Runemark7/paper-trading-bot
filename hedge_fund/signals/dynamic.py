@@ -199,6 +199,21 @@ def eval_predicate(pred, closes, i=None, *, highs=None, lows=None) -> bool:
 def parse_strategy(expr: str | Callable | dict) -> Predicate:
     """Parse a strategy expression into ``(closes, i, highs=, lows=) -> bool``.
 
+    String names carry ``spec`` so a backtest can index a precomputed
+    per-bar signal instead of calling this predicate on every bar.
+    """
+    fn = _parse_strategy_impl(expr)
+    if isinstance(expr, str):
+        try:
+            fn.spec = expr.strip()  # type: ignore[attr-defined]
+        except (AttributeError, TypeError):
+            pass
+    return fn
+
+
+def _parse_strategy_impl(expr: str | Callable | dict) -> Predicate:
+    """Parse a strategy expression into ``(closes, i, highs=, lows=) -> bool``.
+
     Close-only names (``dip_24b_lt1pc``, ``sma_abv_50``, …) still work when
     called as ``pred(closes)`` or ``pred(closes, i)``. Structure and
     WaveTrend names need ``highs``/``lows`` from the same bars.

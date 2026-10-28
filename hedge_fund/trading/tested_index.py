@@ -186,17 +186,58 @@ def save_tested_index(
         metrics = _clean_metrics(metrics)
     else:
         metrics = {name: metrics[name] for name in sorted(metrics) if isinstance(name, str) and name}
-    path = tested_index_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
+    payload = tested_index_document(index, metrics)
+    write_tested_document(payload)
+
+
+def tested_index_document(index: dict[str, bool], metrics: dict) -> dict:
+    """JSON-ready index. ``metrics`` is already cleaned and key-sorted."""
+    return {
         "v": 1,
         "paper_only": True,
         "names": {name: 1 if qual else 0 for name, qual in sorted(index.items())},
         "metrics": metrics,
     }
-    tmp = path.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(payload, separators=(",", ":")))
-    os.replace(tmp, path)
+
+
+def write_tested_document(payload: dict) -> None:
+    """Atomic replace of ``discovery_tested.json``. Caller holds the lock.
+
+    The encode is timed as IO. Callers that can drop the lock should
+    encode with ``encode_tested_document`` and ``commit_tested_blob``.
+    """
+    from hedge_fund.trading.handler_timing import io_timer
+
+    path = tested_index_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with io_timer():
+        blob = json.dumps(payload, separators=(",", ":"))
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(blob)
+        os.replace(tmp, path)
+    with _doc_guard:
+        _doc_cache["key"] = tested_index_fingerprint()
+        _doc_cache["data"] = payload
+
+
+def encode_tested_document(payload: dict) -> str:
+    """JSON text for a tested-index payload. Safe to run outside the lock."""
+    from hedge_fund.trading.handler_timing import io_timer
+
+    with io_timer():
+        return json.dumps(payload, separators=(",", ":"))
+
+
+def commit_tested_blob(blob: str, payload: dict) -> None:
+    """Write an already-encoded index. Caller holds the lock."""
+    from hedge_fund.trading.handler_timing import io_timer
+
+    path = tested_index_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with io_timer():
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(blob)
+        os.replace(tmp, path)
     with _doc_guard:
         _doc_cache["key"] = tested_index_fingerprint()
         _doc_cache["data"] = payload
