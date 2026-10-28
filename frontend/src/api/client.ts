@@ -13,6 +13,8 @@ import type {
   ChampionsPayload,
   CandlesPayload,
   ChartSymbol,
+  ChampionTradesPayload,
+  DiscoveryInsights,
 } from "./types";
 
 /** 5m live tape. 288 bars/day. Default 3 calendar days; hard cap 7 days. */
@@ -144,4 +146,16 @@ export function fetchDiscoverySummary(opts?: { compact?: boolean }): Promise<Dis
 
 export function fetchBlockReport(): Promise<BlockReport> {
   return api.discoveryBlocks();
+}
+
+export function fetchDiscoveryInsights(): Promise<DiscoveryInsights> {
+  return get<DiscoveryInsights>("/api/discovery/insights");
+}
+
+export function fetchChampionTrades(opts?: { name?: string; limit?: number }): Promise<ChampionTradesPayload> {
+  const q = new URLSearchParams();
+  if (opts?.name) q.set("name", opts.name);
+  if (opts?.limit != null) q.set("limit", String(opts.limit));
+  const s = q.toString();
+  return get<ChampionTradesPayload>(`/api/champions/trades${s ? `?${s}` : ""}`);
 }
