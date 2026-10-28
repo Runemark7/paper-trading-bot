@@ -73,6 +73,25 @@ class LeaseQueueTests(unittest.TestCase):
         with patch.dict(os.environ, {"DISCOVERY_EVAL_TIMEOUT_SECONDS": "0"}):
             self.assertEqual(per_name_lease_seconds(), 1200)
 
+    def test_a_worker_cannot_hold_more_than_two_leases_per_lane(self):
+        from hedge_fund.trading.leases import claim_discovery_batch
+
+        universe = _names(40)
+        t0 = datetime(2026, 10, 7, 12, 0, tzinfo=timezone.utc)
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.dict(os.environ, self._env(Path(tmp))):
+                with patch("hedge_fund.trading.leases.discovery_universe", return_value=universe):
+                    with patch("hedge_fund.trading.leases.next_refill_batch", return_value=[]):
+                        first = claim_discovery_batch("omarchy-1", 64, parallel=6, now=t0)
+                        second = claim_discovery_batch("omarchy-1", 64, parallel=6, now=t0)
+                        other = claim_discovery_batch("jensa-2", 64, parallel=6, now=t0)
+                        omitted = claim_discovery_batch("zealous-lion", 10, now=t0)
+        self.assertEqual(len(first["names"]), 12)
+        self.assertEqual(second["names"], [])
+        self.assertEqual(len(other["names"]), 12)
+        self.assertFalse(set(first["names"]) & set(other["names"]))
+        self.assertEqual(len(omitted["names"]), 2)
+
     def test_two_workers_never_share_a_name(self):
         from hedge_fund.trading.leases import claim_discovery_batch, lease_snapshot
 
@@ -285,19 +304,19 @@ class LeaseQueueTests(unittest.TestCase):
                     return_value=universe,
                 ):
                     with patch("hedge_fund.trading.leases.next_refill_batch", return_value=[]):
-                        first = claim_discovery_batch("linux-1", 16, parallel=1, now=t0)
+                        first = claim_discovery_batch("linux-1", 16, parallel=8, now=t0)
                         self.assertEqual(len(first["names"]), 16)
                         self.assertEqual(first["ttl_seconds"], 900)
                         blocked = claim_discovery_batch(
                             "jensa-2",
                             16,
-                            parallel=1,
+                            parallel=8,
                             now=t0 + timedelta(seconds=899),
                         )
                         freed = claim_discovery_batch(
                             "jensa-2",
                             16,
-                            parallel=1,
+                            parallel=8,
                             now=t0 + timedelta(seconds=901),
                         )
         self.assertEqual(blocked["names"], [])

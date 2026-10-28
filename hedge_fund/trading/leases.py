@@ -258,6 +258,32 @@ def require_parallel(value: object) -> int | None:
     return value
 
 
+# A worker that omits ``parallel`` is capped as one lane. Two lanes of
+# lease-ahead (the running slot plus one waiting name) is the most a
+# claim may hold for that worker.
+_ABSENT_PARALLEL = 1
+
+
+def worker_lease_count(state: dict, worker_id: str) -> int:
+    leases = state.get("leases") if isinstance(state, dict) else None
+    if not isinstance(leases, dict):
+        return 0
+    held = 0
+    for record in leases.values():
+        if isinstance(record, dict) and record.get("worker_id") == worker_id:
+            held += 1
+    return held
+
+
+def lease_room(state: dict, worker_id: str, parallel: int | None) -> int:
+    """How many more discovery leases this worker may hold.
+
+    ``max(0, 2 * parallel - current)``. Missing ``parallel`` counts as 1.
+    """
+    width = _ABSENT_PARALLEL if parallel is None else int(parallel)
+    return max(0, 2 * width - worker_lease_count(state, worker_id))
+
+
 def _status(value: object, default: str) -> str:
     if not isinstance(value, str):
         return default
@@ -795,6 +821,9 @@ def _claim_unlocked(
 
     requal = lease_requalify_unlocked(worker_id, n, ttl, now)
     rest = n - len(requal)
+    # Discovery leases only. Requalify lives in its own file. A worker
+    # cannot hold more than two names per lane, so lease-ahead stays bounded.
+    rest = min(rest, lease_room(state, worker_id, parallel))
     expires = now + timedelta(seconds=ttl)
     retest: list[str] = []
     schedule = False

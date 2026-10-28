@@ -532,7 +532,8 @@ class ClaimIngestHotPathTests(unittest.TestCase):
                     ingest_ms.append((time.perf_counter() - t0) * 1000)
                 claim_ms = []
                 last = None
-                for _ in range(3):
+                # 2*parallel is the lease cap, so two claims of 2 fill it.
+                for _ in range(2):
                     t0 = time.perf_counter()
                     body = claim_discovery_batch("zealous-lion", 2, parallel=2)
                     claim_ms.append((time.perf_counter() - t0) * 1000)

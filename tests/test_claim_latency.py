@@ -91,10 +91,10 @@ class ClaimLatencyTests(unittest.TestCase):
 
         self.assertGreaterEqual(len(self.tested), 18_000)
         t0 = time.monotonic()
-        first = claim_discovery_batch("latency-a", 16)
+        first = claim_discovery_batch("latency-a", 16, parallel=8)
         cold = time.monotonic() - t0
         t0 = time.monotonic()
-        second = claim_discovery_batch("latency-b", 16)
+        second = claim_discovery_batch("latency-b", 16, parallel=8)
         warm = time.monotonic() - t0
         self.assertEqual(len(first["names"]), 16)
         self.assertEqual(len(second["names"]), 16)
@@ -113,7 +113,7 @@ class ClaimLatencyTests(unittest.TestCase):
             side_effect=lambda cands, _m, n, seed=0: list(cands[:n]),
         ):
             t0 = time.monotonic()
-            out = claim_discovery_batch("latency-steer", 16)
+            out = claim_discovery_batch("latency-steer", 16, parallel=8)
             took = time.monotonic() - t0
         self.assertEqual(len(out["names"]), 16)
         self.assertLess(took, CLAIM_BUDGET_SECONDS, f"steered claim {took:.2f}s")

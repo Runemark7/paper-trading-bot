@@ -35,6 +35,25 @@ def _bar(ts: int, close: float = 1.0) -> list:
 
 
 class QualityTests(unittest.TestCase):
+    def test_health_does_not_query_the_database(self):
+        from hedge_fund.web.server import health_payload
+
+        with patch(
+            "hedge_fund.data.candle_store.health_snapshot",
+            side_effect=AssertionError("probe queried the database"),
+        ), patch(
+            "hedge_fund.data.candle_store._pool",
+            side_effect=AssertionError("probe took a connection"),
+        ):
+            started = time.perf_counter()
+            body = health_payload()
+            elapsed = time.perf_counter() - started
+        self.assertTrue(body["ok"])
+        self.assertIn("ts", body)
+        self.assertIn("candles", body)
+        self.assertLess(elapsed, 0.05)
+        self.assertNotIn("error", body["candles"])
+
     def test_last_closed_drops_the_forming_bar(self):
         # 10:07 UTC sits inside the 10:05 candle. Last closed open is 10:00.
         now = _utc(2024, 6, 1, 10, 7)
@@ -398,15 +417,6 @@ class PostgresCandleTests(unittest.TestCase):
         self.assertEqual(health["symbols"]["BTC/USDT"]["gap_count"], 0)
         self.assertTrue(health["symbols"]["BTC/USDT"]["monotonic"])
         clear_manifest_cache()
-
-    def test_health_stays_ok_when_the_snapshot_fails(self):
-        from hedge_fund.web.server import health_payload
-
-        with patch("hedge_fund.data.candle_store.health_snapshot", side_effect=RuntimeError("db down")):
-            body = health_payload()
-        self.assertTrue(body["ok"])
-        self.assertIsNone(body["candles"]["gap_count"])
-        self.assertIn("db down", body["candles"]["error"])
 
     def test_retry_then_success(self):
         from hedge_fund.data.candle_sync import fetch_with_retry
