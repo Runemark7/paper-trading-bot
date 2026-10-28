@@ -16,6 +16,7 @@ left off so the next live_cycle continues fairly.
 from __future__ import annotations
 
 import json
+import sys
 import os
 import threading
 from datetime import datetime, timezone
@@ -41,10 +42,11 @@ DISCOVERY_LOG = "discovery_log.json"
 DISCOVERY_LOG_DELTA = "discovery_log_delta.jsonl"
 DISCOVERY_IN_FLIGHT = "discovery_in_flight.json"
 DISCOVERY_CURSOR = "discovery_cursor.json"
-# Below this, append still rewrites the JSON array (tests and a small log).
-# Above it, append is one jsonl line. Compact folds the delta back in.
+# Ingest always appends a JSONL line. Compaction rewrites the base array
+# off the request, once the delta is large enough to be worth it.
 LOG_REWRITE_MAX_BYTES = 256 * 1024
-DELTA_COMPACT_LINES = 32
+DELTA_COMPACT_LINES = 256
+DELTA_COMPACT_BYTES = 1024 * 1024
 _log_cache_guard = threading.Lock()
 _log_cache: dict = {"key": None, "rows": None}
 
@@ -86,7 +88,7 @@ def _file_stat(path: Path) -> tuple | None:
         st = path.stat()
     except OSError:
         return None
-    return (str(path), st.st_mtime_ns, st.st_size)
+    return (str(path), st.st_mtime_ns, st.st_size, st.st_ino)
 
 
 def _log_stat_key() -> tuple:
@@ -112,13 +114,19 @@ def _read_json_array(path: Path) -> list[dict]:
 
 
 def _read_delta_newest_first(path: Path) -> list[dict]:
-    """Delta file order is oldest-first. The returned list is newest-first."""
+    """Delta file order is oldest-first. The returned list is newest-first.
+
+    A crash mid-append leaves a partial last line with no newline. That
+    line is ignored. A bad earlier line is skipped; the rest still load.
+    """
     if not path.exists():
         return []
     rows: list[dict] = []
     try:
         with path.open() as fh:
             for line in fh:
+                if not line.endswith("\n"):
+                    break
                 line = line.strip()
                 if not line:
                     continue
@@ -134,12 +142,38 @@ def _read_delta_newest_first(path: Path) -> list[dict]:
     return rows
 
 
+def _row_key(row: dict) -> tuple | None:
+    name = row.get("strategy")
+    tested = row.get("tested_at")
+    if isinstance(name, str) and name and isinstance(tested, str) and tested:
+        return (name, tested)
+    return None
+
+
 def _read_discovery_log() -> list[dict]:
+    """Base array plus delta. Newest first. Same row in both is kept once.
+
+    When a ``(strategy, tested_at)`` row is in both, the base copy wins: a
+    base is only ever written from a merged view (compaction, or a bulk
+    edit such as requalify), so it is the newer version of that row. A
+    crash after the base install and before the delta drop then cannot
+    revert a bulk edit. Rows without a ``tested_at`` are never collapsed.
+    """
     base = _read_json_array(discovery_log_path())
     extra = _read_delta_newest_first(discovery_log_delta_path())
     if not extra:
         return base
-    return (extra + base)[:DISCOVERY_LOG_CAP]
+    in_base = {key for key in map(_row_key, base) if key is not None}
+    seen: set[tuple] = set()
+    fresh: list[dict] = []
+    for row in extra:
+        key = _row_key(row)
+        if key is not None:
+            if key in in_base or key in seen:
+                continue
+            seen.add(key)
+        fresh.append(row)
+    return (fresh + base)[:DISCOVERY_LOG_CAP]
 
 
 def _remember_log(rows: list[dict]) -> None:
@@ -239,19 +273,33 @@ def _write_log_blob(path: Path, blob: str) -> None:
         os.replace(tmp, path)
 
 
-def _append_delta(records: list[dict]) -> int:
-    """Append oldest-first so the last line is the newest record. Returns the line count."""
+def _append_delta(records: list[dict]) -> None:
+    """Append oldest-first so the last line is the newest record.
+
+    Does not re-read the file. A crash mid-line leaves no trailing newline
+    and readers ignore that partial line.
+    """
     path = discovery_log_delta_path()
     path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        size = path.stat().st_size
+    except OSError:
+        size = 0
+    partial = False
+    if size:
+        try:
+            with path.open("rb") as raw:
+                raw.seek(size - 1)
+                partial = raw.read(1) != b"\n"
+        except OSError:
+            partial = False
     with path.open("a") as fh:
+        if partial:
+            # A crash left a partial line. Close it so the next row parses.
+            fh.write("\n")
         for row in reversed(records):
             fh.write(json.dumps(row, separators=(",", ":")) + "\n")
         fh.flush()
-    try:
-        with path.open() as fh:
-            return sum(1 for line in fh if line.strip())
-    except OSError:
-        return len(records)
 
 
 def _clear_delta() -> None:
@@ -262,114 +310,34 @@ def _clear_delta() -> None:
         pass
 
 
-def _commit_append_locked(
-    eval_records: list[dict],
-    *,
-    cap: int,
-    index_blob: str | None = None,
-    index_payload: dict | None = None,
-    log_blob: str | None = None,
-    prepared: dict | None = None,
-) -> list[dict]:
-    """Write one append. Caller holds ``paper_state_lock``.
+def _append_batch_locked(eval_records: list[dict], cap: int) -> list[dict]:
+    """Append log lines and tested-index journal lines. Caller holds the lock.
 
-    When ``prepared`` is set, the JSON was encoded outside the lock and
-    the fingerprints must still match. Otherwise this reads and encodes
-    under the lock (the nested-lock path).
+    Neither base file is rewritten. The in-memory log is the previous
+    cached rows with these records in front.
     """
     from hedge_fund.trading.tested_index import (
-        commit_tested_blob,
+        _metric_from_row,
+        append_tested_overlay,
         mark_index_covers_log,
-        save_tested_index,
     )
 
-    path = discovery_log_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if prepared is None:
-        index, metrics = load_index_and_metrics()
-        flags_changed = merge_tested_rows(index, eval_records)
-        metrics_changed = merge_tested_metrics(metrics, eval_records)
-        if flags_changed or metrics_changed:
-            save_tested_index(index, metrics, cleaned=True)
-        base_size = path.stat().st_size if path.exists() else 0
-        delta = discovery_log_delta_path()
-        delta_exists = delta.exists() and delta.stat().st_size > 0
-        prior = load_discovery_log()
-        log = (list(eval_records) + prior)[:cap]
-        if base_size < LOG_REWRITE_MAX_BYTES and not delta_exists:
-            _write_log_array(path, log)
-            _clear_delta()
-        else:
-            n_lines = _append_delta(list(eval_records))
-            if n_lines >= DELTA_COMPACT_LINES:
-                # Drop the delta before the array replace so a crash cannot
-                # load those rows twice. A crash in between loses only the
-                # rows still in memory; the index already has the names.
-                _clear_delta()
-                _write_log_array(path, log)
-    else:
-        if index_blob is not None and index_payload is not None:
-            commit_tested_blob(index_blob, index_payload)
-        log = prepared["log"]
-        if prepared["rewrite"]:
-            _write_log_blob(path, log_blob or "")
-            _clear_delta()
-        else:
-            n_lines = _append_delta(list(eval_records))
-            if n_lines >= DELTA_COMPACT_LINES:
-                _clear_delta()
-                if log_blob is None:
-                    _write_log_array(path, log)
-                else:
-                    _write_log_blob(path, log_blob)
+    for row in eval_records:
+        if not isinstance(row, dict):
+            continue
+        name = row.get("strategy")
+        if not isinstance(name, str) or not name:
+            continue
+        append_tested_overlay(name, bool(row.get("qualified")), _metric_from_row(row))
+    # Snapshot before the delta write. A read after the write misses the
+    # cache and would prepend these rows onto themselves.
+    prior = load_discovery_log()
+    _append_delta(list(eval_records))
+    log = (list(eval_records) + prior)[:cap]
     _remember_log(log)
     mark_index_covers_log()
+    schedule_state_compact()
     return log
-
-
-def _prepare_append(eval_records: list[dict], cap: int) -> dict:
-    """Snapshot the append under the lock. Encode happens after release."""
-    from hedge_fund.trading.tested_index import tested_index_document, tested_index_fingerprint
-
-    index, metrics = load_index_and_metrics()
-    index = dict(index)
-    metrics = dict(metrics)
-    flags_changed = merge_tested_rows(index, eval_records)
-    metrics_changed = merge_tested_metrics(metrics, eval_records)
-    path = discovery_log_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    base_size = path.stat().st_size if path.exists() else 0
-    delta = discovery_log_delta_path()
-    delta_exists = delta.exists() and delta.stat().st_size > 0
-    prior = load_discovery_log()
-    rewrite = base_size < LOG_REWRITE_MAX_BYTES and not delta_exists
-    log = (list(eval_records) + prior)[:cap]
-    existing_lines = 0
-    if not rewrite and delta_exists:
-        try:
-            with delta.open() as fh:
-                existing_lines = sum(1 for line in fh if line.strip())
-        except OSError:
-            existing_lines = 0
-    will_compact = (not rewrite) and (
-        existing_lines + len(eval_records) >= DELTA_COMPACT_LINES
-    )
-    payload = None
-    if flags_changed or metrics_changed:
-        cleaned = {
-            name: metrics[name]
-            for name in sorted(metrics)
-            if isinstance(name, str) and name
-        }
-        payload = tested_index_document(index, cleaned)
-    return {
-        "index_fp": tested_index_fingerprint(),
-        "log_fp": discovery_log_fingerprint(),
-        "rewrite": rewrite,
-        "will_compact": will_compact,
-        "log": log,
-        "payload": payload,
-    }
 
 
 def append_discovery_evaluations(
@@ -378,92 +346,36 @@ def append_discovery_evaluations(
     cap: int = DISCOVERY_LOG_CAP,
     after_commit=None,
     still_valid=None,
-) -> list[dict]:
-    """Prepend records (newest-first) and cap the display log.
+) -> list[dict] | None:
+    """Append records (newest-first). Does not rewrite the base log or index.
 
-    The tested-name index is updated from these records only. A name that
-    falls off the display cap stays in the index. Full records for this
-    batch are appended to the results log after the lock is released.
+    The tested-name journal gets one line per name. The display delta gets
+    one JSONL line per row. Readers merge base + appends. A partial last
+    line is ignored. ``still_valid`` is checked under the lock before the
+    write so a retried ingest does not append a second row. ``after_commit``
+    runs in that same lock, before it is released.
 
-    A small display file is rewritten in place. Once it is past
-    ``LOG_REWRITE_MAX_BYTES``, further rows are one jsonl line each and
-    folded back into the array every ``DELTA_COMPACT_LINES`` appends.
-
-    When this thread does not already hold the paper-state lock, the
-    JSON encode runs outside the lock. The lock is taken again only to
-    write the bytes, and only if neither file changed. ``after_commit``
-    runs inside that write, before the lock is released, so a retest can
-    leave the pending set in the same critical section as the index write.
-
-    ``still_valid`` (optional) is re-checked under the lock before the
-    snapshot and before a locked fallback write. When it returns False the
-    rows are not appended (a concurrent ingest already wrote this name),
-    and ``None`` is returned. Every append changes the display-log
-    fingerprint, so a duplicate landing between the snapshot and the
-    write forces a retry that re-runs the check.
+    Full records for this batch are appended to the results log after the
+    lock is released. Compaction of a large delta or journal runs on a
+    daemon thread, not on this request.
     """
     if not eval_records:
         return load_discovery_log()
-    from hedge_fund.trading.store import paper_lock_held
-    from hedge_fund.trading.tested_index import tested_index_fingerprint
 
-    if paper_lock_held():
-        with paper_state_lock("discovery"):
-            if still_valid is not None and not still_valid():
-                return None
-            snap = _cache_snapshot()
-            saved = _commit_append_locked(eval_records, cap=cap)
-            if after_commit is not None:
-                after_commit()
-            _note_written(eval_records, snap)
-    else:
-        saved = None
-        for _attempt in range(8):
-            with paper_state_lock("discovery"):
-                if still_valid is not None and not still_valid():
-                    return None
-                prepared = _prepare_append(eval_records, cap)
-            from hedge_fund.trading.handler_timing import io_timer
+    def _write() -> list[dict] | None:
+        if still_valid is not None and not still_valid():
+            return None
+        snap = _cache_snapshot()
+        saved = _append_batch_locked(eval_records, cap)
+        if after_commit is not None:
+            after_commit()
+        _note_written(eval_records, snap)
+        return saved
 
-            with io_timer():
-                index_blob = (
-                    json.dumps(prepared["payload"], separators=(",", ":"))
-                    if prepared["payload"] is not None
-                    else None
-                )
-                log_blob = (
-                    json.dumps(prepared["log"], separators=(",", ":"))
-                    if prepared["rewrite"] or prepared["will_compact"]
-                    else None
-                )
-            with paper_state_lock("discovery"):
-                if (
-                    tested_index_fingerprint() != prepared["index_fp"]
-                    or discovery_log_fingerprint() != prepared["log_fp"]
-                ):
-                    continue
-                snap = _cache_snapshot()
-                saved = _commit_append_locked(
-                    eval_records,
-                    cap=cap,
-                    index_blob=index_blob,
-                    index_payload=prepared["payload"],
-                    log_blob=log_blob,
-                    prepared=prepared,
-                )
-                if after_commit is not None:
-                    after_commit()
-                _note_written(eval_records, snap)
-                break
-        if saved is None:
-            with paper_state_lock("discovery"):
-                if still_valid is not None and not still_valid():
-                    return None
-                snap = _cache_snapshot()
-                saved = _commit_append_locked(eval_records, cap=cap)
-                if after_commit is not None:
-                    after_commit()
-                _note_written(eval_records, snap)
+    with paper_state_lock("discovery"):
+        saved = _write()
+    if saved is None:
+        return None
     from hedge_fund.trading.discovery_results import sync_discovery_results
 
     fresh = {
@@ -486,6 +398,117 @@ def append_discovery_evaluation(
     return append_discovery_evaluations(
         [record], cap=cap, after_commit=after_commit, still_valid=still_valid
     )
+
+
+_compact_guard = threading.Lock()
+_compact_scheduled = False
+
+
+def _log_compact_due() -> bool:
+    try:
+        return discovery_log_delta_path().stat().st_size >= LOG_REWRITE_MAX_BYTES
+    except OSError:
+        return False
+
+
+def _index_compact_due() -> bool:
+    from hedge_fund.trading.tested_index import tested_journal_path
+
+    try:
+        return tested_journal_path().stat().st_size >= LOG_REWRITE_MAX_BYTES
+    except OSError:
+        return False
+
+
+def schedule_state_compact() -> None:
+    """Fold a large delta or journal into its base file off the request."""
+    global _compact_scheduled
+    if not _log_compact_due() and not _index_compact_due():
+        return
+    with _compact_guard:
+        if _compact_scheduled:
+            return
+        _compact_scheduled = True
+    threading.Thread(target=_compact_worker, name="discovery-compact", daemon=True).start()
+
+
+def _compact_worker() -> None:
+    global _compact_scheduled
+    try:
+        compact_discovery_state()
+    except Exception as exc:  # noqa: BLE001 - a failed fold retries on the next append
+        print(f"discovery compact failed: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
+    finally:
+        with _compact_guard:
+            _compact_scheduled = False
+    # No immediate retry: if an append raced the encode, the next append
+    # schedules another pass. Retrying here would spin re-reading the files.
+
+
+def compact_discovery_state() -> None:
+    """Rewrite base files from base+appends, then drop the journals.
+
+    Holds the lock only to snapshot and to install. Encoding happens
+    outside it. If an append lands in between, the install is skipped.
+    A crash after the base rename and before the journal unlink is safe:
+    the log reader drops a delta row already in the base, and the tested
+    journal carries the base's ``jgen`` so a stale journal is ignored.
+    """
+    _compact_log()
+    _compact_tested_index()
+
+
+def _compact_log() -> None:
+    if not _log_compact_due():
+        return
+    with paper_state_lock("discovery"):
+        delta_fp = _file_stat(discovery_log_delta_path())
+        base_fp = _file_stat(discovery_log_path())
+        rows = _read_discovery_log()
+    blob = json.dumps(rows, separators=(",", ":"))
+    with paper_state_lock("discovery"):
+        if (
+            _file_stat(discovery_log_delta_path()) != delta_fp
+            or _file_stat(discovery_log_path()) != base_fp
+        ):
+            return
+        _write_log_blob(discovery_log_path(), blob)
+        _clear_delta()
+        _remember_log(rows)
+
+
+def _compact_tested_index() -> None:
+    if not _index_compact_due():
+        return
+    from hedge_fund.trading.tested_index import (
+        _derived_now,
+        tested_index_document,
+        tested_index_fingerprint,
+        tested_journal_path,
+        write_tested_document,
+    )
+
+    with paper_state_lock("discovery"):
+        # Includes the base generation and journal header, not just stat.
+        fp = tested_index_fingerprint()
+        derived = _derived_now()
+        flags = dict(derived["flags"])
+        metrics = dict(derived["metrics"])
+    payload = tested_index_document(
+        flags,
+        {name: metrics[name] for name in sorted(metrics)},
+    )
+    with paper_state_lock("discovery"):
+        if tested_index_fingerprint() != fp:
+            return
+        write_tested_document(payload)
+        try:
+            tested_journal_path().unlink()
+        except OSError:
+            pass
+        from hedge_fund.trading.tested_index import invalidate_tested_derived
+
+        invalidate_tested_derived()
 
 
 def save_discovery_log(log: list[dict]) -> None:

@@ -224,7 +224,7 @@ def _discovery_block(root: Path) -> dict:
         published = peek_result_counts()
     except (OSError, ValueError):
         published = None
-    if path.exists():
+    if path.exists() or (root / "discovery_log_delta.jsonl").exists():
         try:
             log = load_discovery_log()
             count = len(log)
