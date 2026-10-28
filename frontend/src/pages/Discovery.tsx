@@ -1,3 +1,4 @@
+import { pollInterval, SUMMARY_POLL_MS } from "../api/poll";
 import { useQuery } from "@tanstack/react-query";
 import { fetchChampions, fetchDiscoveryInsights, fetchDiscoverySummary } from "../api/client";
 import type { DiscoverySummary } from "../api/types";
@@ -134,9 +135,10 @@ export default function Discovery() {
   const summary = useQuery<DiscoverySummary, Error>({
     queryKey: ["discovery-summary", "compact"],
     queryFn: () => fetchDiscoverySummary({ compact: true }),
-    refetchInterval: 15_000,
+    refetchInterval: pollInterval(SUMMARY_POLL_MS),
+    refetchIntervalInBackground: false,
   });
-  const insights = useQuery({ queryKey: ["discovery-insights"], queryFn: fetchDiscoveryInsights, refetchInterval: 60_000 });
+  const insights = useQuery({ queryKey: ["discovery-insights"], queryFn: fetchDiscoveryInsights, refetchInterval: pollInterval(60_000), refetchIntervalInBackground: false });
   const champs = useQuery({ queryKey: ["champions"], queryFn: fetchChampions });
 
   const counts = summary.data?.counts;

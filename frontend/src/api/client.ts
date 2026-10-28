@@ -30,8 +30,23 @@ export function isTransientHttpError(error: unknown): boolean {
   return /-> 502\b|-> 503\b|-> 504\b/.test(msg);
 }
 
+/** 202 from a read endpoint: the server is building the payload in the background. */
+export class ComputingError extends Error {
+  constructor(path: string) {
+    super(`${path} is still being computed`);
+    this.name = "ComputingError";
+  }
+}
+
+export function isComputing(error: unknown): error is ComputingError {
+  return error instanceof ComputingError;
+}
+
 async function getOnce<T>(path: string): Promise<T> {
   const res = await fetch(path);
+  if (res.status === 202) {
+    throw new ComputingError(path);
+  }
   if (!res.ok) {
     let detail = `${path} -> ${res.status}`;
     try {
