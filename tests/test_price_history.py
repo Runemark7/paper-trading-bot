@@ -541,7 +541,7 @@ class PersistedTapeTests(unittest.TestCase):
             self.assertTrue(_tape_final(head[0], head[1], pin))
             _append_bar(root, _ms(2026, 10, 8, 0, 10))
             with patch(
-                "hedge_fund.trading.price_history._build_pin",
+                "hedge_fund.trading.price_history._launch_pin_build",
                 side_effect=AssertionError("rebuilt a final day"),
             ), patch("hedge_fund.trading.price_history.time.time", return_value=(pin + 3700_000) / 1000):
                 _build_pass(root, stable)
@@ -705,3 +705,29 @@ class PersistedTapeTests(unittest.TestCase):
                     farm_enabled=True,
                 )
         self.assertEqual(sleeps, [17])
+
+
+class SubprocessTapeBuildTests(unittest.TestCase):
+    def tearDown(self):
+        clear_manifest_cache()
+
+    def test_parent_does_not_load_the_tape_arrays(self):
+        from hedge_fund.trading import price_history as history
+
+        calls = {"n": 0}
+        real = history._source_array
+
+        def wrapped(*args, **kwargs):
+            calls["n"] += 1
+            return real(*args, **kwargs)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "state"
+            _write_span(root, _ms(2026, 10, 7, 22, 0), _ms(2026, 10, 8, 1, 0))
+            clear_manifest_cache()
+            with patch.object(history, "_source_array", wrapped):
+                history._build_pass(root, {})
+            self.assertEqual(calls["n"], 0)
+            head = history._read_manifest_file(root, _ms(2026, 10, 8))
+            self.assertIsNotNone(head)
+            self.assertEqual(head[0]["data_end"], _ms(2026, 10, 8))

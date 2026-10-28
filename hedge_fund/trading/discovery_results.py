@@ -358,6 +358,10 @@ def _regimes_tested(row: dict) -> int | None:
     windows = row.get("windows")
     if isinstance(windows, list):
         return len(windows)
+    # A row kept in memory without its window payload remembers the count.
+    kept = row.get("_windows_len")
+    if isinstance(kept, int) and not isinstance(kept, bool):
+        return kept
     return None
 
 
@@ -497,8 +501,41 @@ def _stub(name: str, qualified: bool) -> dict:
     }
 
 
+def _windows_sig(windows: object) -> str | None:
+    if windows is None:
+        return None
+    blob = json.dumps(windows, sort_keys=True, separators=(",", ":"), allow_nan=True)
+    return hashlib.sha1(blob.encode()).hexdigest()
+
+
+def _core_windows(row: dict) -> str | None:
+    """Window payload identity. A slim in-memory row carries only its digest."""
+    if row.get("_disk_windows"):
+        return row.get("_windows_sig")
+    return _windows_sig(row.get("windows"))
+
+
 def _same_core(left: dict, right: dict) -> bool:
-    return all(left.get(key) == right.get(key) for key in _CORE)
+    for key in _CORE:
+        if key == "windows":
+            if _core_windows(left) != _core_windows(right):
+                return False
+        elif left.get(key) != right.get(key):
+            return False
+    return True
+
+
+def _full_row(row: dict) -> dict:
+    """Public fields of ``row``, with the window payload read back from disk."""
+    if row.get("_disk_windows"):
+        try:
+            with discovery_results_path().open("rb") as fh:
+                parsed = _read_span(fh, int(row.get("_offset") or 0), int(row.get("_length") or 0))
+        except OSError:
+            parsed = None
+        if isinstance(parsed, dict) and parsed.get("strategy") == row.get("strategy"):
+            return parsed
+    return {key: value for key, value in row.items() if not str(key).startswith("_")}
 
 
 def _gate_for(row: dict, name: str, fresh: set[str], prev: dict | None) -> str:
@@ -549,7 +586,7 @@ def _scan_jsonl(start: int = 0) -> tuple[dict[str, dict], int]:
                     continue
                 row["_offset"] = offset
                 row["_length"] = len(line)
-                found[name] = row
+                found[name] = _retain_row(row)
     except OSError:
         return found, end
     return found, end
@@ -688,7 +725,7 @@ def _append_records(pending: list[dict], rows: dict[str, dict]) -> None:
                 stored["_length"] = len(payload)
                 name = stored.get("strategy")
                 if isinstance(name, str) and name:
-                    rows[name] = stored
+                    rows[name] = _retain_row(stored)
                     _publish_seed(name, stored)
             fh.flush()
             if rows is _map:
@@ -738,7 +775,8 @@ def _apply_rows(
                 pending.append(_stub(name, bool(qual)))
                 continue
             if bool(prev.get("qualified")) != bool(qual):
-                updated = {key: value for key, value in prev.items() if not key.startswith("_")}
+                # Keep the window payload: the slim map row does not hold it.
+                updated = _full_row(prev)
                 updated["qualified"] = bool(qual)
                 pending.append(updated)
     if not pending:
@@ -889,6 +927,9 @@ def backfill_discovery_results() -> None:
             deltas = _apply_rows(current, log_rows, index=index)
             if deltas or not _index_current(current):
                 _install_full_index(current)
+    from hedge_fund.trading.mem import release_heap
+
+    release_heap()
 
 
 def start_results_backfill() -> None:
@@ -1219,11 +1260,50 @@ def compact_results_index(*, force: bool = False) -> bool:
             return True
 
 
+def _retain_row(row: dict) -> dict:
+    """Drop window payloads from the in-memory map.
+
+    The jsonl line still has them. Dedup, counts, and the index use the
+    slim fields. ``records_by_name`` reads the line back when a caller
+    needs the windows. A process that kept every window list grew with
+    each ingest and never gave the pages back.
+    """
+    if "windows" not in row:
+        return row
+    windows = row.get("windows")
+    kept = {key: value for key, value in row.items() if key != "windows"}
+    kept["_disk_windows"] = True
+    # Digest and count stand in for the payload: ``_same_core`` must still
+    # see an unchanged eval as unchanged (a backfill must not rewrite every
+    # line), and the seed view still needs the window count.
+    kept["_windows_sig"] = _windows_sig(windows)
+    if isinstance(windows, list):
+        kept["_windows_len"] = len(windows)
+    return kept
+
+
+def _public_row(row: dict, fh) -> dict:
+    if row.get("_disk_windows") and fh is not None:
+        try:
+            parsed = _read_span(fh, int(row.get("_offset") or 0), int(row.get("_length") or 0))
+        except OSError:
+            parsed = None
+        if isinstance(parsed, dict) and parsed.get("strategy") == row.get("strategy"):
+            return parsed
+    return {key: value for key, value in row.items() if not str(key).startswith("_")}
+
+
 def records_by_name() -> dict[str, dict]:
     """Write-path snapshot. Not for request handlers."""
     with _lock, _ResultsLock(exclusive=False):
         current = _load_map()
-        return {
-            name: {key: value for key, value in row.items() if not str(key).startswith("_")}
-            for name, row in current.items()
-        }
+        path = discovery_results_path()
+        try:
+            fh = path.open("rb")
+        except OSError:
+            fh = None
+        try:
+            return {name: _public_row(row, fh) for name, row in current.items()}
+        finally:
+            if fh is not None:
+                fh.close()

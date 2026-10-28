@@ -463,4 +463,7 @@ def _fetch_cached(symbol: str, timeframe: str, limit: int, source=None) -> dict:
         raise CandleFetchError(str(exc), status=_status_for(exc)) from exc
     payload = _bars_to_payload(symbol, timeframe, bars)
     _CACHE[key] = {**payload, "_ts": now}
+    if len(_CACHE) > 32:
+        oldest = min(_CACHE, key=lambda item: _CACHE[item].get("_ts") or 0)
+        _CACHE.pop(oldest, None)
     return payload

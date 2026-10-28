@@ -101,15 +101,20 @@ class StaleCache:
         with self._guard:
             self._slots.clear()
 
-    def peek(self, key: str) -> object | None:
+    def peek(self, key: str, *, duplicate: bool = True) -> object | None:
         """Last payload, or None when this key has never been stored.
 
-        Does not build and does not wait on a refresh.
+        Does not build and does not wait on a refresh. ``duplicate=False``
+        returns the stored object. Callers must not mutate nested lists;
+        a discovery poll uses that so it does not deepcopy the whole book
+        on every request.
         """
         with self._guard:
             slot = self._slots.get(key)
             if slot is None or not slot.has:
                 return None
+            if not duplicate:
+                return slot.value
             return copy.deepcopy(slot.value)
 
     def put(self, key: str, value: object) -> None:

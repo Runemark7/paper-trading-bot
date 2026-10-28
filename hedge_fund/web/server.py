@@ -341,6 +341,9 @@ def start_read_refresh(interval: float = READ_REBUILD_SECONDS) -> None:
                 refresh_lift_cache()
             except Exception as exc:
                 print(f"[discovery-lift] rebuild failed: {exc}", file=sys.stderr, flush=True)
+            from hedge_fund.trading.mem import release_heap
+
+            release_heap()
             time.sleep(interval)
 
     threading.Thread(target=_loop, name="status-summary-refresh", daemon=True).start()

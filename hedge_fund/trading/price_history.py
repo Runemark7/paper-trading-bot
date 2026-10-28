@@ -22,6 +22,8 @@ import hashlib
 import io
 import json
 import os
+import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -836,6 +838,49 @@ def served_tape_blob(state_dir: Path | None = None) -> bytes:
     return blob
 
 
+def _launch_pin_build(
+    root: Path,
+    pin: int,
+    *,
+    active_pin: int | None,
+    raw_end: int | None,
+) -> dict | None:
+    """Build ``pin`` in a short-lived process. This process reads the manifest.
+
+    ``PAPERBOT_TAPE_INPROCESS=1`` keeps the old in-process path for a unit
+    test that must patch ``_build_pin``. Production leaves it unset.
+    """
+    if os.environ.get("PAPERBOT_TAPE_INPROCESS") == "1":
+        return _build_pin(root, int(pin), active_pin=active_pin, raw_end=raw_end)
+    cmd = [
+        sys.executable,
+        "-m",
+        "hedge_fund.trading.tape_build",
+        "--state",
+        str(root),
+        "--pin",
+        str(int(pin)),
+        "--active-pin",
+        str(int(active_pin) if active_pin is not None else int(pin)),
+        "--raw-end",
+        "-1" if raw_end is None else str(int(raw_end)),
+    ]
+    env = os.environ.copy()
+    env["PAPER_STATE"] = str(root)
+    pkg_root = str(Path(__file__).resolve().parents[2])
+    prev = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = pkg_root if not prev else pkg_root + os.pathsep + prev
+    proc = subprocess.run(cmd, env=env, check=False, timeout=20 * 60)
+    if proc.returncode != 0:
+        raise RuntimeError(f"tape build exited {proc.returncode}")
+    head = _read_manifest_file(root, int(pin))
+    if head is None:
+        return None
+    manifest, _meta = head
+    _install_built(root, int(pin), manifest, active_pin)
+    return manifest
+
+
 def _build_pass(root: Path, stable: dict) -> float:
     """One builder pass. Returns seconds to sleep before the next pass."""
     now_ms = int(time.time() * 1000)
@@ -847,9 +892,10 @@ def _build_pass(root: Path, stable: dict) -> float:
             _install_built(root, active, head[0], active)
         elif not final:
             # Rebuild when the source moved since the last try. A tape whose
-            # newest bar did not move is not read again.
+            # newest bar did not move is not read again. The arrays live in
+            # a child process; this process only reads the manifest back.
             if head is None or stable.get(active) != raw_end:
-                _build_pin(root, active, active_pin=active, raw_end=raw_end)
+                _launch_pin_build(root, active, active_pin=active, raw_end=raw_end)
                 stable[active] = raw_end
     nxt = floor_utc_day(now_ms) + DAY_MS
     if (
@@ -860,7 +906,7 @@ def _build_pass(root: Path, stable: dict) -> float:
     ):
         # Warm the next day. It is not served until it is final; after
         # midnight the pass above rebuilds it once the 00:00 bar lands.
-        _build_pin(root, nxt, active_pin=active, raw_end=raw_end)
+        _launch_pin_build(root, nxt, active_pin=active, raw_end=raw_end)
     wait = 60.0
     if active is not None:
         until_lead = (nxt - PREBUILD_LEAD_MS - now_ms) / 1000.0

@@ -509,6 +509,10 @@ def read_paper_account(path: str | Path) -> dict | None:
     token_after = _db_cache_token(path) or token
     with _ACCOUNT_READ_LOCK:
         _ACCOUNT_READ_CACHE[key] = (token_after, rec)
+        # One entry per account file. A long-lived web process must not
+        # keep a snapshot for every DB it has ever opened.
+        while len(_ACCOUNT_READ_CACHE) > 512:
+            _ACCOUNT_READ_CACHE.pop(next(iter(_ACCOUNT_READ_CACHE)))
     return _share_account(rec)
 
 
