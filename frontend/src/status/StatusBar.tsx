@@ -38,7 +38,7 @@ export default function StatusBar() {
           <StatusDot tone={health.data?.ok ? "pos" : health.isError ? "neg" : "idle"} />
           {health.data?.ok ? "API up" : health.isError ? "API down" : "API …"}
         </span>
-        <Link to="/champions" className="inline-flex items-center gap-1.5 min-w-0 hover:text-white">
+        <Link to="/champions" title="Running now: the live paper book" className="inline-flex items-center gap-1.5 min-w-0 hover:text-white">
           <StatusDot tone={cycleTone} />
           <span className="min-w-0">
             <span className="text-white/80">Live book</span>
@@ -54,7 +54,7 @@ export default function StatusBar() {
             )}
           </span>
         </Link>
-        <Link to="/discovery" className="inline-flex items-center gap-1.5 min-w-0 hover:text-white">
+        <Link to="/discovery" title="In progress: the discovery pipeline" className="inline-flex items-center gap-1.5 min-w-0 hover:text-white">
           <StatusDot tone={discTone} />
           <span className="min-w-0">
             <span className="text-white/80">Discovery</span>

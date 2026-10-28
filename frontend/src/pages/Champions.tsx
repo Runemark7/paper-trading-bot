@@ -2,7 +2,9 @@ import { useMemo, useState } from "react";
 import type { ForwardCandidate } from "../api/types";
 import { Link, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { fetchChampions, fetchGraduated, api } from "../api/client";
+import { fetchChampions, fetchChampionTrades, fetchGraduated, api } from "../api/client";
+import { Disclosure, EmptyState, ErrorNote, PageHeader, SkeletonRows } from "../components/kit";
+import { BookKpis, ChampionCard, CombinedTradeLog, summaryFor } from "../status/ChampionBook";
 import { pollInterval, STATUS_POLL_MS } from "../api/poll";
 import { DiscoveryTeaser } from "../status/DiscoveryBuckets";
 import {
@@ -57,6 +59,11 @@ export default function Champions() {
   const qChamps = useQuery({ queryKey: ["champions"], queryFn: fetchChampions, refetchInterval: 30_000 });
   const qLive = useQuery({ queryKey: ["live"], queryFn: api.live, refetchInterval: 30_000 });
   const qGrad = useQuery({ queryKey: ["graduated"], queryFn: fetchGraduated, refetchInterval: 30_000 });
+  const qTrades = useQuery({
+    queryKey: ["champion-trades", "all"],
+    queryFn: () => fetchChampionTrades({ limit: 200 }),
+    refetchInterval: pollInterval(60_000),
+  });
   const status = useQuery({
     queryKey: ["status"],
     queryFn: api.status,
@@ -127,13 +134,49 @@ export default function Champions() {
 
   return (
     <div className="space-y-6 min-w-0">
-      <p className="text-sm text-white/55">
-        Names on the paper book are isolated €10k accounts. Filter and sort the list
-        like Discovery, then tap a row for that account&apos;s lots, closed trades, and
-        BTC/ETH tape. Graduation below and Discovery (own page) are last-known
-        pipeline results — not a live job unless the sidecar stamp says so.
-      </p>
+      <PageHeader
+        kicker="Part 2 · Champions"
+        title="Champions trading on live prices"
+        accent="emerald"
+        aside={run ? `last cycle ${fmtWhen(run.cycle.last_cycle_at)}` : null}
+      >
+        Strategies that passed every Discovery check and were admitted by the owner (up to {forwardCap}). Each one runs
+        its own €10k paper account on live BTC prices — no real money. A champion succeeds if it is profitable after fees.
+      </PageHeader>
 
+      {qChamps.error && !champs.length ? <ErrorNote what="champions" error={qChamps.error} /> : null}
+
+      <BookKpis champs={champs} cap={forwardCap} trades={qTrades.data} loading={qChamps.isLoading} />
+
+      {qChamps.isLoading ? (
+        <SkeletonRows rows={3} />
+      ) : champs.length ? (
+        <div className="space-y-4">
+          {champs.map((c, i) => (
+            <ChampionCard
+              key={c.name}
+              index={i}
+              champ={c}
+              summary={summaryFor(qTrades.data, c.name)}
+              events={qTrades.data?.events ?? []}
+              evalLimit={evalLimit}
+              tradesLoading={qTrades.isLoading}
+            />
+          ))}
+        </div>
+      ) : !qChamps.error ? (
+        <EmptyState title="No champions admitted yet" icon="♛">
+          The book runs the <code>{run?.strategy.fallback ?? "sma_stack"}</code> baseline until the owner admits a strategy
+          that passed Discovery. Proposed names are listed below.
+        </EmptyState>
+      ) : null}
+
+      <CombinedTradeLog champs={champs} trades={qTrades.data} loading={qTrades.isLoading} error={qTrades.error} />
+
+      <Disclosure
+        title="Compare & filter champions"
+        summary="Sortable table with BTC/ETH lot split, closed trades and wins"
+      >
       <Card
         title={`On the paper book · ${openLots} open lots`}
         aside={run ? `${champs.length} champions · last cycle ${fmtWhen(run.cycle.last_cycle_at)}` : `${champs.length} champions`}
@@ -413,9 +456,10 @@ export default function Champions() {
           </div>
         )}
       </Card>
+      </Disclosure>
 
       <Card
-        title="Forward candidates"
+        title="Proposed — awaiting owner approval"
         aside={`${forward?.active ?? champs.length} active · ${forward?.open_slots ?? "…"} open of ${forwardCap}`}
       >
         <div className="text-sm text-white/60 mb-3">

@@ -88,7 +88,7 @@ class DiscoveryPageContractTests(unittest.TestCase):
         self.assertIn('to: "/discovery"', APP)
         self.assertIn('label: "Discovery"', APP)
         self.assertIn('path="/discovery"', APP)
-        self.assertIn("grid-cols-6", APP)
+        self.assertIn("grid-cols-4", APP)
         self.assertIn("import Discovery from", APP)
         self.assertIn("<DiscoveryBuckets", DISCOVERY_PAGE)
         self.assertIn("<FarmControl", DISCOVERY_PAGE)

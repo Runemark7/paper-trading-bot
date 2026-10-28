@@ -1,6 +1,10 @@
 import { Link, useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { api, fetchChampions } from "../api/client";
+import { api, fetchChampionTrades, fetchChampions } from "../api/client";
+import { EXIT_RULES, SIZING_RULES } from "../lib/rules";
+import { Disclosure, EmptyState, RuleList, SkeletonRows, toneOf, usd } from "../components/kit";
+import TradeLog from "../components/TradeLog";
+import { forwardPnl, summaryFor } from "../status/ChampionBook";
 import type { Champion, TradeRow } from "../api/types";
 import ChampionTape from "../chart/ChampionTape";
 import { closedTradesForChampion } from "../chart/numberTrades";
@@ -121,6 +125,13 @@ export default function ChampionDetail() {
     enabled: Boolean(name),
   });
 
+  const qLog = useQuery({
+    queryKey: ["champion-trades", "one", name],
+    queryFn: () => fetchChampionTrades({ name, limit: 500 }),
+    refetchInterval: 60_000,
+    enabled: Boolean(name),
+  });
+
   const champs = (qChamps.data?.active_champions ?? []).filter(
     (c): c is Champion => typeof c.name === "string" && c.name.length > 0,
   );
@@ -132,6 +143,8 @@ export default function ChampionDetail() {
   const lots = openLotsForChampion(qLive.data, name);
   const closed = closedTradesForChampion(qTrades.data, name);
   const knownCount = champ?.open_lots ?? 0;
+  const book = summaryFor(qLog.data, name);
+  const bookPnl = forwardPnl(book);
 
   return (
     <div className="space-y-4 min-w-0">
@@ -197,20 +210,66 @@ export default function ChampionDetail() {
                 </p>
               )}
             </div>
+            {book ? (
+              <div className="mt-4 grid grid-cols-2 gap-3 rounded-xl bg-white/[0.03] p-3 sm:grid-cols-4">
+                <div>
+                  <div className="text-[11px] uppercase tracking-wider text-white/40">Equity</div>
+                  <div className="text-sm font-semibold tabular-nums">{usd(book.equity ?? book.start_cash, 0)}</div>
+                </div>
+                <div>
+                  <div className="text-[11px] uppercase tracking-wider text-white/40">P&amp;L after fees</div>
+                  <div className={`text-sm font-semibold tabular-nums ${toneOf(bookPnl) === "neg" ? "text-rose-300" : toneOf(bookPnl) === "pos" ? "text-emerald-300" : ""}`}>
+                    {usd(bookPnl, 2, true)}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[11px] uppercase tracking-wider text-white/40">Fees paid</div>
+                  <div className="text-sm font-semibold tabular-nums">{usd(book.fees_paid)}</div>
+                </div>
+                <div>
+                  <div className="text-[11px] uppercase tracking-wider text-white/40">Trades</div>
+                  <div className="text-sm font-semibold tabular-nums">{book.closed} closed · {book.open} open</div>
+                </div>
+              </div>
+            ) : null}
+          </Card>
+
+          <Card title="Rules in plain words" aside="entry blocks from the name · exits are the same for every champion">
+            <div className="grid gap-4 md:grid-cols-2 min-w-0">
+              <div className="min-w-0">
+                <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-white/45">Buys when all are true</div>
+                <RuleList name={name} />
+              </div>
+              <div className="min-w-0">
+                <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-white/45">Exits and sizing</div>
+                <ul className="space-y-1 text-sm text-white/70">
+                  {[...EXIT_RULES, ...SIZING_RULES].map((r) => (
+                    <li key={r} className="flex gap-2">
+                      <span aria-hidden className="text-white/30">•</span>
+                      {r}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          </Card>
+
+          <Card title="Trade log" aside="every buy and sell · P&L after both fees">
+            {qLog.isLoading ? (
+              <SkeletonRows rows={3} />
+            ) : qLog.data?.events.length ? (
+              <TradeLog events={qLog.data.events} />
+            ) : qLog.isError ? (
+              <p className="text-sm text-rose-300">Could not load the trade log: {String(qLog.error)}</p>
+            ) : (
+              <EmptyState title="No trades yet" icon="◷">
+                This champion buys only when every entry rule above is true on the same closed candle. Until that happens
+                the account stays flat in cash — waiting, not broken.
+              </EmptyState>
+            )}
           </Card>
 
           <ChampionOpenLotsCard lots={lots} liveReady={liveReady} knownCount={knownCount} />
-
-          <Card
-            title={`Closed trades · ${closed.length}`}
-            aside="same /api/trades window as Positions and the tape"
-          >
-            {qTrades.isError && !qTrades.data?.length ? (
-              <Empty>Could not load /api/trades: {String(qTrades.error)}</Empty>
-            ) : (
-              <ClosedTradeHistory trades={closed} />
-            )}
-          </Card>
 
           <Card
             title="5m tape"
@@ -225,6 +284,23 @@ export default function ChampionDetail() {
             </p>
             <ChampionTape championName={name} />
           </Card>
+
+          <Disclosure
+            title={`Closed trades with entry condition · ${closed.length}`}
+            summary="Same /api/trades window as Positions and the tape"
+          >
+          <Card
+            title={`Closed trades · ${closed.length}`}
+            aside="same /api/trades window as Positions and the tape"
+          >
+            {qTrades.isError && !qTrades.data?.length ? (
+              <Empty>Could not load /api/trades: {String(qTrades.error)}</Empty>
+            ) : (
+              <ClosedTradeHistory trades={closed} />
+            )}
+          </Card>
+
+          </Disclosure>
 
           {qChamps.data?.synced_until ? (
             <p className="text-xs text-white/40">
