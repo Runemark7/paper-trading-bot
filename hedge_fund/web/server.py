@@ -21,6 +21,8 @@ A small, dependency-free HTTP server (stdlib only) that exposes:
                                 and does not load the results log.
   GET /api/discovery/lift -> top and bottom atoms by net OOS P&L minus buy-and-hold (cached)
   GET /api/discovery/blocks -> exploratory atom-block effects (cached; does not change the gate)
+  GET /api/discovery/insights -> per-gate reject counts, near-misses, newest evals
+                                (display log, cached by its fingerprint; read-only)
   GET /api/discovery/history -> canonical 5m tape hash + data_end (ingest token).
                                 Serves the day-keyed file. 503 + Retry-After when
                                 that file is not ready; does not rebuild on the request.
@@ -42,6 +44,8 @@ A small, dependency-free HTTP server (stdlib only) that exposes:
   POST /api/champions/retain -> keep-list filter of champions.json (same ingest token)
   POST /api/champions/cull_undated -> drop missing champion_since (same ingest token)
   GET /api/champions/retired -> archived (retired) champions + graduated rows
+  GET /api/champions/trades -> entry/exit events with size, fees, net P&L, reason
+                               (?name= one account, ?limit= 1..1000; read-only)
   POST /run             -> trigger a live decision cycle, then regenerate
   GET /health           -> liveness probe. Adds candle last time and gap
                            count when PAPERBOT_DATABASE_URL is set. Stays
@@ -525,6 +529,17 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(pool_status(read_only=True))
             except Exception as exc:
                 self._send_json({"error": str(exc), "champions": [], "count": 0}, 500)
+        elif route == "/api/champions/trades":
+            # Read-only trade log. Per-account reads are cached by DB file token.
+            try:
+                from hedge_fund.web.champion_trades import champion_trades_payload, parse_limit
+
+                limit = parse_limit(qs.get("limit"))
+                self._send_json(champion_trades_payload(qs.get("name"), limit=limit))
+            except ValueError as exc:
+                self._send_json({"error": str(exc), "paper_only": True}, 400)
+            except Exception as exc:
+                self._send_json({"error": str(exc), "events": [], "champions": [], "paper_only": True}, 500)
         elif route == "/api/champions/retired":
             try:
                 from hedge_fund.trading.retire import retired_payload
@@ -576,6 +591,14 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(lift_payload_for_request())
             except Exception as exc:
                 self._send_json({"error": str(exc)}, 500)
+        elif route == "/api/discovery/insights":
+            # Read-only. Built from the in-memory display log; cached by its fingerprint.
+            try:
+                from hedge_fund.web.discovery_insights import discovery_insights_payload
+
+                self._send_json(discovery_insights_payload())
+            except Exception as exc:
+                self._send_json({"error": str(exc), "paper_only": True}, 500)
         elif route == "/api/discovery/blocks":
             # Read-only. Not on the summary poll. Does not mint, qualify, or touch the gate.
             try:

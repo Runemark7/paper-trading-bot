@@ -498,6 +498,92 @@ export interface ChampionsPayload {
   open_lots_unit?: "open_lots" | string;
 }
 
+/** One entry or exit from GET /api/champions/trades. P&L is net of both taker fees. */
+export interface TradeEvent {
+  kind: "entry" | "exit";
+  ts: string | null;
+  champion: string;
+  trade_id: number | null;
+  lot_id: number | null;
+  symbol: string | null;
+  size: number | null;
+  entry_price: number | null;
+  price: number | null;
+  notional: number | null;
+  fee: number | null;
+  pnl: number | null;
+  pnl_pct: number | null;
+  reason: string | null;
+  open: boolean;
+}
+
+export interface ChampionTradeSummary {
+  name: string;
+  active: boolean;
+  has_account: boolean;
+  start_cash: number;
+  truncated: boolean;
+  trades_total: number;
+  closed: number;
+  open: number;
+  wins: number;
+  realized_pnl: number;
+  fees_paid: number;
+  equity: number | null;
+  equity_at: string | null;
+  open_entries: TradeEvent[];
+}
+
+export interface ChampionTradesPayload {
+  paper_only: boolean;
+  as_of: string;
+  name: string | null;
+  found: boolean;
+  limit: number;
+  total_events: number;
+  events: TradeEvent[];
+  champions: ChampionTradeSummary[];
+  pnl_note: string;
+}
+
+export interface InsightGateNumbers {
+  dsr: number | null;
+  pbo: number | null;
+  neighbours: number | null;
+  neighbours_pass: number | null;
+  cost_sharpe: number | null;
+  holdout_sharpe: number | null;
+  holdout_trades: number | null;
+}
+
+export interface InsightRow {
+  strategy: string | null;
+  tested_at: string | null;
+  qualified: boolean;
+  sharpe: number | null;
+  daily_sharpe: number | null;
+  trades: number | null;
+  test_pnl: number | null;
+  failed_gates: string[];
+  fail_reasons: string[];
+  gate: InsightGateNumbers | null;
+  gate_rules: string | null;
+}
+
+/** GET /api/discovery/insights — display-log scope, newest evaluation per name. */
+export interface DiscoveryInsights {
+  paper_only: boolean;
+  as_of: string;
+  gate_rules: string;
+  scope: string;
+  rows_scanned: number;
+  current_gate: { tested: number; cleared_base_floors: number; passed: number };
+  gate_failures: { gate: string; count: number }[];
+  near_misses: InsightRow[];
+  recent: InsightRow[];
+  note: string;
+}
+
 export type ChartSymbol = "BTC/USDT" | "ETH/USDT";
 
 export interface CandleBar {
