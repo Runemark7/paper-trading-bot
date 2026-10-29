@@ -1,29 +1,29 @@
 import type { DiscoveryInsights, InsightRow } from "../api/types";
 import { BlockChips, EmptyState, GatePill, InfoTip, Panel, RuleList, SectionTitle, SkeletonRows, num, shortAgo, utcStamp } from "../components/kit";
 import { MonoName } from "../components/ui";
-import { GATES, GATE_THRESHOLDS, HOLDOUT_SPAN, gateInfo } from "../lib/gates";
+import { GATES, GATE_THRESHOLDS, HOLDOUT_SPAN, WARNING_GATES, gateInfo } from "../lib/gates";
 
-/** The eight gate v6 checks in plain words, with how often each one rejected a name. */
+/** Gate v7 vetoes, plus the warnings that are stored and never reject a library name. */
 export function GateLegend({ insights }: { insights?: DiscoveryInsights }) {
   const counts = new Map((insights?.gate_failures ?? []).map((g) => [g.gate, g.count]));
   const max = Math.max(1, ...GATES.map((g) => counts.get(g.key) ?? 0));
   const tested = insights?.current_gate.tested;
   const groups: { title: string; note: string; stage: "floor" | "robustness" }[] = [
-    { title: "Step A · Basic floors", note: "Checked on 18 walk-forward windows before the holdout.", stage: "floor" },
-    { title: "Step B · Robustness", note: "Only for names that clear every floor. Expensive, so run last.", stage: "robustness" },
+    { title: "Vetoes · profit and sample size", note: "A miss here rejects the library name.", stage: "floor" },
+    { title: "Vetoes · holdout, neighbours, costs", note: "Still required. Sharpe is not in this list.", stage: "robustness" },
   ];
   return (
     <Panel>
       <SectionTitle
-        title="The gate: 8 checks every strategy must pass"
+        title="Gate v7: profit after fees, then warnings"
         aside={insights ? `rejections among ${tested?.toLocaleString("en-US")} names under the current gate` : undefined}
         info={
-          <InfoTip label="Gate v6" align="left">
-            The rule set every discovery result is judged by (gate v6). The library is scored on daily bars; the same floors still apply. One fail on any check rejects the strategy for good — it is never retested.
+          <InfoTip label="Gate v7" align="left">
+            The daily library passes when it is profitable after fees on the test years and the holdout year, including at higher costs, with the trade floors and profitable neighbours. DSR, PBO, Sharpe, sma_stack, and buy-and-hold are warnings. A pass is proposed, not seated. The 5m path is unchanged.
           </InfoTip>
         }
       >
-        A strategy is only proposed if it passes all of them. Most fail one of the basic floors.
+        A library name is proposed only when every veto passes. Warnings are shown on the row and do not reject it.
       </SectionTitle>
       <div className="grid gap-4 lg:grid-cols-2">
         {groups.map((group) => (
@@ -59,8 +59,8 @@ export function GateLegend({ insights }: { insights?: DiscoveryInsights }) {
       </div>
       <div className="mt-4 grid gap-2 sm:grid-cols-2 text-xs text-white/55">
         <div className="rounded-lg bg-white/[0.03] px-3 py-2">
-          <span className="font-semibold text-white/80">Buy-and-hold is context only.</span> It is shown next to results but is never a
-          pass rule under gate v6.
+          <span className="font-semibold text-white/80">Warnings, not vetoes.</span>{" "}
+          {WARNING_GATES.map((g) => g.label).join(", ")}. Each is computed and shown. None of them rejects a library name.
         </div>
         <div className="rounded-lg bg-white/[0.03] px-3 py-2">
           <span className="font-semibold text-white/80">Sealed holdout {HOLDOUT_SPAN}.</span> That year never feeds the search, so

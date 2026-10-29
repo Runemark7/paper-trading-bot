@@ -40,6 +40,8 @@ _ROW_KEYS = (
     "worker_id",
     "data_end",
     "gate_rules",
+    "warnings",
+    "oos_net_pnl",
 )
 
 
@@ -119,6 +121,8 @@ def _slim(record: dict) -> dict:
     row.update({
         "checks": lib.get("checks") or {},
         "failing_checks": lib.get("failing_checks") or [],
+        "warning_checks": lib.get("warning_checks") or [],
+        "warnings": record.get("warnings") or [],
         "count_only": bool(lib.get("count_only")),
         "exposure": (lib.get("discovery") or {}).get("exposure"),
         "bh_max_dd": (lib.get("bh") or {}).get("max_drawdown"),
@@ -126,6 +130,9 @@ def _slim(record: dict) -> dict:
         "holdout_trades": hold.get("trades"),
         "holdout_pnl": hold.get("pnl"),
         "holdout_bh_sharpe": (hold.get("bh") or {}).get("daily_sharpe"),
+        "oos_net_pnl": gate.get("oos_pnl", record.get("oos_net_pnl")),
+        "cost_oos_pnl": gate.get("cost_oos_pnl"),
+        "cost_holdout_pnl": gate.get("cost_holdout_pnl"),
         "cost_sharpe": gate.get("cost_sharpe"),
         "dsr": gate.get("dsr"),
         "n_trials": gate.get("n_trials"),
@@ -158,12 +165,11 @@ def library_table_payload(*, tested: set[str] | None = None, leased: set[str] | 
         "progress": library_progress(tested, leased),
         "strategies": rows,
         "note": (
-            "Pre-registered strategy library (gate v6). Indicators use BTC history from "
-            "2017-08-17; a day that is not warm is not scored. Each strategy is evaluated "
-            "once with its canonical parameters and a 20% stop that fills at the next open. "
-            "The stop is not a second trial. Grid neighbours are scored inside that "
-            "evaluation and count toward the deflated-Sharpe trial count. Daily floors are "
-            "8 out-of-sample round-trips and 2 holdout trades. Buy-and-hold is informational. "
+            "Pre-registered strategy library (gate v7). A name passes when net P&L after "
+            "fees and slippage is positive on the warmed out-of-sample book and on the "
+            "sealed holdout, including at 2× fees + 5 bps, with at least 8 out-of-sample "
+            "round-trips, 2 holdout trades, and 70% of neighbours also profitable on those "
+            "three checks. DSR, PBO, Sharpe, sma_stack, and buy-and-hold are warnings. "
             "A pass is proposed, awaiting approval; it is not seated."
         ),
     }

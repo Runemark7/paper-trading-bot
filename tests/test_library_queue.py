@@ -15,8 +15,8 @@ from unittest.mock import patch
 
 from hedge_fund.library.catalog import claim_names, is_library_name, library_trial_count
 from hedge_fund.library.engine import ENGINE_ID, RISK_POLICY, TIMEFRAME
+from hedge_fund.library.evaluate import library_pass_attestation
 from hedge_fund.trading.constants import GATE_RULES, V5_GATE_RULES
-from hedge_fund.trading.gate_v4 import v4_pass_attestation
 
 
 def _library_env(root: Path) -> dict[str, str]:
@@ -59,7 +59,7 @@ def _row(
     trials = library_trial_count() if n_trials is None else n_trials
     if gate_v4 is None:
         gate_v4 = (
-            v4_pass_attestation(n_trials=trials)
+            library_pass_attestation(n_trials=trials)
             if qualified
             else {"passed": False, "rules": GATE_RULES, "n_trials": trials}
         )

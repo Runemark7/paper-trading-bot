@@ -284,8 +284,9 @@ class LibraryDailyWorkerTests(unittest.TestCase):
         self.assertEqual(f"{direct['gate_v4']['pbo']:.2f}", "0.30")
         self.assertEqual(direct["trades"], 27)
         self.assertEqual(direct["library"]["blocks"]["score_start"], "2018-12-01")
-        self.assertIn("dsr 0.590 < 0.95 (n_trials=64)", direct["fail_reasons"])
-        self.assertIn("pbo 0.300 > 0.2", direct["fail_reasons"])
+        self.assertIn("dsr 0.590 < 0.95 (n_trials=64)", direct["warnings"])
+        self.assertIn("pbo 0.300 > 0.2", direct["warnings"])
+        self.assertFalse(any(str(r).startswith(("dsr ", "pbo ")) for r in direct["fail_reasons"]))
 
         prod = Path(tempfile.mkdtemp())
         worker = Path(tempfile.mkdtemp())
@@ -320,6 +321,8 @@ class LibraryDailyWorkerTests(unittest.TestCase):
         self.assertEqual(worker_row["gate_v4"]["pbo"], direct["gate_v4"]["pbo"])
         self.assertEqual(worker_row["trades"], direct["trades"])
         self.assertEqual(worker_row["library"]["failing_checks"], direct["library"]["failing_checks"])
+        self.assertEqual(worker_row["warnings"], direct["warnings"])
+        self.assertEqual(worker_row["qualified"], direct["qualified"])
         self.assertEqual(f"{worker_row['gate_v4']['dsr']:.3f}", "0.590")
         self.assertEqual(f"{worker_row['gate_v4']['pbo']:.2f}", "0.30")
 
