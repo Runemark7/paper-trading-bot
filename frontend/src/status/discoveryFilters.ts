@@ -108,7 +108,7 @@ export const DEFAULT_TESTED_SORT: TestedSort = { key: "testedAt", dir: "desc" };
 
 export const TESTED_SORT_COLUMNS: { key: TestedSortKey; label: string }[] = [
   { key: "testedAt", label: "When" },
-  { key: "testPnl", label: "Test P&L" },
+  { key: "testPnl", label: "Sum of window P&L" },
   { key: "sharpe", label: "Sharpe" },
   { key: "trades", label: "OOS trades" },
   { key: "strategy", label: "Name" },

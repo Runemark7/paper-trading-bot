@@ -59,6 +59,40 @@ def _query_int(value: str | None, *, default: int, name: str, lo: int, hi: int) 
     return number
 
 
+def _annotate_library_pnl(rows: list[dict]) -> None:
+    """Fill book P&L on lib.* results rows that were trimmed before the fields existed.
+
+    Rows that already carry a number keep it. Missing numbers come from
+    that name's newest discovery-log row. 5m rows are not touched, and a
+    page with no gap does not open the log.
+    """
+    from hedge_fund.library.catalog import is_library_name
+    from hedge_fund.library.results import LIBRARY_PNL_FIELDS
+
+    lib_rows = [row for row in rows if isinstance(row, dict) and is_library_name(row.get("strategy"))]
+    if not lib_rows:
+        return
+    if not any(row.get(key) is None for row in lib_rows for key in LIBRARY_PNL_FIELDS):
+        return
+    from hedge_fund.library.results import library_result_view
+    from hedge_fund.trading.discovery import load_discovery_log
+
+    latest: dict[str, dict] = {}
+    for raw in load_discovery_log():
+        if not isinstance(raw, dict):
+            continue
+        name = raw.get("strategy")
+        if not is_library_name(name) or name in latest:
+            continue
+        latest[name] = raw
+    for row in lib_rows:
+        logged = latest.get(row.get("strategy"))
+        view = library_result_view(logged if isinstance(logged, dict) else row) or {}
+        for key in LIBRARY_PNL_FIELDS:
+            if row.get(key) is None:
+                row[key] = view.get(key)
+
+
 def discovery_results_response(qs: dict | None = None) -> dict:
     """GET /api/discovery/results — paged uncapped records. Read-only."""
     query = qs or {}
@@ -69,6 +103,7 @@ def discovery_results_response(qs: dict | None = None) -> dict:
     offset = _query_int(query.get("offset"), default=0, name="offset", lo=0, hi=1_000_000_000)
     limit = _query_int(query.get("limit"), default=100, name="limit", lo=1, hi=1000)
     rows, total, counts = page_result_records(offset=offset, limit=limit, status=status)
+    _annotate_library_pnl(rows)
     return {
         "paper_only": True,
         "offset": offset,
@@ -99,7 +134,7 @@ def _eval_row(row: dict) -> dict:
     reasons = row.get("fail_reasons")
     if not isinstance(reasons, list):
         reasons = []
-    return {
+    out = {
         "strategy": row.get("strategy"),
         "tested_at": row.get("tested_at"),
         "qualified": bool(row.get("qualified")),
@@ -113,6 +148,15 @@ def _eval_row(row: dict) -> dict:
         "bh_oos_pnl": row.get("bh_oos_pnl"),
         "bh_role": BH_METRIC_ROLE,
     }
+    from hedge_fund.library.catalog import is_library_name
+
+    if is_library_name(row.get("strategy")):
+        from hedge_fund.library.results import LIBRARY_PNL_FIELDS, library_result_view
+
+        view = library_result_view(row) or {}
+        for key in LIBRARY_PNL_FIELDS:
+            out[key] = view.get(key)
+    return out
 
 
 def _sort_tested_newest_first(rows: list[dict]) -> list[dict]:

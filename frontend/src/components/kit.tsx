@@ -22,7 +22,7 @@ export function InfoTip({ label, children, align = "center" }: { label: string; 
       <span
         role="tooltip"
         id={id}
-        className={`pointer-events-none invisible absolute top-6 z-50 w-64 max-w-[78vw] rounded-lg border border-white/10 bg-[#141c3d] p-3 text-left text-xs font-normal normal-case tracking-normal leading-relaxed text-white/80 opacity-0 shadow-xl shadow-black/40 transition group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100 ${pos}`}
+        className={`pointer-events-none invisible absolute top-6 z-50 w-72 max-w-[78vw] whitespace-normal break-words rounded-lg border border-white/10 bg-[#141c3d] p-3 text-left text-xs font-normal normal-case tracking-normal leading-relaxed text-white/80 opacity-0 shadow-xl shadow-black/40 transition group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100 ${pos}`}
       >
         <span className="block font-semibold text-white mb-1">{label}</span>
         {children}

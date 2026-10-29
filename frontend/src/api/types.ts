@@ -145,6 +145,21 @@ export interface Champion {
   };
   /** Read-only status from the criteria stored at admission. */
   forward_status?: ForwardStatus | null;
+  /** Newest discovery-log slice for a lib.* name. Absent on dip champions. */
+  library_result?: LibraryBacktest | null;
+}
+
+/** Read-only gate backtest copied from the newest discovery-log row. */
+export interface LibraryBacktest {
+  gate_rules?: string | null;
+  tested_at?: string | null;
+  oos_net_pnl?: number | null;
+  trades?: number | null;
+  holdout_pnl?: number | null;
+  holdout_trades?: number | null;
+  cost_oos_pnl?: number | null;
+  cost_holdout_pnl?: number | null;
+  warnings?: string[];
 }
 
 export interface GraduatedTrade {
@@ -194,6 +209,12 @@ export interface DiscoveryEvaluation {
   bh_daily_sharpe?: number | null;
   /** Buy-and-hold figures are reported and are not a pass requirement. */
   bh_role?: "informational" | string;
+  /** Compounded book P&L on a lib.* row. Absent on 5m rows. */
+  oos_net_pnl?: number | null;
+  holdout_pnl?: number | null;
+  holdout_trades?: number | null;
+  cost_oos_pnl?: number | null;
+  cost_holdout_pnl?: number | null;
 }
 
 export interface DiscoveryWorker {

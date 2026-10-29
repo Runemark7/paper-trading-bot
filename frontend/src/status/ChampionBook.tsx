@@ -19,6 +19,7 @@ import {
 import TradeLog from "../components/TradeLog";
 import { MonoName } from "../components/ui";
 import { AdmissionBadge } from "./admission";
+import { isLibraryName, LibraryBacktestBox } from "./LibraryBacktest";
 import { ForwardStatusBadge, forwardStatusText } from "./forwardStatus";
 import { championDetailPath } from "./championPath";
 import { accountsMatch, fmtChampionSince } from "./format";
@@ -157,7 +158,9 @@ export function ChampionCard({
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-3 rounded-xl bg-white/[0.03] p-3 sm:grid-cols-5">
+      <div>
+        <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-white/45">Paper P&amp;L · live account</div>
+        <div className="grid grid-cols-2 gap-3 rounded-xl bg-white/[0.03] p-3 sm:grid-cols-5">
         <Stat label="Equity">{summary?.equity != null ? usd(summary.equity, 0) : usd(summary?.start_cash ?? null, 0)}</Stat>
         <Stat label="P&L after fees" tone={toneOf(pnl)}>
           {pnl != null ? usd(pnl, 2, true) : usd(champ.pnl, 2, true)}
@@ -168,7 +171,10 @@ export function ChampionCard({
           {closed}
           {closed ? <span className="ml-1 text-xs font-normal text-white/45">({Math.round((wins / closed) * 100)}% won)</span> : null}
         </Stat>
+        </div>
       </div>
+
+      {isLibraryName(champ.name) ? <LibraryBacktestBox result={champ.library_result} /> : null}
 
       {openEntries.length ? (
         <div className="rounded-xl border border-indigo-400/20 bg-indigo-500/[0.06] p-3">

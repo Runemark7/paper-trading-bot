@@ -533,6 +533,38 @@ def _forward_status(row: dict) -> dict:
         }
 
 
+def _attach_library_results(champs: list[dict]) -> None:
+    """Stamp lib.* response copies with the newest discovery-log slice.
+
+    The pool dict is not modified and nothing is written. The log parse is
+    the display-log cache; this does not score a tape. Dip rows are left
+    untouched, including the absence of ``library_result``.
+    """
+    from hedge_fund.library.catalog import is_library_name
+
+    wanted = {c.get("name") for c in champs if is_library_name(c.get("name"))}
+    if not wanted:
+        return
+    from hedge_fund.library.results import library_result_view
+    from hedge_fund.trading.discovery import load_discovery_log
+
+    latest: dict[str, dict] = {}
+    for raw in load_discovery_log():
+        if not isinstance(raw, dict):
+            continue
+        name = raw.get("strategy")
+        if name not in wanted or name in latest:
+            continue
+        latest[name] = raw
+        if len(latest) == len(wanted):
+            break
+    for row in champs:
+        name = row.get("name")
+        if name not in wanted:
+            continue
+        row["library_result"] = library_result_view(latest.get(name))
+
+
 def pool_status(*, read_only: bool = False) -> dict:
     """Last-known pool. ``read_only`` skips sqlite MIN() backfill + json write.
 
@@ -564,6 +596,7 @@ def pool_status(*, read_only: bool = False) -> dict:
         if isinstance(row, dict) and row.get("role") == "parked_twin"
     ]
     parked.sort(key=lambda r: (str(r.get("parked_at") or ""), r["name"]))
+    _attach_library_results(champs)
     return attach_open_lots({
         "active_champions": champs,
         "active_count": len(st["champions"]),

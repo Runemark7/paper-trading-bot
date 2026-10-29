@@ -5,7 +5,9 @@ import { useQuery } from "@tanstack/react-query";
 import { fetchDiscoverySummary } from "../api/client";
 import type { DiscoveryEvaluation, DiscoverySummary } from "../api/types";
 import { FilterInput, SortTh } from "../components/tableControls";
+import { InfoTip } from "../components/kit";
 import { Badge, Card, Empty, Field, FieldGrid, MonoName, NameChip, PhoneCards, DesktopTable, fmt } from "../components/ui";
+import { isLibraryName } from "./LibraryBacktest";
 import { farmStatusLabel } from "./FarmControl";
 import { fmtWhen } from "./format";
 import {
@@ -27,6 +29,13 @@ import {
 
 const PAGE = 20;
 
+const WINDOW_SUM_TIP =
+  "Each window's P&L is rebased to $10,000 and then added. OOS net P&L is the compounded book: ending equity minus $10,000 over 2018-12-01 → 2025-09-30.";
+
+function pnlTone(n: number | null | undefined): string {
+  return (n ?? 0) >= 0 ? "text-emerald-400" : "text-rose-400";
+}
+
 function testedTone(ok: boolean): "pos" | "neg" {
   return ok ? "pos" : "neg";
 }
@@ -44,11 +53,21 @@ function TestedRowFields({ d }: { d: DiscoveryEvaluation }) {
       <Field label="Tested">{fmtWhen(d.tested_at)}</Field>
       <Field label="OOS trades">{d.trades ?? "—"}</Field>
       <Field label="Sharpe">{d.sharpe != null ? d.sharpe.toFixed(2) : "—"}</Field>
-      <Field label="Test P&L">
-        <span className={`font-bold ${(d.test_pnl ?? 0) >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
-          {fmt(d.test_pnl)}
-        </span>
+      <Field label="Sum of window P&L">
+        <span className={`font-bold ${pnlTone(d.test_pnl)}`}>{fmt(d.test_pnl)}</span>
       </Field>
+      {isLibraryName(d.strategy) ? (
+        <>
+          <Field label="OOS net P&L">
+            <span className={`font-bold ${pnlTone(d.oos_net_pnl)}`}>{fmt(d.oos_net_pnl)}</span>
+          </Field>
+          <Field label="Holdout P&L / trades">
+            <span className={`font-bold ${pnlTone(d.holdout_pnl)}`}>
+              {fmt(d.holdout_pnl)} / {d.holdout_trades ?? "—"}
+            </span>
+          </Field>
+        </>
+      ) : null}
       <Field label="B&H daily Sharpe (informational)">
         {d.bh_daily_sharpe != null ? d.bh_daily_sharpe.toFixed(3) : "—"}
       </Field>
@@ -346,7 +365,7 @@ export default function DiscoveryBuckets() {
                 placeholder=">=30"
               />
               <FilterInput
-                label="Test P&L"
+                label="Sum of window P&L"
                 value={filters.testPnl}
                 onChange={(v) => setColumn("testPnl", v)}
                 placeholder="<0"
@@ -459,7 +478,20 @@ export default function DiscoveryBuckets() {
                     <SortTh label="Result" column="result" sort={sort} onCycle={cycleColumn} />
                     <SortTh label="Sharpe" column="sharpe" sort={sort} onCycle={cycleColumn} align="right" />
                     <SortTh label="OOS trades" column="trades" sort={sort} onCycle={cycleColumn} align="right" />
-                    <SortTh label="Test P&L" column="testPnl" sort={sort} onCycle={cycleColumn} align="right" />
+                    <SortTh
+                      label="Sum of window P&L"
+                      column="testPnl"
+                      sort={sort}
+                      onCycle={cycleColumn}
+                      align="right"
+                      info={
+                        <InfoTip label="Sum of window P&L" align="right">
+                          {WINDOW_SUM_TIP}
+                        </InfoTip>
+                      }
+                    />
+                    <th className="text-right py-1 px-1.5 whitespace-nowrap">OOS net P&amp;L</th>
+                    <th className="text-right py-1 px-1.5 whitespace-nowrap">Holdout P&amp;L / trades</th>
                     <th className="text-right py-1 whitespace-nowrap">B&amp;H Sharpe (info)</th>
                     <th className="text-right py-1 whitespace-nowrap">B&amp;H P&amp;L (info)</th>
                     <th className="text-left py-1 pl-3 whitespace-nowrap">Fail reasons</th>
@@ -477,8 +509,14 @@ export default function DiscoveryBuckets() {
                       </td>
                       <td className="text-right font-mono">{d.sharpe != null ? d.sharpe.toFixed(2) : "—"}</td>
                       <td className="text-right font-mono">{d.trades ?? "—"}</td>
-                      <td className={`text-right font-mono font-bold ${(d.test_pnl ?? 0) >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
+                      <td className={`text-right font-mono font-bold ${pnlTone(d.test_pnl)}`}>
                         {fmt(d.test_pnl)}
+                      </td>
+                      <td className={`text-right font-mono font-bold ${isLibraryName(d.strategy) ? pnlTone(d.oos_net_pnl) : "text-white/35"}`}>
+                        {isLibraryName(d.strategy) ? fmt(d.oos_net_pnl) : "—"}
+                      </td>
+                      <td className={`text-right font-mono ${isLibraryName(d.strategy) ? pnlTone(d.holdout_pnl) : "text-white/35"}`}>
+                        {isLibraryName(d.strategy) ? `${fmt(d.holdout_pnl)} / ${d.holdout_trades ?? "—"}` : "—"}
                       </td>
                       <td className="text-right font-mono text-white/50">
                         {d.bh_daily_sharpe != null ? d.bh_daily_sharpe.toFixed(3) : "—"}

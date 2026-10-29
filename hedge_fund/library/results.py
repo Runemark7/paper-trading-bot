@@ -23,6 +23,28 @@ LIBRARY_RESULTS = "library_results.json"
 _CACHE: dict = {"key": None, "value": None}
 _CACHE_LOCK = threading.Lock()
 
+# Champion cards and the discovery table read this slice. It is the same
+# extraction as ``_slim``; the full record stays in the file and the log.
+LIBRARY_RESULT_FIELDS = (
+    "gate_rules",
+    "tested_at",
+    "oos_net_pnl",
+    "trades",
+    "holdout_pnl",
+    "holdout_trades",
+    "cost_oos_pnl",
+    "cost_holdout_pnl",
+    "warnings",
+)
+# Numbers a trimmed discovery-results row keeps for a lib.* name.
+LIBRARY_PNL_FIELDS = (
+    "oos_net_pnl",
+    "holdout_pnl",
+    "holdout_trades",
+    "cost_oos_pnl",
+    "cost_holdout_pnl",
+)
+
 # Fields the table needs; the full record stays in the file and the log.
 _ROW_KEYS = (
     "strategy",
@@ -143,6 +165,41 @@ def _slim(record: dict) -> dict:
         "dsr_days_needed": (lib.get("dsr") or {}).get("days_needed"),
     })
     return row
+
+
+def library_result_view(record: dict | None) -> dict | None:
+    """Read-only display slice of one library eval. Does not score a tape.
+
+    Nested ``library.holdout`` / ``gate_v4`` win, matching ``_slim``. A
+    trimmed discovery-results row has already copied the five P&L numbers
+    to the top level and dropped those objects; those top-level keys are
+    the fallback.
+    """
+    if not isinstance(record, dict):
+        return None
+    slim = _slim(record)
+    out = {key: slim.get(key) for key in LIBRARY_RESULT_FIELDS}
+    if not isinstance(out.get("warnings"), list):
+        out["warnings"] = []
+    lib = record.get("library") if isinstance(record.get("library"), dict) else {}
+    hold = lib.get("holdout") if isinstance(lib.get("holdout"), dict) else None
+    gate = record.get("gate_v4") if isinstance(record.get("gate_v4"), dict) else None
+    if not isinstance(out.get("gate_rules"), str) and isinstance(gate, dict):
+        rules = gate.get("rules")
+        if isinstance(rules, str):
+            out["gate_rules"] = rules
+    if hold is None:
+        if out.get("holdout_pnl") is None and "holdout_pnl" in record:
+            out["holdout_pnl"] = record.get("holdout_pnl")
+        if out.get("holdout_trades") is None and "holdout_trades" in record:
+            out["holdout_trades"] = record.get("holdout_trades")
+    if not isinstance(gate, dict) or "cost_oos_pnl" not in gate:
+        if out.get("cost_oos_pnl") is None and "cost_oos_pnl" in record:
+            out["cost_oos_pnl"] = record.get("cost_oos_pnl")
+    if not isinstance(gate, dict) or "cost_holdout_pnl" not in gate:
+        if out.get("cost_holdout_pnl") is None and "cost_holdout_pnl" in record:
+            out["cost_holdout_pnl"] = record.get("cost_holdout_pnl")
+    return out
 
 
 def library_table_payload(*, tested: set[str] | None = None, leased: set[str] | None = None) -> dict:

@@ -35,6 +35,7 @@ import {
   openLotsForChampion,
 } from "../status/format";
 import { AdmissionBadge } from "../status/admission";
+import { isLibraryName, LibraryBacktestBox } from "../status/LibraryBacktest";
 import { ForwardStatusBadge, forwardStatusText } from "../status/forwardStatus";
 
 function findChampion(champs: Champion[], name: string): Champion | undefined {
@@ -232,6 +233,11 @@ export default function ChampionDetail() {
                   <div className="text-[11px] uppercase tracking-wider text-white/40">Trades</div>
                   <div className="text-sm font-semibold tabular-nums">{book.closed} closed · {book.open} open</div>
                 </div>
+              </div>
+            ) : null}
+            {champ && isLibraryName(champ.name) ? (
+              <div className="mt-4">
+                <LibraryBacktestBox result={champ.library_result} />
               </div>
             ) : null}
           </Card>

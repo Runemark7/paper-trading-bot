@@ -479,7 +479,25 @@ def _record_from_row(row: dict, *, gate: str) -> dict:
     if isinstance(row.get("gate_rules"), str):
         record["gate_rules"] = row["gate_rules"]
     record.update(_retest_fields(row))
+    record.update(_stored_library_pnl(row))
     return record
+
+
+def _stored_library_pnl(row: dict) -> dict:
+    """Copy the five book P&L numbers onto a lib.* results row.
+
+    Absent from ``_CORE``, so a deploy does not rewrite historical lines.
+    A line written before this field existed is filled at read time from
+    the discovery log.
+    """
+    from hedge_fund.library.catalog import is_library_name
+
+    if not is_library_name(row.get("strategy")):
+        return {}
+    from hedge_fund.library.results import LIBRARY_PNL_FIELDS, library_result_view
+
+    view = library_result_view(row) or {}
+    return {key: view.get(key) for key in LIBRARY_PNL_FIELDS}
 
 
 def _stub(name: str, qualified: bool) -> dict:
