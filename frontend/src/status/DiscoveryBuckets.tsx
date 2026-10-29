@@ -105,6 +105,11 @@ export function DiscoveryTeaser() {
           {q.data?.stuck_reason || q.data?.in_flight?.note || "discovery stuck / cycle overdue"}
         </div>
       )}
+      {!stuck && q.data?.idle_reason ? (
+        <p className="mb-3">
+          <Badge tone="neutral">{q.data.idle_reason}</Badge>
+        </p>
+      ) : null}
       {counts ? (
         <div className="flex flex-wrap gap-2 text-xs text-white/50 mb-3">
           <Badge tone="pos">qualified {counts.tested_pass}</Badge>
@@ -214,6 +219,11 @@ export default function DiscoveryBuckets() {
           {data?.stuck_reason || flight?.note || "discovery stuck / cycle overdue"}
         </div>
       )}
+      {!stuck && data?.idle_reason ? (
+        <p className="mb-4">
+          <Badge tone="neutral">{data.idle_reason}</Badge>
+        </p>
+      ) : null}
 
       <div className="flex flex-wrap gap-2 text-xs text-white/50 mb-4">
         <Badge tone="neutral">universe {counts?.universe ?? "…"}</Badge>

@@ -93,6 +93,10 @@ function FarmHealth({ summary, loading }: { summary?: DiscoverySummary; loading:
         <div className="mt-3 rounded-lg border border-amber-400/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
           {summary?.stuck_reason || summary?.in_flight?.note || "Discovery looks stuck — no new results recently."}
         </div>
+      ) : summary?.idle_reason ? (
+        <p className="mt-3">
+          <Badge tone="neutral">{summary.idle_reason}</Badge>
+        </p>
       ) : null}
       <div className="mt-3 grid grid-cols-3 gap-2 text-center">
         <div className="rounded-lg bg-white/[0.04] py-2">

@@ -260,6 +260,8 @@ export interface DiscoveryCounts {
   leftovers?: number;
   rejected_parked?: number;
   eligible?: number;
+  /** Names the stuck check treats as claimable. Library mode: queued + leased catalog names. */
+  claimable?: number;
   extended?: number;
   champions: number;
   graduated: number;
@@ -357,6 +359,8 @@ export interface DiscoverySummary {
   stale?: boolean;
   stuck?: boolean;
   stuck_reason?: string | null;
+  /** Set when library mode has nothing left to claim. Not a failure. */
+  idle_reason?: string | null;
   tested: DiscoveryEvaluation[];
   discovery_on_cycle?: boolean;
   discovery_farm?: "windows_worker" | "cycle_sidecar" | string;

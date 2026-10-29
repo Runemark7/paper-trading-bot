@@ -269,7 +269,10 @@ class DiscoverySummaryBucketTests(unittest.TestCase):
             (root / "discovery_log.json").write_text(json.dumps([
                 _eval("keep_me", qualified=False, tested_at="2026-09-06T04:00:00+00:00"),
             ]))
-            with patch.dict(os.environ, {"PAPER_STATE": str(root)}):
+            with patch.dict(os.environ, {
+                "PAPER_STATE": str(root),
+                "PAPER_DISCOVERY_SOURCE": "random",
+            }):
                 with patch("hedge_fund.web.discovery.generate_universe", return_value=universe):
                     with patch("hedge_fund.trading.universe.generate_universe", return_value=universe):
                         s = build_discovery_summary()
@@ -277,6 +280,7 @@ class DiscoverySummaryBucketTests(unittest.TestCase):
         self.assertIn("cycle overdue", s["stuck_reason"])
         self.assertIn("cycle overdue", s["in_flight"]["note"])
         self.assertIn("never-tested leftover", s["stuck_reason"])
+        self.assertIsNone(s["idle_reason"])
         self.assertNotIn("idle — last sweep", s["in_flight"]["note"])
         self.assertIn("fresh_name", s["queued"])
         self.assertNotIn("keep_me", s["queued"])
@@ -301,6 +305,72 @@ class DiscoverySummaryBucketTests(unittest.TestCase):
         self.assertEqual(s["counts"]["eligible"], 0)
         self.assertEqual(s["counts"]["rejected_parked"], 1)
         self.assertIn("idle — last eval", s["in_flight"]["note"])
+        self.assertIsNone(s["idle_reason"])
+
+    def test_library_complete_is_idle_despite_random_leftover(self):
+        from hedge_fund.library.catalog import claim_names
+        from hedge_fund.trading.constants import GATE_RULES
+
+        names = claim_names()
+        old = "2026-09-06T04:00:00+00:00"
+        universe = ["fresh_random_name"]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "champions.json").write_text(json.dumps({"champions": [], "synced_until": ""}))
+            (root / "discovery_log.json").write_text(json.dumps([
+                _eval(name, qualified=False, tested_at=old) for name in names
+            ]))
+            with patch.dict(os.environ, {
+                "PAPER_STATE": str(root),
+                "PAPER_DISCOVERY_SOURCE": "library",
+            }):
+                with patch("hedge_fund.web.discovery.generate_universe", return_value=universe):
+                    with patch("hedge_fund.trading.universe.generate_universe", return_value=universe):
+                        s = build_discovery_summary()
+        self.assertEqual(s["source"], "library")
+        self.assertFalse(s["stuck"])
+        self.assertIsNone(s["stuck_reason"])
+        self.assertIn("library complete", s["idle_reason"].lower())
+        self.assertIn(GATE_RULES, s["idle_reason"])
+        self.assertIn("Random farm paused", s["idle_reason"])
+        self.assertEqual(s["in_flight"]["note"], s["idle_reason"])
+        self.assertEqual(s["counts"]["eligible"], 1)
+        self.assertEqual(s["counts"]["claimable"], 0)
+        self.assertIn("fresh_random_name", s["queued"])
+        self.assertEqual(s["library"]["queued"], 0)
+        self.assertEqual(s["library"]["leased"], 0)
+        self.assertEqual(s["library"]["tested"], s["library"]["strategies"])
+        self.assertGreater(s["library"]["strategies"], 0)
+
+    def test_library_untested_catalog_name_stays_stuck(self):
+        from hedge_fund.library.catalog import claim_names
+
+        names = claim_names()
+        self.assertGreaterEqual(len(names), 2)
+        held_back = names[-1]
+        old = "2026-09-06T04:00:00+00:00"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "champions.json").write_text(json.dumps({"champions": [], "synced_until": ""}))
+            (root / "discovery_log.json").write_text(json.dumps([
+                _eval(name, qualified=False, tested_at=old) for name in names[:-1]
+            ]))
+            with patch.dict(os.environ, {
+                "PAPER_STATE": str(root),
+                "PAPER_DISCOVERY_SOURCE": "library",
+            }):
+                with patch("hedge_fund.web.discovery.generate_universe", return_value=[]):
+                    with patch("hedge_fund.trading.universe.generate_universe", return_value=[]):
+                        s = build_discovery_summary()
+        self.assertTrue(s["stuck"])
+        self.assertIn("library names remain", s["stuck_reason"])
+        self.assertIn("cycle overdue", s["stuck_reason"])
+        self.assertEqual(s["stuck_reason"], s["in_flight"]["note"])
+        self.assertIsNone(s["idle_reason"])
+        self.assertEqual(s["counts"]["eligible"], 0)
+        self.assertEqual(s["counts"]["claimable"], 1)
+        self.assertEqual(s["library"]["queued"], 1)
+        self.assertNotIn(held_back, [row["strategy"] for row in s["tested"]])
 
     def test_in_flight_names_only_when_tournament_stamp_in_progress(self):
         universe = ["keep_me", "flying"]
