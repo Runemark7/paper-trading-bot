@@ -5,7 +5,9 @@ Never claims a sidecar process is alive. in_flight names come from
 stale), and from active claim leases (``discovery_leases.json``) so several
 stateless workers show up together. Otherwise the UI shows idle + newest
 eval — or stuck/overdue copy when the stamp is stale or evaluations have
-gone quiet with leftover work.
+gone quiet with leftover work. In library mode that leftover work is
+catalog names still queued or leased. A finished library, with the random
+mint paused, is idle.
 
 ``lists=False`` / ``?compact=1`` keeps counts, farm, and stuck copy but omits
 tested / queued / extended_names / in-flight name lists so UI polls (Champions
@@ -270,13 +272,30 @@ def build_discovery_summary(*, lists: bool = True) -> dict:
     evals_today = evals_on_utc_date(log, now)
 
     on_cycle = discovery_on_cycle()
-    work_now = bool(eligible)
+    raw_flight = read_in_flight()
+    snap = lease_snapshot(now)
+    lease_names = list(snap["active_names"])
+    from hedge_fund.library.results import library_progress
+    from hedge_fund.trading.discovery_mode import discovery_source
+
+    source = discovery_source()
+    library_block = library_progress(tested_names, set(lease_names))
+    library_block["mode"] = source
+    # Library claims serve catalog names only and skip refill, so leftover
+    # random names are not work. A finished catalog is idle, not stuck.
+    if source == "library":
+        claimable = int(library_block["queued"]) + int(library_block["leased"])
+        work_now = claimable > 0
+    else:
+        claimable = len(eligible)
+        work_now = bool(eligible)
     quiet = bool(
         work_now
         and last_eval_age_seconds is not None
         and last_eval_age_seconds > DISCOVERY_QUIET_SECONDS
     )
     stuck = bool((stamp_stale and tournament_stamp) or (quiet and not tournament_now))
+    idle_reason = None
     if stamp_stale and tournament_stamp:
         stuck_reason = (
             "discovery stuck — tournament stamp started with no finish (stale). "
@@ -284,21 +303,32 @@ def build_discovery_summary(*, lists: bool = True) -> dict:
         )
     elif quiet and not tournament_now:
         age_h = None if last_eval_age_seconds is None else int(last_eval_age_seconds // 3600)
+        waiting = (
+            "library names remain"
+            if source == "library"
+            else "never-tested leftover names remain"
+        )
         stuck_reason = (
             "discovery stuck / cycle overdue — "
-            f"no new evaluations for {age_h}h while never-tested leftover names remain."
+            f"no new evaluations for {age_h}h while {waiting}."
         )
         if not on_cycle:
             stuck_reason += (
                 " Walk-forwards run on the Windows discovery worker, "
                 "not this cycle sidecar."
             )
+    elif source == "library" and not work_now:
+        stuck = False
+        stuck_reason = None
+        idle_reason = (
+            f"Library complete under {GATE_RULES}: "
+            f"{library_block['tested']}/{library_block['strategies']} tested, "
+            f"{library_block['passed']} pass. "
+            "Random farm paused; nothing to claim."
+        )
     else:
         stuck_reason = None
 
-    raw_flight = read_in_flight()
-    snap = lease_snapshot(now)
-    lease_names = list(snap["active_names"])
     worker_flight = bool(
         raw_flight and raw_flight.get("source") == "windows_worker"
     )
@@ -387,6 +417,8 @@ def build_discovery_summary(*, lists: bool = True) -> dict:
             f"{len(flight_names)} outstanding / batch {batch_size}.{cur} "
             "Process liveness is not verified."
         )
+    elif idle_reason:
+        flight_note = idle_reason
     elif last_tested_at:
         flight_note = (
             f"idle — last eval {last_tested_at}"
@@ -406,13 +438,6 @@ def build_discovery_summary(*, lists: bool = True) -> dict:
     ship_queued = queued if lists else []
     ship_extended = list(extended) if lists else []
 
-    from hedge_fund.library.results import library_progress
-    from hedge_fund.trading.discovery_mode import discovery_source
-
-    source = discovery_source()
-    library_block = library_progress(tested_names, set(lease_names))
-    library_block["mode"] = source
-
     return {
         "paper_only": True,
         "gate": {
@@ -430,6 +455,7 @@ def build_discovery_summary(*, lists: bool = True) -> dict:
         "stale": stamp_stale,
         "stuck": stuck,
         "stuck_reason": stuck_reason,
+        "idle_reason": idle_reason,
         "tested": tested,
         "discovery_on_cycle": on_cycle,
         "discovery_farm": "cycle_sidecar" if on_cycle else "windows_worker",
@@ -472,6 +498,7 @@ def build_discovery_summary(*, lists: bool = True) -> dict:
             "leftovers": len(leftovers),
             "rejected_parked": len(rejected_parked),
             "eligible": len(eligible),
+            "claimable": claimable,
             "extended": len(extended),
             "tested_index": len(tested_index),
             "champions": len(champs),
