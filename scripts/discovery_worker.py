@@ -7,6 +7,12 @@ a local ``crypto_history_5m.json`` and it does not need database
 credentials. ``--local-plan`` keeps the old local cursor / refill path
 and still reads that JSON file.
 
+Library mode (the default) also downloads the warmed BTC daily bars
+(``GET /api/discovery/library/daily``, same token) and scores ``lib.*``
+on that series. The canonical 5m tape stays cut at 2021-01-26. If the
+daily tape is missing or short, this process does not claim ``lib.*``
+names. ``PAPER_DISCOVERY_SOURCE=random`` keeps the 5m path only.
+
 Evaluates leased names (fail-once, rm_v1, 5m windows) and POSTs results to
 ``/api/discovery/ingest``. Cluster ``live_cycle`` stays live-only.
 
@@ -41,6 +47,7 @@ from __future__ import annotations
 
 import atexit
 import argparse
+import hashlib
 import json
 import multiprocessing
 import os
@@ -341,6 +348,8 @@ def _reset_eval_session() -> None:
     """Drop the cached pool and tape. Tests use this between cases."""
     _drop_eval_pool()
     _SESSION["hist"] = None
+    _SESSION["library_ready"] = None
+    _SESSION["library_etag"] = None
 
 
 def _acquire_eval_pool(n_workers: int, bundle: dict, n_trials, retest_names, n_trials_retest):
@@ -392,6 +401,10 @@ def _cached_bundle(history_stamp: dict | None, n_windows: int) -> dict | None:
         return None
     if cached.get("n_windows") != n_windows:
         return None
+    from hedge_fund.trading.discovery_mode import library_mode
+
+    if library_mode() and cached.get("library_etag") != _SESSION.get("library_etag"):
+        return None
     out = dict(cached)
     out["history_stamp"] = history_stamp
     return out
@@ -404,6 +417,7 @@ def _store_bundle(bundle: dict) -> None:
         prev.get("sha") != sha
         or prev.get("state") != bundle.get("state")
         or prev.get("n_windows") != bundle.get("n_windows")
+        or prev.get("library_etag") != bundle.get("library_etag")
     ):
         _drop_eval_pool()
     if not sha:
@@ -491,18 +505,24 @@ def _load_eval_bundle(history_stamp: dict | None, n_windows: int, *, claim_mode:
         "history_stamp": history_stamp,
         "sha": _stamp_sha(history_stamp),
         "state": _state_key(),
+        "library_etag": _SESSION.get("library_etag"),
     }
 
 
 def _library_data(data: dict):
     """Completed daily BTC bars for library names.
 
-    Prefer the library tape (Binance listing, 2017-08-17). The canonical
-    5m rows are cut at 2021-01-26, which leaves long lookbacks undefined.
+    Library mode uses the daily file (prod's warmed series, or a local
+    tape that actually starts in 2017). It does not score the canonical
+    5m rows: those are cut at 2021-01-26. Random mode keeps that 5m path.
     A short tape raises inside ``build_library_data`` and this returns
     None, so the name is not scored as if those days were flat. The sealed
     holdout is cut out of the discovery series inside ``build_library_data``.
     """
+    from hedge_fund.trading.discovery_mode import library_mode
+
+    if library_mode():
+        return _library_data_from_daily_cache()
     from hedge_fund.library.evaluate import build_library_data, library_data_from_rows
     from hedge_fund.library.tape import load_library_daily
 
@@ -519,6 +539,29 @@ def _library_data(data: dict):
         return None
 
 
+def _library_data_from_daily_cache():
+    """Warmed daily bars only. The 2021 5m cut is not a fallback."""
+    ready = _SESSION.get("library_ready")
+    if ready is not None:
+        return ready
+    from hedge_fund.library.daily_cache import daily_is_warm, parse_daily_file, cache_path
+    from hedge_fund.library.evaluate import build_library_data
+
+    try:
+        parsed = parse_daily_file(cache_path(state_root()))
+        if parsed is not None and daily_is_warm(parsed[0], parsed[1]):
+            return build_library_data(parsed[0])
+        from hedge_fund.library.tape import load_library_daily
+
+        bars = load_library_daily()
+        if not len(bars):
+            return None
+        return build_library_data(bars)
+    except Exception as exc:
+        print(f"discovery_worker: library daily bars unavailable: {exc}", flush=True)
+        return None
+
+
 def _prepare_eval_context(
     *,
     sync_base: str | None,
@@ -527,6 +570,10 @@ def _prepare_eval_context(
     n_windows: int,
 ) -> dict:
     """Resolve the tape stamp, and reuse slices when that hash is unchanged."""
+    from hedge_fund.trading.discovery_mode import library_mode
+
+    if library_mode() and sync_base and sync_token:
+        ensure_library_daily(sync_base, sync_token)
     history_stamp: dict | None = None
     if sync_base and sync_token:
         history_stamp = ensure_shared_history(sync_base, sync_token)
@@ -751,6 +798,54 @@ def _http_bytes(url: str, *, token: str | None = None, timeout: int = 120) -> by
         raise RuntimeError(f"GET {url} failed: {exc.reason}") from exc
 
 
+def _http_get(
+    url: str,
+    *,
+    token: str | None = None,
+    extra: dict | None = None,
+    timeout: int = 60,
+):
+    """GET bytes. 304 is a result, not an error. The token stays in the header."""
+    headers = {"Accept": "application/octet-stream"}
+    if token:
+        headers["X-Discovery-Token"] = token
+    if extra:
+        headers.update({k: v for k, v in extra.items() if v})
+    req = Request(url, headers=headers, method="GET")
+    try:
+        with urlopen(req, timeout=timeout) as resp:
+            return int(resp.status), resp.headers, resp.read()
+    except HTTPError as exc:
+        if exc.code == 304:
+            return 304, exc.headers, b""
+        detail = exc.read().decode("utf-8", errors="replace")[:400]
+        raise RemoteHTTPError(
+            f"GET {url} -> {exc.code}: {detail}",
+            code=exc.code,
+            retry_after=_retry_after_seconds(exc.headers),
+            body=detail,
+        ) from exc
+    except URLError as exc:
+        raise RuntimeError(f"GET {url} failed: {exc.reason}") from exc
+
+
+def _header(headers, name: str) -> str | None:
+    if headers is None:
+        return None
+    value = headers.get(name)
+    if not value:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _redact(text: str, token: str | None) -> str:
+    """Drop the ingest token if a response echoed it. Logs must not contain it."""
+    if token and text:
+        return text.replace(token, "[redacted]")
+    return text
+
+
 # Shared-tape problems skip this batch. They must not kill the farm loop.
 HISTORY_BACKOFF_SECONDS = 60
 
@@ -761,6 +856,10 @@ class HistoryUnavailable(Exception):
     def __init__(self, message: str, retry_after: int | None = None) -> None:
         super().__init__(message)
         self.retry_after = retry_after
+
+
+class LibraryTapeUnavailable(HistoryUnavailable):
+    """Warmed BTC daily bars are missing. Do not claim ``lib.*`` names."""
 
 
 class RemoteHTTPError(RuntimeError):
@@ -793,6 +892,139 @@ def _backoff_seconds(exc: HistoryUnavailable) -> int:
     if isinstance(retry, (int, float)) and not isinstance(retry, bool) and retry > 0:
         return int(retry)
     return HISTORY_BACKOFF_SECONDS
+
+
+def _library_cache_paths(root: Path) -> tuple[Path, Path]:
+    from hedge_fund.library.daily_cache import DAILY_CACHE_NAME
+
+    path = Path(root) / DAILY_CACHE_NAME
+    return path, path.with_name(path.name + ".http.json")
+
+
+def _load_validators(meta_path: Path) -> tuple[str | None, str | None]:
+    try:
+        data = json.loads(meta_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None, None
+    if not isinstance(data, dict):
+        return None, None
+    etag = data.get("etag")
+    modified = data.get("last_modified")
+    return (
+        etag if isinstance(etag, str) and etag else None,
+        modified if isinstance(modified, str) and modified else None,
+    )
+
+
+def _save_validators(meta_path: Path, headers) -> None:
+    payload = {
+        "etag": _header(headers, "ETag"),
+        "last_modified": _header(headers, "Last-Modified"),
+    }
+    meta_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = meta_path.with_name(meta_path.name + ".tmp")
+    tmp.write_text(json.dumps(payload), encoding="utf-8")
+    os.replace(tmp, meta_path)
+
+
+def _drop_library_cache(path: Path, meta_path: Path) -> None:
+    for candidate in (path, meta_path):
+        try:
+            candidate.unlink()
+        except OSError:
+            pass
+
+
+def ensure_library_daily(base_url: str, token: str):
+    """Download prod's warmed BTC daily bars into the local state dir.
+
+    A 304 reuses the local file. A missing, short, or refused tape raises
+    :class:`LibraryTapeUnavailable`. Callers must not claim ``lib.*`` names
+    in that case. The token is sent as a header and is removed from errors.
+    """
+    from hedge_fund.library.daily_cache import daily_is_warm, parse_daily_npz
+    from hedge_fund.library.evaluate import build_library_data
+
+    if not token:
+        raise LibraryTapeUnavailable(
+            "library daily tape requires the ingest token",
+            retry_after=HISTORY_BACKOFF_SECONDS,
+        )
+    root = state_root()
+    path, meta_path = _library_cache_paths(root)
+    etag, modified = _load_validators(meta_path) if path.is_file() else (None, None)
+    extra: dict[str, str] = {}
+    if etag:
+        extra["If-None-Match"] = etag
+    if modified:
+        extra["If-Modified-Since"] = modified
+    url = f"{base_url.rstrip('/')}/api/discovery/library/daily"
+
+    def _fetch(conditional: bool):
+        try:
+            return _http_get(
+                url,
+                token=token,
+                extra=extra if conditional and extra else None,
+                timeout=60,
+            )
+        except RemoteHTTPError as exc:
+            retry = exc.retry_after if exc.retry_after else HISTORY_BACKOFF_SECONDS
+            raise LibraryTapeUnavailable(_redact(str(exc), token), retry_after=retry) from exc
+        except Exception as exc:
+            raise LibraryTapeUnavailable(
+                _redact(str(exc), token),
+                retry_after=HISTORY_BACKOFF_SECONDS,
+            ) from exc
+
+    code, headers, body = _fetch(True)
+    if code == 304:
+        try:
+            body = path.read_bytes()
+        except OSError:
+            body = b""
+        if not body:
+            code, headers, body = _fetch(False)
+    parsed = parse_daily_npz(body)
+    warm = parsed is not None and daily_is_warm(parsed[0], parsed[1])
+    ready = None
+    if warm:
+        try:
+            ready = build_library_data(parsed[0])
+        except ValueError as exc:
+            warm = False
+            refuse = str(exc)
+        else:
+            refuse = ""
+    else:
+        refuse = "BTC daily tape does not start at 2017-08-17"
+    if not warm or ready is None:
+        _drop_library_cache(path, meta_path)
+        raise LibraryTapeUnavailable(refuse, retry_after=HISTORY_BACKOFF_SECONDS)
+    if code != 304:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(path.name + ".part")
+        try:
+            tmp.write_bytes(body)
+            os.replace(tmp, path)
+            _save_validators(meta_path, headers)
+        except OSError as exc:
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+            raise LibraryTapeUnavailable(
+                f"library daily cache not written: {exc}",
+                retry_after=HISTORY_BACKOFF_SECONDS,
+            ) from exc
+        print(
+            f"discovery_worker: library daily bars={len(parsed[0])} "
+            f"first={int(parsed[0].ts[0])} last={int(parsed[0].ts[-1])}",
+            flush=True,
+        )
+    _SESSION["library_ready"] = ready
+    _SESSION["library_etag"] = hashlib.sha256(body).hexdigest()
+    return ready
 
 
 def _claim_reply_maybe_lost(exc: Exception) -> bool:
@@ -1987,8 +2219,8 @@ def _run_loop(
             except HistoryUnavailable as exc:
                 delay = _backoff_seconds(exc)
                 print(
-                    f"discovery_worker: shared tape not ready ({exc}); "
-                    f"backing off {delay}s",
+                    "discovery_worker: shared tape not ready "
+                    f"({_redact(str(exc), token)}); backing off {delay}s",
                     flush=True,
                 )
                 if args.once:
@@ -2004,6 +2236,23 @@ def _run_loop(
                 time.sleep(max(5, args.idle_sleep))
                 continue
         else:
+            from hedge_fund.trading.discovery_mode import library_mode
+
+            if library_mode():
+                try:
+                    ensure_library_daily(base, token or "")
+                except LibraryTapeUnavailable as exc:
+                    delay = _backoff_seconds(exc)
+                    print(
+                        "discovery_worker: library daily tape unavailable "
+                        f"({_redact(str(exc), token)}); not claiming lib.* names; "
+                        f"backing off {delay}s",
+                        flush=True,
+                    )
+                    if args.once:
+                        return 1
+                    time.sleep(delay)
+                    continue
             try:
                 # At least one name per slot. A smaller --max-names used to
                 # lease a single retest and leave the other core idle.
@@ -2121,8 +2370,8 @@ def _run_loop(
             except HistoryUnavailable as exc:
                 delay = _backoff_seconds(exc)
                 print(
-                    f"discovery_worker: shared tape not ready ({exc}); "
-                    f"backing off {delay}s",
+                    "discovery_worker: shared tape not ready "
+                    f"({_redact(str(exc), token)}); backing off {delay}s",
                     flush=True,
                 )
                 _release_remote_safe(base, token, worker_id, names=names, status="idle")

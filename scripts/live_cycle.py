@@ -85,8 +85,37 @@ def main() -> int:
         write_pipeline_stamp("idle", "finished")
     except Exception as exc:
         print(f"live_cycle: idle stamp failed: {exc}", flush=True)
+    _publish_library_daily()
     _spawn_block_report_publish()
     return rc
+
+
+def _publish_library_daily() -> None:
+    """Write the BTC daily file the web sends to library workers.
+
+    Resampling happens in this process, and only when that file is stale.
+    A missing 2017 prefix is logged. It does not fail the trading cycle,
+    and the web process does not resample in its place.
+    """
+    try:
+        from hedge_fund.library.daily_cache import publish_library_daily
+
+        info = publish_library_daily()
+    except Exception as exc:
+        print(f"live_cycle: library daily cache not published: {exc}", flush=True)
+        return
+    if info.get("ok"):
+        print(
+            f"live_cycle: library daily bars={info.get('bars')} "
+            f"first={info.get('first_ts')} last={info.get('last_ts')}",
+            flush=True,
+        )
+        return
+    print(
+        "live_cycle: library daily tape is not warm from 2017-08-17; "
+        "discovery workers will not claim lib.* names",
+        flush=True,
+    )
 
 
 def _spawn_block_report_publish() -> None:

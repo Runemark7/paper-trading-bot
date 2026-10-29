@@ -139,8 +139,10 @@ No PVC copy and no `kubectl port-forward`. Default is **claim mode**: prod
 leases names, so a Linux laptop and jensa can run at the same time without
 evaluating the same name. The worker does not need the recipe or a copy of
 the discovery log — only the URL and the token. It downloads the shared
-tape from prod (`GET /api/discovery/history`). No database credentials
-and no `crypto_history_5m.json` placeholder.
+tape from prod (`GET /api/discovery/history`). In library mode it also
+downloads warmed BTC daily bars (`GET /api/discovery/library/daily`,
+same token) and does not claim `lib.*` names when that file is missing.
+No database credentials and no `crypto_history_5m.json` placeholder.
 
 1. Worker polls `GET /api/discovery/summary?compact=1` for the Start/Stop flag.
 2. `POST /api/discovery/claim` `{worker_id, n, parallel}` with
