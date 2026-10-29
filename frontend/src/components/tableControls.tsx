@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import type { SortDir } from "../status/championFilters";
 
 export function FilterInput({
@@ -34,31 +35,36 @@ export function SortTh<K extends string>({
   sort,
   onCycle,
   align = "left",
+  info,
 }: {
   label: string;
   column: K;
   sort: { key: K; dir: SortDir };
   onCycle: (key: K) => void;
   align?: "left" | "right";
+  info?: ReactNode;
 }) {
   const active = sort.key === column;
   const arrow = active ? (sort.dir === "asc" ? "↑" : "↓") : "↕";
   const ariaSort = active ? (sort.dir === "asc" ? "ascending" : "descending") : "none";
   return (
     <th className={`${align === "right" ? "text-right" : "text-left"} py-1 px-1.5`} aria-sort={ariaSort}>
-      <button
-        type="button"
-        onClick={() => onCycle(column)}
-        aria-label={`Sort by ${label}`}
-        className={`inline-flex items-center gap-1 min-h-11 uppercase tracking-wider whitespace-nowrap ${
-          align === "right" ? "ml-auto" : ""
-        } ${active ? "text-white" : "text-white/40 hover:text-white/70"}`}
-      >
-        {label}
-        <span className={active ? "text-white/80" : "text-white/25"} aria-hidden="true">
-          {arrow}
-        </span>
-      </button>
+      <div className={`inline-flex items-center gap-1 ${align === "right" ? "ml-auto" : ""}`}>
+        <button
+          type="button"
+          onClick={() => onCycle(column)}
+          aria-label={`Sort by ${label}`}
+          className={`inline-flex items-center gap-1 min-h-11 uppercase tracking-wider whitespace-nowrap ${
+            active ? "text-white" : "text-white/40 hover:text-white/70"
+          }`}
+        >
+          {label}
+          <span className={active ? "text-white/80" : "text-white/25"} aria-hidden="true">
+            {arrow}
+          </span>
+        </button>
+        {info}
+      </div>
     </th>
   );
 }
