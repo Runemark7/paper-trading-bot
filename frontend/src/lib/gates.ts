@@ -1,6 +1,8 @@
 /**
- * Gate v5 checks in plain words. Thresholds mirror hedge_fund/trading/constants.py
- * (GATE_RULES gate_v5_btc_holdout_dsr_pbo_20261027). Display only; the server decides.
+ * Gate v6 checks in plain words. Thresholds mirror hedge_fund/trading/constants.py
+ * (GATE_RULES gate_v6_library_warmup_20261029). These are the daily library
+ * floors. The 5m champions still use rm_v1 with 30 out-of-sample trades and
+ * 8 holdout trades. Display only; the server decides.
  */
 
 export type GateKey =
@@ -28,8 +30,8 @@ export const GATES: GateInfo[] = [
   {
     key: "trades",
     label: "Enough trades",
-    rule: "≥ 30 out-of-sample trades",
-    plain: "At least 30 trades across the walk-forward test windows, so the result is not a handful of lucky trades.",
+    rule: "≥ 8 out-of-sample round-trips",
+    plain: "At least 8 closed round-trips on the warmed daily book. The 5m path still requires 30.",
     stage: "floor",
   },
   {
@@ -50,7 +52,7 @@ export const GATES: GateInfo[] = [
     key: "holdout",
     label: "Sealed holdout year",
     rule: "2025-10-01 → 2026-10-01",
-    plain: "A full year the search never sees. The strategy must still have Sharpe ≥ 0.30, at least 8 trades, and beat sma_stack there.",
+    plain: "A full year the search never sees. The daily library must still have Sharpe ≥ 0.30, at least 2 trades, and beat sma_stack there. The 5m path still requires 8 holdout trades.",
     stage: "robustness",
   },
   {
@@ -71,7 +73,7 @@ export const GATES: GateInfo[] = [
     key: "perturb",
     label: "Survives small tweaks",
     rule: "≥ 70% of neighbours pass",
-    plain: "Nudge each parameter by 10–20%. At least 70% of those neighbours must still clear the trade and Sharpe floors, so it is not a lone spike.",
+    plain: "Each declared neighbour must be scored. At least 70% must still clear the trade and Sharpe floors, so it is not a lone spike.",
     stage: "robustness",
   },
   {
@@ -87,15 +89,15 @@ const EXTRA: GateInfo[] = [
   {
     key: "windows",
     label: "Incomplete data",
-    rule: "all 18 windows scored",
-    plain: "The backtest did not produce the expected number of walk-forward windows.",
+    rule: "~390-day blocks tile the warmed span",
+    plain: "PBO blocks of about 390 days must tile the warmed daily book through the day before the holdout. The 5m path still uses 18 windows of 87 days.",
     stage: "other",
   },
   {
     key: "bh_legacy",
     label: "Buy-and-hold (old rule)",
     rule: "info only under v5",
-    plain: "An older gate required beating buy-and-hold. Gate v5 reports buy-and-hold for context only.",
+    plain: "An older gate required beating buy-and-hold. Gate v6 reports buy-and-hold for context only.",
     stage: "other",
   },
   {
@@ -135,8 +137,8 @@ export const GATE_THRESHOLDS = {
   neighbours: 0.7,
   cost: 0.3,
   sharpe: 0.3,
-  trades: 30,
-  holdoutTrades: 8,
+  trades: 8,
+  holdoutTrades: 2,
 };
 
 export const HOLDOUT_SPAN = "2025-10-01 → 2026-10-01";

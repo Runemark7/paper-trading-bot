@@ -596,7 +596,16 @@ def discover_and_qualify(
     Stops after ``max_names`` or ``time_budget_seconds`` so live_cycle can
     still run ``run_isolated`` in the same 300s tick. ``batch_size`` is a
     leftover-prefix test hook, not a random sample of 30.
+
+    Gate v6 library mode (the default) has no in-cycle tournament: library
+    names are evaluated by the discovery worker or ``scripts/run_library.py``
+    and nothing is minted here.
     """
+    from hedge_fund.trading.discovery_mode import library_mode
+
+    if library_mode():
+        print("discover_and_qualify: library mode, in-cycle tournament skipped", flush=True)
+        return [], []
     data = _load_qual_history(keep_bars=qual_store_bars())
     if not data:
         return [], []

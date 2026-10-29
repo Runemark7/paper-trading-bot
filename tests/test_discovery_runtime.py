@@ -434,7 +434,7 @@ class CompactDiscoveryLogTests(unittest.TestCase):
                         "fail_reasons": ["oos_sharpe 0.10 < 0.30"],
                         "timeframe": "5m",
                         "risk_policy": "rm_v1",
-                        "gate_rules": "gate_v5_btc_holdout_dsr_pbo_20261027",
+                        "gate_rules": "gate_v6_library_warmup_20261029",
                         "tested_at": "2026-10-28T00:00:00+00:00",
                     }],
                 })
@@ -493,7 +493,7 @@ class ClaimIngestHotPathTests(unittest.TestCase):
             "fail_reasons": ["oos_sharpe 0.11 < 0.30"],
             "timeframe": "5m",
             "risk_policy": "rm_v1",
-            "gate_rules": "gate_v5_btc_holdout_dsr_pbo_20261027",
+            "gate_rules": "gate_v6_library_warmup_20261029",
             "tested_at": "2026-10-28T01:00:00+00:00",
         }
         with tempfile.TemporaryDirectory() as tmp:
@@ -758,7 +758,7 @@ class IngestRaceTests(unittest.TestCase):
             "fail_reasons": ["oos_sharpe 0.11 < 0.30"],
             "timeframe": "5m",
             "risk_policy": "rm_v1",
-            "gate_rules": "gate_v5_btc_holdout_dsr_pbo_20261027",
+            "gate_rules": "gate_v6_library_warmup_20261029",
             "tested_at": stamp,
         }
 

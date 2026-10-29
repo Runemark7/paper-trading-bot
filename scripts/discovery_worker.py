@@ -58,6 +58,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from hedge_fund.library.catalog import claim_names, is_library_name
 from hedge_fund.paths import state_root
 from hedge_fund.trading.champions import load_graduated, load_pool, retired_names, save_graduated, save_pool
 from hedge_fund.trading.constants import (
@@ -132,6 +133,7 @@ _HOLDOUT_BH = None
 _N_TRIALS = None
 _N_TRIALS_RETEST = None
 _RETEST_NAMES: frozenset[str] = frozenset()
+_LIBRARY = None
 
 
 def _init_pool(
@@ -146,10 +148,12 @@ def _init_pool(
     n_trials: int | None = None,
     retest_names: frozenset[str] | set[str] | list[str] | None = None,
     n_trials_retest: int | None = None,
+    library=None,
 ) -> None:
     global _SLICES, _BH, _SMA, _N_WINDOWS, _BH_DSR
     global _ETH_SLICES, _HOLDOUT, _HOLDOUT_BH, _N_TRIALS
-    global _N_TRIALS_RETEST, _RETEST_NAMES
+    global _N_TRIALS_RETEST, _RETEST_NAMES, _LIBRARY
+    _LIBRARY = library
     _SLICES = slices
     _BH = bh
     _SMA = sma
@@ -179,7 +183,16 @@ def _eval_name(
 
     A reused pool is not re-initialised when the census changes between
     claims, so the parent passes that name's N on the task.
+
+    A library name runs the gate-v6 ``signal_exit`` evaluation on daily
+    bars. Its trial count is the library's grid size, not the census.
     """
+    if is_library_name(name):
+        if _LIBRARY is None:
+            raise RuntimeError("library daily bars were not loaded")
+        from hedge_fund.library.evaluate import evaluate_library_record
+
+        return evaluate_library_record(name, _LIBRARY)
     trials = n_trials if explicit_trials else _trials_for(name)
     record = evaluate_strategy_record(
         name,
@@ -217,6 +230,7 @@ def _new_eval_pool(
     n_trials: int | None = None,
     retest_names: frozenset[str] | set[str] | list[str] | None = None,
     n_trials_retest: int | None = None,
+    library=None,
 ):
     # fork() copies thread state. Stop the post thread first so a child
     # does not inherit its queue lock. Queued posts stay in the queue
@@ -229,7 +243,7 @@ def _new_eval_pool(
         initializer=_init_pool,
         initargs=(
             slices, bh, sma, n_windows, bh_dsr, eth_slices, holdout, holdout_bh,
-            n_trials, retest_names, n_trials_retest,
+            n_trials, retest_names, n_trials_retest, library,
         ),
     )
 
@@ -359,6 +373,7 @@ def _acquire_eval_pool(n_workers: int, bundle: dict, n_trials, retest_names, n_t
         n_trials,
         retest_names,
         n_trials_retest,
+        bundle.get("library"),
     )
     _SESSION["pool"] = pool
     _SESSION["pool_workers"] = n_workers
@@ -418,6 +433,7 @@ def _load_eval_bundle(history_stamp: dict | None, n_windows: int, *, claim_mode:
         raise SystemExit("BTC/USDT tape missing; discovery is BTC-only")
     eth_rows = _symbol_rows(data, CROSS_ASSET_SYMBOL, purpose="walkforward")
     holdout = _holdout_sample(data)
+    library = _library_data(data)
     try:
         slices = _window_slices(
             {TRADE_SYMBOLS[0]: btc_rows},
@@ -470,11 +486,37 @@ def _load_eval_bundle(history_stamp: dict | None, n_windows: int, *, claim_mode:
         "eth_slices": eth_slices,
         "holdout": holdout,
         "holdout_bh": holdout_bh,
+        "library": library,
         "n_windows": n_windows,
         "history_stamp": history_stamp,
         "sha": _stamp_sha(history_stamp),
         "state": _state_key(),
     }
+
+
+def _library_data(data: dict):
+    """Completed daily BTC bars for library names.
+
+    Prefer the library tape (Binance listing, 2017-08-17). The canonical
+    5m rows are cut at 2021-01-26, which leaves long lookbacks undefined.
+    A short tape raises inside ``build_library_data`` and this returns
+    None, so the name is not scored as if those days were flat. The sealed
+    holdout is cut out of the discovery series inside ``build_library_data``.
+    """
+    from hedge_fund.library.evaluate import build_library_data, library_data_from_rows
+    from hedge_fund.library.tape import load_library_daily
+
+    try:
+        bars = load_library_daily()
+        if len(bars):
+            return build_library_data(bars)
+        rows = data.get(TRADE_SYMBOLS[0])
+        if not _looks_like_bars(rows):
+            return None
+        return library_data_from_rows(rows)
+    except Exception as exc:
+        print(f"discovery_worker: library daily bars unavailable: {exc}", flush=True)
+        return None
 
 
 def _prepare_eval_context(
@@ -952,6 +994,13 @@ def _plan_batch(max_names: int) -> tuple[list[str], list[str], list[str]]:
     blocked = {c["name"] for c in (st.get("champions") or []) if c.get("name")}
     blocked |= {g["name"] for g in grads if isinstance(g, dict) and g.get("name")}
     blocked |= retired_names()
+    from hedge_fund.trading.discovery_mode import library_mode
+
+    if library_mode():
+        # Library mode never mints: plan the untested canonical library names.
+        tested = tested_discovery_names(load_discovery_log())
+        names = [n for n in claim_names() if n not in tested and n not in blocked]
+        return names[: max(1, int(max_names))], names, []
     universe = discovery_universe()
     leftovers = untested_candidates(blocked, universe)
     log = load_discovery_log()
@@ -1651,7 +1700,7 @@ def run_batch(
             _init_pool(
                 slices, bh, sma, n_windows, bh_dsr,
                 eth_slices, holdout, holdout_bh, n_trials,
-                retest_names, n_trials_retest,
+                retest_names, n_trials_retest, bundle.get("library"),
             )
             for i, name in enumerate(cheap):
                 evaluating_names[:] = [name]

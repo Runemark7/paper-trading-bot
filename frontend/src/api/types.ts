@@ -604,3 +604,74 @@ export interface CandlesPayload {
   source?: string;
   paper_only?: boolean;
 }
+
+/** GET /api/discovery/library — catalog plus stored gate-v6 results. No backtest on the request. */
+export interface LibraryCitation {
+  authors: string;
+  year: number;
+  title: string;
+  venue: string;
+  peer_reviewed: boolean;
+  tested_rule: string;
+  implemented_rule: string;
+  differences: string;
+  link: string;
+  short: string;
+}
+
+export interface LibraryParam {
+  name: string;
+  value: number;
+  neighbours: number[];
+  unit: string;
+}
+
+export interface LibraryResult {
+  qualified?: boolean;
+  daily_sharpe?: number | null;
+  trades?: number | null;
+  test_pnl?: number | null;
+  bh_daily_sharpe?: number | null;
+  bh_oos_pnl?: number | null;
+  failing_checks?: string[];
+  count_only?: boolean;
+  holdout_sharpe?: number | null;
+  holdout_trades?: number | null;
+  holdout_pnl?: number | null;
+  holdout_bh_sharpe?: number | null;
+  cost_sharpe?: number | null;
+  dsr?: number | null;
+  n_trials?: number | null;
+  pbo?: number | null;
+  neighbours?: number | null;
+  neighbours_pass?: number | null;
+}
+
+export interface LibraryStrategyRow {
+  name: string;
+  key: string;
+  title: string;
+  family: string;
+  evaluation: string;
+  params: LibraryParam[];
+  safety_stop_pct: number | null;
+  citation: LibraryCitation;
+  status: "tested" | "testing" | "queued" | string;
+  result: LibraryResult | null;
+}
+
+export interface LibraryTable {
+  paper_only: boolean;
+  source?: string;
+  gate_rules?: string;
+  progress: {
+    strategies: number;
+    tested: number;
+    leased: number;
+    queued: number;
+    passed: number;
+    trial_count: number;
+  };
+  strategies: LibraryStrategyRow[];
+  note: string;
+}

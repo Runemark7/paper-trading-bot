@@ -3,7 +3,7 @@ import { BlockChips, EmptyState, GatePill, InfoTip, Panel, RuleList, SectionTitl
 import { MonoName } from "../components/ui";
 import { GATES, GATE_THRESHOLDS, HOLDOUT_SPAN, gateInfo } from "../lib/gates";
 
-/** The eight gate v5 checks in plain words, with how often each one rejected a name. */
+/** The eight gate v6 checks in plain words, with how often each one rejected a name. */
 export function GateLegend({ insights }: { insights?: DiscoveryInsights }) {
   const counts = new Map((insights?.gate_failures ?? []).map((g) => [g.gate, g.count]));
   const max = Math.max(1, ...GATES.map((g) => counts.get(g.key) ?? 0));
@@ -18,8 +18,8 @@ export function GateLegend({ insights }: { insights?: DiscoveryInsights }) {
         title="The gate: 8 checks every strategy must pass"
         aside={insights ? `rejections among ${tested?.toLocaleString("en-US")} names under the current gate` : undefined}
         info={
-          <InfoTip label="Gate v5" align="left">
-            The rule set every discovery result is judged by (gate_v5). One fail on any check rejects the strategy for good — it is never retested.
+          <InfoTip label="Gate v6" align="left">
+            The rule set every discovery result is judged by (gate v6). The library is scored on daily bars; the same floors still apply. One fail on any check rejects the strategy for good — it is never retested.
           </InfoTip>
         }
       >
@@ -60,7 +60,7 @@ export function GateLegend({ insights }: { insights?: DiscoveryInsights }) {
       <div className="mt-4 grid gap-2 sm:grid-cols-2 text-xs text-white/55">
         <div className="rounded-lg bg-white/[0.03] px-3 py-2">
           <span className="font-semibold text-white/80">Buy-and-hold is context only.</span> It is shown next to results but is never a
-          pass rule under gate v5.
+          pass rule under gate v6.
         </div>
         <div className="rounded-lg bg-white/[0.03] px-3 py-2">
           <span className="font-semibold text-white/80">Sealed holdout {HOLDOUT_SPAN}.</span> That year never feeds the search, so
@@ -105,7 +105,7 @@ function NearMissCard({ row, rank }: { row: InsightRow; rank: number }) {
       </div>
       <div className="mt-3 grid grid-cols-3 sm:grid-cols-6 gap-1.5">
         <Metric label="Sharpe" value={num(row.sharpe)} ok={row.sharpe != null ? row.sharpe >= GATE_THRESHOLDS.sharpe : null} hint="walk-forward Sharpe, needs ≥ 0.30" />
-        <Metric label="Trades" value={row.trades != null ? String(row.trades) : "—"} ok={row.trades != null ? row.trades >= GATE_THRESHOLDS.trades : null} hint="out-of-sample trades, needs ≥ 30" />
+        <Metric label="Trades" value={row.trades != null ? String(row.trades) : "—"} ok={row.trades != null ? row.trades >= GATE_THRESHOLDS.trades : null} hint="out-of-sample round-trips, daily library needs ≥ 8" />
         <Metric label="Holdout" value={num(g?.holdout_sharpe)} ok={g?.holdout_sharpe != null ? !row.failed_gates.includes("holdout") : null} hint="Sharpe on the sealed holdout year" />
         <Metric label="DSR" value={num(g?.dsr, 3)} ok={g?.dsr != null ? g.dsr >= GATE_THRESHOLDS.dsr : null} hint="deflated Sharpe, needs ≥ 0.95" />
         <Metric label="PBO" value={num(g?.pbo, 2)} ok={g?.pbo != null ? g.pbo <= GATE_THRESHOLDS.pbo : null} hint="overfitting probability, needs ≤ 0.20" />

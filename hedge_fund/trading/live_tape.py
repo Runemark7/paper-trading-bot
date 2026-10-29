@@ -43,6 +43,7 @@ from hedge_fund.trading.constants import (
     QUAL_SYMBOLS,
     QUAL_TIMEFRAME,
     QUAL_WARMUP_BARS,
+    library_store_bars,
     live_signal_eval_bars,
     qual_keep_bars,
     qual_store_bars,
@@ -380,7 +381,10 @@ def ensure_symbol(
     """
     if symbol not in SYMBOLS:
         raise ValueError(f"live tape is BTC/USDT and ETH/USDT only, got {symbol}")
-    target = qual_store_bars() if target_bars is None else int(target_bars)
+    if target_bars is None:
+        target = library_store_bars() if symbol == "BTC/USDT" else qual_store_bars()
+    else:
+        target = int(target_bars)
     if deadline is None:
         deadline = time.monotonic() + _backfill_budget_seconds()
     page_cap = (target // CHUNK_SIZE) + 20 if max_pages is None else int(max_pages)
@@ -475,17 +479,23 @@ def ensure_live_tape(
         }
     root = tape_dir(state_dir)
     root.mkdir(parents=True, exist_ok=True)
+    # Status reports the 5m qualification budget. BTC's file is deeper so the
+    # 2017 library prefix is not trimmed off; ETH stays on the qual budget.
     target = qual_store_bars() if target_bars is None else int(target_bars)
     if deadline is None:
         deadline = time.monotonic() + _backfill_budget_seconds()
     try:
-        _import_qual_json(root, target)
+        _import_qual_json(root, library_store_bars() if target_bars is None else target)
     except Exception as exc:  # noqa: BLE001 — network backfill still runs
         print(f"[live tape] json import failed: {exc}", flush=True)
     out: dict[str, dict] = {}
     for sym in SYMBOLS:
+        if target_bars is None:
+            sym_target = library_store_bars() if sym == "BTC/USDT" else qual_store_bars()
+        else:
+            sym_target = target
         arr = ensure_symbol(
-            sym, source=source, state_dir=root, target_bars=target,
+            sym, source=source, state_dir=root, target_bars=sym_target,
             deadline=deadline, max_pages=max_pages,
         )
         out[sym] = {

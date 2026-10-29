@@ -14,9 +14,10 @@ this file is the living topology.
 
 | Piece | Where | What it does |
 |---|---|---|
-| **Mint** | `hedge_fund/trading/refill.py` on the farm | Bounded DIP/MOM + structure AND recipe (`STRUCTURE_NS` through **96** — no `don_hi` / `don_lo` / `near_swing_*` / `dbl_bot` `N>96`), plus densified HTF buyer-regime ANDs (`h1_ema_abv_{12,15,18,20,24,30,36,40,50,60,70}` / `h1_sma_abv_{12,15,20,24,30,36,40,50,60,70}` / `h4_ema_abv_{12,15,20,24,30,36,40,48,60}` / `h4_sma_abv_{12,15,20,24,30,36,40,50}`). **Island densify #2c first** (`rsi_14_>45`, `sma_abv_35` on h1 × `mom_18b_gt2pc`). Deprioritized island densify #2b: h4 twins of the paying `h1_* & mom_18b_gt2pc & *_abv_30 & rsi_14_>50` shape (`ISLAND2B_H4` × `mom_18b_gt2pc`/`mom_24b_gt2pc` × `sma_abv_30`/`ema_abv_30` × `rsi_14_>50`, sparse 3-atoms, dual h1+h4 and h1-only 5–7). Not another `*_abv_40` / `rsi_>60` lead. Then drained **fresh never-tested families**: admit-island densify (`sma_abv_40` / `ema_abv_40`, `rsi_14_>60`, `MOM_FILTERS_HTF_INTERMEDIATE` on paid-off `h1_*_abv_{20,24,30,50,60}` spines, `h1_sma_abv_70`) then drained unused HTF/mom (`REGIME_ATOMS_FRESH` / `MOM_FILTERS_HTF_FRESH`) and winner-shaped stacks (REGIME+MOM × `sma_abv_30` / `ema_abv_30` × rsi, plus `rsi_14_>55`). Then drained admit-island **3-atoms first**: `regime&mom&sma_abv_50` / `ema_abv_20` (not HTF×mom×structure; recipe no longer ANDs `mom_gt` with `mild_dip`). Then **4–7 atom role-bucket** stacks on that island are continuation / RSI only (depth 4–5; REGIME+MOM spine, 0–2 continuation, 0–1 RSI; never a dip on that spine; DEEP includes `h1_ema_abv_60` / `h1_sma_abv_50` / `h1_sma_abv_60`). Cheap `near_swing_hi` N≤48 only at depth 7 was dip-gated and is not minted. Then HTF×mom 2-atom (`regime&mom`, including `MOM_FILTERS_HTF_DENSE` / `MOM_FILTERS_HTF_EXPAND` / `MOM_FILTERS_HTF_FRESH`) — 2-atom only vs expensive structure — then HTF×dip 2-atom only. Mom-before-dip: `mom_18b_gt2pc` first among regime mom bases, `dip_24b_lt5pc` / `dip_24b_lt6pc` / `dip_18b_lt2pc` first among regime dip bases (`REGIME_DIP_PRIORITY`). Central guard (`name_has_mom_gt_and_dip`) drops any `mom_*_gt*` ∧ `dip_*` stack. When never-tested leftovers run dry, the next handful is appended to `state/discovery_extended.json`. Static `generate_universe()` stays inside the ~40–120 compiled-list band. |
-| **Farm** | Linux laptop and Windows `jensa` | `scripts/discovery_worker.py` evaluates names against local `state/crypto_history_5m.json` (Binance 5m, **BTC/USDT and ETH/USDT only**). Discovery qualification and new live entries are BTC/USDT only; ETH/USDT is the soft cross-asset check and stays on the tape so an existing ETH lot can still hit its stop. Default: `POST /api/discovery/claim` leases names on prod (several hosts, no shared cursor). `--local-plan` is the old local plan. Same fail-once / aggregate-OOS / `rm_v1` / 5m rules as `scripts/tournament_engine.py`, then gate v5. Before walk-forward: structure lookback cap (`DISCOVERY_STRUCTURE_LOOKBACK_MAX` = 96) fail-parks `lookback_too_expensive`; 600s per-name eval timeout is a backstop only. The worker keeps one eval in flight per core, posts each result as it finishes, and reuses the process pool and loaded tape until the tape hash changes. Ops/throughput, not a gate softening. When the claimable pool is empty, prod refills from the same recipe. Mint, densify, lift and refill run inside a holdout seal and cannot read bars from 2025-10-01 onward. |
-| **Eval** | lookback guard → `parse_strategy` → walk-forward → backtest → gate | Name string → structure lookback cap → AND atoms on native 5m → 18 sealed discovery segments (the first of the 23-segment grid, each ending before 2025-10-01) → `rm_v1` paper backtest on BTC/USDT → v3 aggregate in `hedge_fund/trading/qualify.py` → gate v5 (holdout once on Sharpe, trades, and sma_stack; DSR, PBO, neighbours, cost-stress Sharpe; buy-and-hold on the discovery windows, the holdout, and the cost-stress re-run is informational; ETH Sharpe is recorded and does not block). |
+| **Library** | `hedge_fund/library/catalog.py` | Default discovery source since gate v6 (2026-10-28; warmed 2026-10-29). A claim leases only the canonical variant of each pre-registered daily strategy (`lib.<key>`), in catalog order. No random mint, no lift, no refill, no buy-and-hold retest. The one-at-a-time grid is scored inside that evaluation for neighbours and PBO and is not a search. DSR trial count is every grid point (64). Indicators use BTC history from 2017-08-17; a day that is not warm is refused. A 20% stop fills at the next open and is not a second trial. `scripts/run_library.py` evaluates the library locally. |
+| **Mint** | `hedge_fund/trading/refill.py` on the farm | **Off by default.** Runs only when `PAPER_DISCOVERY_SOURCE=random`. Bounded DIP/MOM + structure AND recipe (`STRUCTURE_NS` through **96** — no `don_hi` / `don_lo` / `near_swing_*` / `dbl_bot` `N>96`), plus densified HTF buyer-regime ANDs (`h1_ema_abv_{12,15,18,20,24,30,36,40,50,60,70}` / `h1_sma_abv_{12,15,20,24,30,36,40,50,60,70}` / `h4_ema_abv_{12,15,20,24,30,36,40,48,60}` / `h4_sma_abv_{12,15,20,24,30,36,40,50}`). **Island densify #2c first** (`rsi_14_>45`, `sma_abv_35` on h1 × `mom_18b_gt2pc`). Deprioritized island densify #2b: h4 twins of the paying `h1_* & mom_18b_gt2pc & *_abv_30 & rsi_14_>50` shape (`ISLAND2B_H4` × `mom_18b_gt2pc`/`mom_24b_gt2pc` × `sma_abv_30`/`ema_abv_30` × `rsi_14_>50`, sparse 3-atoms, dual h1+h4 and h1-only 5–7). Not another `*_abv_40` / `rsi_>60` lead. Then drained **fresh never-tested families**: admit-island densify (`sma_abv_40` / `ema_abv_40`, `rsi_14_>60`, `MOM_FILTERS_HTF_INTERMEDIATE` on paid-off `h1_*_abv_{20,24,30,50,60}` spines, `h1_sma_abv_70`) then drained unused HTF/mom (`REGIME_ATOMS_FRESH` / `MOM_FILTERS_HTF_FRESH`) and winner-shaped stacks (REGIME+MOM × `sma_abv_30` / `ema_abv_30` × rsi, plus `rsi_14_>55`). Then drained admit-island **3-atoms first**: `regime&mom&sma_abv_50` / `ema_abv_20` (not HTF×mom×structure; recipe no longer ANDs `mom_gt` with `mild_dip`). Then **4–7 atom role-bucket** stacks on that island are continuation / RSI only (depth 4–5; REGIME+MOM spine, 0–2 continuation, 0–1 RSI; never a dip on that spine; DEEP includes `h1_ema_abv_60` / `h1_sma_abv_50` / `h1_sma_abv_60`). Cheap `near_swing_hi` N≤48 only at depth 7 was dip-gated and is not minted. Then HTF×mom 2-atom (`regime&mom`, including `MOM_FILTERS_HTF_DENSE` / `MOM_FILTERS_HTF_EXPAND` / `MOM_FILTERS_HTF_FRESH`) — 2-atom only vs expensive structure — then HTF×dip 2-atom only. Mom-before-dip: `mom_18b_gt2pc` first among regime mom bases, `dip_24b_lt5pc` / `dip_24b_lt6pc` / `dip_18b_lt2pc` first among regime dip bases (`REGIME_DIP_PRIORITY`). Central guard (`name_has_mom_gt_and_dip`) drops any `mom_*_gt*` ∧ `dip_*` stack. When never-tested leftovers run dry, the next handful is appended to `state/discovery_extended.json`. Static `generate_universe()` stays inside the ~40–120 compiled-list band. |
+| **Farm** | Linux laptop and Windows `jensa` | `scripts/discovery_worker.py` evaluates names against local `state/crypto_history_5m.json` (Binance 5m, **BTC/USDT and ETH/USDT only**). Discovery qualification and new live entries are BTC/USDT only; ETH/USDT is the soft cross-asset check and stays on the tape so an existing ETH lot can still hit its stop. Default: `POST /api/discovery/claim` leases names on prod (several hosts, no shared cursor). In library mode (the default) those names are the canonical library strategies, scored with `signal_exit` on completed daily bars from that tape. `--local-plan` is the old local plan and, in library mode, also returns only those names. `PAPER_DISCOVERY_SOURCE=random` keeps the 5m `rm_v1` path. Before that walk-forward: structure lookback cap (`DISCOVERY_STRUCTURE_LOOKBACK_MAX` = 96) fail-parks `lookback_too_expensive`; 600s per-name eval timeout is a backstop only. The worker keeps one eval in flight per core, posts each result as it finishes, and reuses the process pool and loaded tape until the tape hash changes. Ops/throughput, not a gate softening. When the claimable pool is empty, random mode refills from the recipe; library mode does not. Mint, densify, lift and refill run inside a holdout seal and cannot read bars from 2025-10-01 onward. |
+| **Eval** | library `signal_exit`, or (random mode) lookback guard → `parse_strategy` → walk-forward → backtest → gate | **Default:** canonical `lib.*` name → completed UTC daily bars from BTC history that starts 2017-08-17 → the catalog signal (no lookahead; an unwarmed day fails rather than counting as flat) → `signal_exit` (long or flat, all-in, exit when the signal turns off, next-open fill, 20% stop at the next open) → daily floors (8 out-of-sample round-trips, 2 holdout trades, Sharpe ≥ 0.30, beat `sma_stack`) with DSR N = every library grid point, PBO on ~390-day blocks. **Random mode only** (`PAPER_DISCOVERY_SOURCE=random`): name string → structure lookback cap → AND atoms on native 5m → 18 sealed discovery segments (the first of the 23-segment grid, each ending before 2025-10-01) → `rm_v1` paper backtest on BTC/USDT → v3 aggregate in `hedge_fund/trading/qualify.py` → the 5m floors (30 trades, 8 holdout trades, Sharpe, sma_stack, DSR, PBO, neighbours, cost-stress Sharpe; buy-and-hold informational; ETH Sharpe recorded and does not block). |
 | **Ingest** | `POST /api/discovery/ingest` | Token-gated. Pass → proposed, awaiting approval. It is not seated. Seating is `force_admit` or `promote_candidates`, and that path does not refuse because of how many champions are active. Fail → parked forever (fail-once), except one admin-queued v4 discovery-window buy-and-hold retest. Ingest never culls existing champions. |
 | **Prod** | k8s cycle sidecar | `DISCOVERY_ON_CYCLE=0` — live trading only (`run_isolated` → collect → report). Klines are the persistent BTC/ETH 5m tape at `state/live_tape/*.npy` (qualification span, incremental append), not a 300-bar tail. `GET /api/status` and `/api/summary` include `live_history` (bars and last bar time per symbol). Do not turn discovery back on in-cluster. UI: `/discovery`. |
 | **Farm Start/Stop** | `/discovery` → `POST /api/discovery/farm` | Same ingest token. Worker **idles** (does not exit). Start cannot relaunch a dead process. |
@@ -40,13 +41,16 @@ span (~600787 bars).
 - OOS trades ≥ 30
 - average OOS Sharpe ≥ 0.30
 - beat `sma_stack` on those windows
-- buy-and-hold is informational on the discovery windows, the sealed holdout, and the cost-stress re-run (gate v5, 2026-10-27). Cost stress still requires stressed Sharpe ≥ 0.30
+- buy-and-hold is informational on the discovery windows, the sealed holdout, and the cost-stress re-run (gate v5, 2026-10-27; still true under gate v6). Cost stress still requires stressed Sharpe ≥ 0.30
+- gate v6 daily library (2026-10-29): 8 out-of-sample round-trips, 2 holdout trades, Sharpe ≥ 0.30, beat `sma_stack`, holdout Sharpe ≥ 0.30, DSR ≥ 0.95 with N = 64, PBO ≤ 0.20 on ~390-day blocks, ≥ 70% of neighbours, cost-stress Sharpe ≥ 0.30. The 5m floors in the list above stay 30 and 8. A daily rule that fails only on a trade count is still a fail (`count_only` on the row)
 - all-windows non-negative is a **diagnostic only** (not a veto)
 - fail-once: a non-qualify parks that name forever
 
 **Gate v4 (2026-10-27), on top of those floors.** Discovery scores `DISCOVERY_N_WINDOWS` = 18 (87d segments that end on or before 2025-10-01). `QUAL_N_WINDOWS` = 23 stays the historical full-tape grid and is not what mint reads. The holdout `[2025-10-01, 2026-10-01)` is scored once after a v3 pass and is never written back onto the Sharpe or P&L mint reads. Bars after 2026-10-01 are forward/live only. Extra floors, all config constants: deflated Sharpe probability ≥ 0.95 using the tested-candidate count, CSCV PBO ≤ 0.20 on the candidate plus its parameter neighbours, ≥ 70% of those neighbours still at Sharpe ≥ 0.30 and ≥ 30 trades, and a 2× fee + 5 bps/side re-run that still has Sharpe ≥ 0.30 and beats buy-and-hold. ETH/USDT Sharpe > 0 over the same windows is recorded and does not block. A qualified ingest row without that block is rejected. Forward-test criteria are stored at admission and only flag (live Sharpe < 0 or live max drawdown > 1.5× the backtest max drawdown, after both 90 days and 20 closed trades). Nothing is auto-retired.
 
-**Gate v5 (2026-10-27). No qualification check requires beating buy-and-hold.** `GATE_RULES` = `gate_v5_btc_holdout_dsr_pbo_20261027`. A loss to buy-and-hold, or a missing buy-and-hold daily Sharpe, is not a fail on the discovery windows, the sealed holdout, or the cost-stress re-run. Those figures stay on the row. The holdout still requires Sharpe, the holdout trade floor, and beat `sma_stack`. Cost stress still requires stressed Sharpe ≥ 0.30. Paper graduation after 80 closed trades is net paper P&L > 0 after taker fee and slippage; buy-and-hold P&L is an informational column. There is no champion cap (2026-10-28; the gate v5 forward cap of 5 is deleted). `GET /api/champions` ranks every qualified name that is not already active, graduated, or retired (DSR, then daily Sharpe, then lower PBO) and marks each one `proposed, awaiting approval`. That list does not admit or retire. A newly qualified ingest is not seated. `force_admit` and `promote_candidates` are the explicit seats and do not refuse a sixth, or a fiftieth, active champion. Names already on the book are not retired. The 20-name arena stays deleted.
+**Gate v5 (2026-10-27). No qualification check requires beating buy-and-hold.** Historical tag `V5_GATE_RULES` = `gate_v5_btc_holdout_dsr_pbo_20261027`. A loss to buy-and-hold, or a missing buy-and-hold daily Sharpe, is not a fail on the discovery windows, the sealed holdout, or the cost-stress re-run. Those figures stay on the row. The holdout still requires Sharpe, the holdout trade floor, and beat `sma_stack`. Cost stress still requires stressed Sharpe ≥ 0.30. Paper graduation after 80 closed trades is net paper P&L > 0 after taker fee and slippage; buy-and-hold P&L is an informational column. There is no champion cap (2026-10-28; the gate v5 forward cap of 5 is deleted). `GET /api/champions` ranks every qualified name that is not already active, graduated, or retired (DSR, then daily Sharpe, then lower PBO) and marks each one `proposed, awaiting approval`. That list does not admit or retire. A newly qualified ingest is not seated. `force_admit` and `promote_candidates` are the explicit seats and do not refuse a sixth, or a fiftieth, active champion. Names already on the book are not retired. The 20-name arena stays deleted.
+
+**Gate v6 (warmed 2026-10-29). The default queue is the strategy library.** `GATE_RULES` = `gate_v6_library_warmup_20261029`. The 2026-10-28 stamp `gate_v6_library_signal_exit_20261028` scored NaN lookbacks as flat and is not this gate. Claims serve canonical `lib.*` names only, unless `PAPER_DISCOVERY_SOURCE=random`, which keeps the mint path above. Library names are scored with `signal_exit` on completed daily BTC bars from 2017-08-17 (long or flat, all-in, exit when the signal turns off, next-open fill, 20% stop at the next open, same engine live). A day whose lookback is not warm fails. A fresh book whose signal is already on buys at the first open. DSR uses N = 64, every declared grid point; the stop is not an extra trial. Daily floors are 8 out-of-sample round-trips and 2 holdout trades. The 5m floors stay 30 trades, 8 holdout trades, and the 18×87-day grid. A worker that sends an older tag gets no names. The existing 5m champions keep `rm_v1`. `GET /api/discovery/library` is a read of the catalog and stored results. Library BTC history is `python -m hedge_fund.data.candle_backfill --library` (BTC only, from 2017-08-17). That does not move the 5m canonical start.
 
 Train PnL is logged and never scored. Score is OOS-only. The diagram below still says `Walk-forward 23 x 90d` for the historical grid; discovery scoring uses the 18 sealed segments.
 
@@ -70,16 +74,21 @@ flowchart TB
   ext --> worker
   hist --> worker
 
+  source{"PAPER_DISCOVERY_SOURCE"}
+  lib["Library default: canonical lib.* names\nsignal_exit on completed daily bars\nlong or flat, all-in, exit when signal off\nDSR N = every grid point"]
   guard{"structure lookback > 96?\nor eval_timeout 600s"}
   parse["parse_strategy(name) in dynamic.py\nAND atoms on native 5m\n+ causal HTF regime from 5m"]
   wf["Walk-forward 23 x 90d\n+ 14d indicator pad"]
   bt["Backtest rm_v1"]
   gate["Aggregate OOS gate\nhedge_fund/trading/qualify.py"]
-  worker --> guard
+  worker --> source
+  source -->|"unset: library"| lib
+  source -->|"random"| guard
   guard -->|"yes: ops fail-park"| parkOps["Fail-once: lookback_too_expensive / eval_timeout"]
   guard -->|no| parse --> wf --> bt --> gate
 
   frozen["FROZEN: trades at least 30, Sharpe at least 0.30,\nbeat sma_stack, B and H informational\n(discovery, holdout, cost stress),\ncost stress still clears stressed Sharpe,\nall-windows non-neg diagnostic only, fail-once"]
+  lib --> frozen
   gate --> frozen
 
   ingest["POST /api/discovery/ingest"]
@@ -100,8 +109,10 @@ flowchart TB
   ctl -.->|"pause / resume"| worker
 ```
 
-Caption: Names are minted on the farm, walked on jensa against Binance 5m
-BTC/ETH, then POSTed to prod. The cluster never runs walk-forwards.
+Caption: The default claim serves the strategy library. The worker scores
+those names with `signal_exit` on daily bars from the 5m tape and POSTs
+the result. Random mint runs only when `PAPER_DISCOVERY_SOURCE=random`.
+The cluster never runs walk-forwards.
 Start/Stop on `/discovery` is token-gated and only idles the worker.
 Lookback cap / eval timeout are farm ops (throughput) — they do not
 change OOS thresholds. Mint no longer emits structure `N>96`; leftover
@@ -119,7 +130,7 @@ flowchart LR
   atoms["Atoms on native 5m\nAND joins"]
   pred["Predicate pred"]
   windows["18 sealed discovery segments\nbefore 2025-10-01\n(historical grid is 23)"]
-  score["v3 floors, then gate v5\nDSR, PBO, neighbours, cost-stress Sharpe\nB and H informational"]
+  score["v3 floors, then gate v6\nDSR, PBO, neighbours, cost-stress Sharpe\nB and H informational"]
   decision{"qualify.py"}
   passNode["Pass: proposed, awaiting approval"]
   failNode["Fail: parked forever"]
@@ -132,10 +143,14 @@ flowchart LR
   decision -->|"any frozen gate misses"| failNode
 ```
 
-Caption: `&` in the name is AND (every atom true on that 5m bar). Each
-window backtests with `rm_v1`. A single empty or negative window is
-logged (`all_windows_nonneg`) and does not veto. One fail parks the name.
-Structure lookback > 96 skips walk-forward (ops, not a softer gate).
+Caption: this diagram is the random-mode 5m path
+(`PAPER_DISCOVERY_SOURCE=random`). `&` in the name is AND (every atom
+true on that 5m bar). Each window backtests with `rm_v1`. A library
+name does not enter this graph: it is scored by `signal_exit` on
+completed daily bars and then the same frozen floors. A single empty
+or negative window is logged (`all_windows_nonneg`) and does not veto.
+One fail parks the name. Structure lookback > 96 skips walk-forward
+(ops, not a softer gate).
 
 ---
 

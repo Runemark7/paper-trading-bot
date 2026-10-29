@@ -22,6 +22,7 @@ A small, dependency-free HTTP server (stdlib only) that exposes:
   GET /api/discovery/lift -> top and bottom atoms by net OOS P&L minus buy-and-hold (cached)
   GET /api/discovery/blocks -> exploratory atom-block effects (cached; does not change the gate)
   GET /api/discovery/insights -> per-gate reject counts, near-misses, newest evals
+  GET /api/discovery/library -> gate v6 strategy library: citations, params, stored checks
                                 (display log, cached by its fingerprint; read-only)
   GET /api/discovery/history -> canonical 5m tape hash + data_end (ingest token).
                                 Serves the day-keyed file. 503 + Retry-After when
@@ -598,6 +599,14 @@ class Handler(BaseHTTPRequestHandler):
                 from hedge_fund.trading.requalify import requalify_payload
 
                 self._send_json(requalify_payload(qs.get("batch_id") or None))
+            except Exception as exc:
+                self._send_json({"error": str(exc), "paper_only": True}, 500)
+        elif route == "/api/discovery/library":
+            # Read-only: static catalog + library_results.json + lease file. No compute.
+            try:
+                from hedge_fund.web.discovery import discovery_library_response
+
+                self._send_json(discovery_library_response())
             except Exception as exc:
                 self._send_json({"error": str(exc), "paper_only": True}, 500)
         elif route == "/api/discovery/lift":

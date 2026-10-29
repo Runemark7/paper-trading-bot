@@ -12,6 +12,11 @@ After closes, it syncs results into the champion pool.
 It does NOT open new trades (that stays with the decision cycle). Pure $ /
 no-agent script. Run continuously or on a short cron.
 
+Library champions (``lib.*``, gate v6 signal_exit) have no take-profit.
+Their 20% stop fills at the next daily open inside the library cycle, not
+on an intraday heartbeat price (``library_stop_check`` returns 0). The
+2:1 rule never touches them.
+
 Usage:
   .venv/bin/python -m hedge_fund.trading.heartbeat [--once]
 """
@@ -23,6 +28,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from hedge_fund.library.catalog import is_library_name
 from hedge_fund.paths import state_root
 from hedge_fund.brokers.paper import PaperBroker
 from hedge_fund.calibration import CalibrationStore
@@ -75,6 +81,14 @@ def heartbeat_once() -> int:
         except Exception:
             px[sym] = None
     for db_path, strat in accounts:
+        if is_library_name(strat):
+            try:
+                from hedge_fund.library.live import library_stop_check
+
+                closed_total += library_stop_check(strat, Path(db_path).parent, px.get("BTC/USDT"), now)
+            except Exception:
+                pass
+            continue
         try:
             loop, _data, store = _build_for(db_path, strat)
             if not loop.broker.lots:

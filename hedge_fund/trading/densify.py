@@ -341,14 +341,20 @@ def order_seeds(
     left out of that band too: the fallback is for rows that never
     recorded a window count.
     """
+    from hedge_fund.library.catalog import is_library_name
+
     if results is None and not metrics:
-        names = [name for name, qual in index.items() if qual and isinstance(name, str) and name]
+        names = [
+            name for name, qual in index.items()
+            if qual and isinstance(name, str) and name and not is_library_name(name)
+        ]
         names.sort(key=_seed_sort_key)
         return names
     current: list[tuple[bool, float, float, str]] = []
     any_current = False
     for name in index:
-        if not isinstance(name, str) or not name:
+        # A library strategy has no atoms to vary; it is never a seed.
+        if not isinstance(name, str) or not name or is_library_name(name):
             continue
         row = _row_for_seed(name, metrics, results)
         windows = _window_count(row)
@@ -367,7 +373,7 @@ def order_seeds(
         return [item[3] for item in current[:SEED_CAP]]
     near: list[tuple[bool, float, float, str]] = []
     for name in index:
-        if not isinstance(name, str) or not name:
+        if not isinstance(name, str) or not name or is_library_name(name):
             continue
         row = _row_for_seed(name, metrics, results)
         if _window_count(row) is not None:

@@ -1,10 +1,13 @@
 """Exploratory marginal effects of atom families and paired swaps.
 
-Read-only. Pre-holdout rows only: ``gate_rules`` is the current gate
-(18 walk-forward windows that end before the sealed holdout) and the row
-is not an ops park. A row whose window list is a different length, or
-whose ``regimes_tested`` is not that window count, is left out. So are
-rows that carry a window end at or after the holdout.
+Read-only. Pre-holdout rows only: ``gate_rules`` is one of the 5m atom
+rule sets (``ATOM_GATE_RULES``: gate v5 and v6 score 5m names with the
+same engine and floors; 18 walk-forward windows that end before the sealed
+holdout) and the row is not an ops park. Library names (gate v6
+``signal_exit`` strategies) have no atoms and are left out. A row whose
+window list is a different length, or whose ``regimes_tested`` is not that
+window count, is left out. So are rows that carry a window end at or after
+the holdout.
 
 The depth control is a matched comparison: within each atom-count, the
 mean with the block minus the mean without it, weighted by the smaller
@@ -19,7 +22,8 @@ from __future__ import annotations
 import math
 from collections import defaultdict
 
-from hedge_fund.trading.constants import DISCOVERY_N_WINDOWS, GATE_RULES, HOLDOUT_START_MS
+from hedge_fund.library.catalog import is_library_name
+from hedge_fund.trading.constants import ATOM_GATE_RULES, DISCOVERY_N_WINDOWS, GATE_RULES, HOLDOUT_START_MS
 from hedge_fund.trading.discovery_guard import is_ops_park_record
 from hedge_fund.trading.explorer import AXES, load_pair_links
 from hedge_fund.trading.mint_quality import inspect_atom
@@ -51,12 +55,12 @@ def _window_crosses_holdout(row: dict) -> bool:
 
 
 def is_pre_holdout(row: dict) -> bool:
-    """True for a current-gate discovery row that did not score the holdout."""
+    """True for a 5m discovery row on the current atom engine that did not score the holdout."""
     if not isinstance(row, dict) or row.get("partial"):
         return False
     if is_ops_park_record(row):
         return False
-    if row.get("gate_rules") != GATE_RULES:
+    if row.get("gate_rules") not in ATOM_GATE_RULES or is_library_name(row.get("strategy")):
         return False
     counted = row.get("regimes_tested")
     if isinstance(counted, int) and not isinstance(counted, bool) and counted != DISCOVERY_N_WINDOWS:
@@ -303,7 +307,7 @@ def _slim_prefilter(row: dict) -> bool:
     """Every is_pre_holdout check that the in-memory row can answer without its windows."""
     if not isinstance(row, dict) or row.get("partial") or is_ops_park_record(row):
         return False
-    if row.get("gate_rules") != GATE_RULES:
+    if row.get("gate_rules") not in ATOM_GATE_RULES or is_library_name(row.get("strategy")):
         return False
     counted = row.get("regimes_tested")
     if isinstance(counted, int) and not isinstance(counted, bool) and counted != DISCOVERY_N_WINDOWS:

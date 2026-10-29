@@ -20,6 +20,7 @@ import BlockEffects from "../status/BlockEffects";
 import DiscoveryBuckets from "../status/DiscoveryBuckets";
 import { GateLegend, NearMisses, RecentTests } from "../status/DiscoveryInsights";
 import FarmControl, { farmStatusLabel } from "../status/FarmControl";
+import LibraryTable from "../status/LibraryTable";
 
 function WhatIsSearched({ summary }: { summary?: DiscoverySummary }) {
   const facts = [
@@ -32,7 +33,7 @@ function WhatIsSearched({ summary }: { summary?: DiscoverySummary }) {
   const queue = summary?.counts.eligible ?? summary?.counts.untested;
   return (
     <Panel>
-      <SectionTitle title="What is being searched">Long-only BTC entry rules built from simple, well-known indicators.</SectionTitle>
+      <SectionTitle title="What is being searched">The random 5-minute search is off. It runs only if PAPER_DISCOVERY_SOURCE=random.</SectionTitle>
       <ul className="grid gap-2 sm:grid-cols-2">
         {BLOCK_FAMILIES.map((f) => (
           <li key={f.category} className="rounded-lg bg-white/[0.03] p-2.5 min-w-0">
@@ -152,13 +153,15 @@ export default function Discovery() {
         title="The strategy search"
         aside={summary.data ? <Badge tone="neutral">updated {shortAgo(summary.data.as_of)}</Badge> : null}
       >
-        A worker farm keeps inventing BTC strategies by randomly combining 2–7 building blocks, backtests each one
-        walk-forward, and runs it through a strict 8-check gate. Passing strategies are proposed, awaiting approval.
+        Discovery evaluates a fixed library of cited daily BTC strategies: long or flat, all-in, exit when the
+        signal turns off. Each one goes through the same 8-check gate. A pass is proposed, awaiting approval.
         The owner admits champions for live paper trading. There is no limit on how many.
       </PageHeader>
 
       {summary.isError ? <ErrorNote what="discovery status" error={summary.error} stale={Boolean(summary.data)} /> : null}
       {insights.isError ? <ErrorNote what="discovery insights" error={insights.error} stale={Boolean(insights.data)} /> : null}
+
+      <LibraryTable />
 
       <section>
         <SectionTitle title="Funnel" aside="every name is tested once; a fail is final">

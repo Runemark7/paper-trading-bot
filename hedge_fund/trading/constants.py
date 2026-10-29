@@ -71,20 +71,41 @@ RISK_POLICY = "rm_v1"
 # re-run. Those figures stay on the row as informational metrics. Cost
 # stress still requires stressed Sharpe >= 0.30. Workers on the v4 tag
 # are paused.
+# Amendment 2026-10-28 (Alexander, 20:39 CET): gate v6. Discovery restarts
+# on a pre-registered strategy library (hedge_fund.library.catalog) scored
+# by the signal_exit engine on completed daily bars: long or flat, all-in,
+# exit when the signal turns off. Daily floors are 8 OOS round-trips and
+# 2 holdout trades; the 5m floors stay 30 and 8. DSR trial count = every
+# grid point in the library. The 5m rm_v1 engine is unchanged for the
+# existing champions. Workers on an older tag are paused.
 V4_GATE_RULES = "gate_v4_btc_holdout_dsr_pbo_20261027"
-GATE_RULES = "gate_v5_btc_holdout_dsr_pbo_20261027"
+V5_GATE_RULES = "gate_v5_btc_holdout_dsr_pbo_20261027"
+# First library stamp. Superseded before merge: indicators were read from
+# 2021-01-26, so a NaN lookback was scored as flat. Kept so a row written
+# on that stamp is not mistaken for the warmed gate.
+V6_GATE_RULES = "gate_v6_library_signal_exit_20261028"
+GATE_RULES = "gate_v6_library_warmup_20261029"
+# 5m rm_v1 rows under these tags measure the same engine with the same
+# floors, so the exploratory atom reports may pool them.
+ATOM_GATE_RULES = frozenset({V5_GATE_RULES, V6_GATE_RULES, GATE_RULES})
 # Shown on the discovery API and the Discovery page. B&H is not a pass rule.
 GATE_CRITERIA = (
-    "Gate v5 (paper only): BTC-only; 18 walk-forward windows that end before "
-    "the sealed holdout 2025-10-01..2026-10-01; trades ≥ 30; Sharpe ≥ 0.30; "
-    "beat sma_stack; holdout Sharpe, holdout trades, and holdout vs sma_stack; "
-    "DSR ≥ 0.95 using the true trial count (missing trial count fails closed); "
-    "PBO ≤ 0.20; at least 70% of parameter neighbours pass; cost stress at "
-    "2× fees + 5 bps/side still clears Sharpe ≥ 0.30. Buy-and-hold daily "
-    "Sharpe and buy-and-hold P&L are informational on the discovery windows, "
-    "the sealed holdout, and the cost-stress re-run. They are not a pass "
-    "requirement. ETH Sharpe is recorded and does not block. Fail-once. "
-    "Forward-test kill rules only flag."
+    "Gate v6 (paper only): BTC-only. Discovery evaluates a pre-registered "
+    "library of cited strategies on completed daily bars with the signal_exit "
+    "engine (long or flat, all-in, enter when the signal turns on, exit when "
+    "it turns off, fills at the next daily open after 0.1% fee + 2 bps, "
+    "20% catastrophic stop also filled at the next open). Indicators use "
+    "BTC history from the Binance listing (2017-08-17); a day whose lookback "
+    "is not warm is not scored. PBO blocks of about 390 days tile the warmed "
+    "span that ends before the sealed holdout 2025-10-01..2026-10-01. "
+    "Daily floors: at least 8 out-of-sample round-trips, daily-equity Sharpe "
+    "≥ 0.30, beat sma_stack, holdout Sharpe ≥ 0.30, at least 2 holdout "
+    "trades, holdout vs sma_stack. DSR ≥ 0.95 with N = every grid point in "
+    "the library; PBO ≤ 0.20; at least 70% of parameter neighbours pass; "
+    "cost stress at 2× fees + 5 bps/side still clears Sharpe ≥ 0.30. "
+    "Buy-and-hold is informational. The 5m floors (30 trades, 8 holdout "
+    "trades, 18×87-day grid) are unchanged. Fail-once. Forward-test kill "
+    "rules only flag. The existing 5m champions keep the rm_v1 engine."
 )
 BH_METRIC_ROLE = "informational"
 # Historical full-tape grid (23 x 87d, last segment open). Discovery no
@@ -158,6 +179,20 @@ CROSS_ASSET_MIN_SHARPE = 0.0
 # about 7 trades per year. One holdout year at 8 trades is not a lower
 # annual rate than that floor.
 HOLDOUT_MIN_TRADES = 8
+# Daily signal-exit floors (Alexander, 2026-10-29). These do not replace
+# the 5m floors above. The library scores one continuous book and slices
+# PBO on longer blocks; 30 and 8 were sized for rules that trade constantly.
+LIBRARY_TAPE_START_MS = 1_502_928_000_000  # 2017-08-17 00:00 UTC, Binance BTCUSDT
+# The first 5m bar can print a couple of hours after midnight. Two days
+# of slack still rejects a tape that only starts in 2021.
+LIBRARY_TAPE_START_SLACK_MS = 2 * 86_400_000
+LIBRARY_MIN_OOS_TRADES = 8
+LIBRARY_HOLDOUT_MIN_TRADES = 2
+LIBRARY_BLOCK_TARGET_DAYS = 390
+# Pre-registered before any warmed result was read. One stop for every
+# library strategy. A with-stop and no-stop pair would double N, so the
+# stop is on and the no-stop book is not a trial.
+LIBRARY_STOP_FRAC = 0.20
 FORWARD_MIN_DAYS = 90
 FORWARD_MIN_CLOSED_TRADES = 20
 FORWARD_MAX_DD_MULTIPLE = 1.5
@@ -191,6 +226,19 @@ def qual_store_bars(now_ms: int | None = None) -> int:
     now = int(_time.time() * 1000) if now_ms is None else int(now_ms)
     slots = max(0, (now - QUAL_TAPE_START_MS) // TF_MS_5M + 1)
     return int(slots + QUAL_STORE_MARGIN_BARS)
+
+
+def library_store_bars(now_ms: int | None = None) -> int:
+    """BTC file budget that keeps the library prefix from 2017-08-17.
+
+    ETH and the hashed 5m tape stay on ``qual_store_bars``. A caller that
+    passes an explicit target still uses that target for both symbols.
+    """
+    import time as _time
+
+    now = int(_time.time() * 1000) if now_ms is None else int(now_ms)
+    slots = max(0, (now - LIBRARY_TAPE_START_MS) // TF_MS_5M + 1)
+    return max(qual_store_bars(now), int(slots))
 
 
 def qual_keep_bars(n_windows: int | None = None, warmup_bars: int | None = None) -> int:

@@ -79,6 +79,24 @@ def serialize_open_lot(
     )
 
 
+def _library_lot_fields(lots: list[dict], saved: dict) -> None:
+    """signal_exit lots: no take-profit; the stop is the optional safety stop.
+
+    ``signal`` is the last completed day's library signal stored by the live
+    cycle (no indicator work on this request).
+    """
+    lib = saved.get("library") if isinstance(saved.get("library"), dict) else {}
+    last = lib.get("last_signal")
+    for row in lots:
+        row["exit_rule"] = "signal_exit"
+        row["take_profit"] = None
+        row["path"] = None
+        row["path_pct"] = None
+        if not row.get("stop"):
+            row["stop"] = None
+        row["signal"] = "unknown" if last is None else ("on" if last else "would_exit")
+
+
 def live_prices(fresh: bool = False) -> dict:
     """Return current prices for the traded symbols, with a short cache.
 
@@ -202,6 +220,11 @@ def live_preview(db: str, closes_by_symbol: dict | None = None) -> dict:
         )
 
     flat_lots = [lot for p in positions for lot in p.get("lots") or []]
+    if account.startswith("lib."):
+        _library_lot_fields(flat_lots, saved)
+        for p in positions:
+            if not p.get("stop"):
+                p["stop"] = p["stop_loss"] = None
     return {
         "live_equity": round(live_equity, 2) if live_equity else None,
         "cash": round(broker.cash(), 2),
