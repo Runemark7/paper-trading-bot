@@ -79,17 +79,23 @@ def _validate_library_eval(row: dict, name: str) -> dict | None:
     if not isinstance(block, dict) or block.get("n_trials") != library_trial_count():
         return None
     if bool(row.get("qualified")):
-        from hedge_fund.trading.gate_v4 import v4_attestation_ok
+        from hedge_fund.library.evaluate import library_attestation_ok
 
-        if not v4_attestation_ok(row):
+        # Vetoes only. A DSR or PBO miss is a warning and still proposes.
+        if not library_attestation_ok(row):
             return None
     reasons = row.get("fail_reasons")
+    warnings = row.get("warnings")
     if reasons is not None and not isinstance(reasons, list):
+        return None
+    if warnings is not None and not isinstance(warnings, list):
         return None
     out = dict(row)
     out["qualified"] = bool(row.get("qualified"))
     if reasons is None:
         out["fail_reasons"] = []
+    if warnings is None:
+        out["warnings"] = []
     return out
 
 

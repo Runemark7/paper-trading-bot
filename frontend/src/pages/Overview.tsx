@@ -37,7 +37,7 @@ import {
 const JOURNEY = [
   { step: "Library", text: "A fixed list of cited daily BTC rules. The random mint is off." },
   { step: "Backtest", text: "Daily bars, long or flat, exit when the signal turns off, with fees." },
-  { step: "Gate v6", text: "8 strict checks against luck, overfitting and costs. The daily library needs 8 out-of-sample round-trips and 2 holdout trades. The 5m floors stay 30 and 8." },
+  { step: "Gate v7", text: "The daily library must be profitable after fees on the test years and the holdout, including higher costs, with 8 and 2 trades and profitable neighbours. DSR, PBO, and Sharpe are warnings. The 5m floors stay." },
   { step: "Propose", text: "Every passer is ranked and marked proposed, awaiting approval." },
   { step: "Admit", text: "The owner admits champions by hand. There is no limit on how many." },
   { step: "Forward test", text: "Paper-trade live Binance prices. Win = profit after fees." },
@@ -107,7 +107,7 @@ export default function Overview() {
           loading={disc.isPending}
           tone="accent"
           hint={tested && passed != null ? `${((passed / tested) * 100).toFixed(2)}% of tested` : undefined}
-          info={<InfoTip label="Passed the gate">Cleared every gate v6 check: trades, Sharpe, baseline, sealed holdout, deflated Sharpe, overfitting, robustness and cost stress.</InfoTip>}
+          info={<InfoTip label="Passed the gate">Cleared the gate v7 profit vetoes. DSR, PBO, Sharpe, sma_stack, and buy-and-hold may still be warnings on the row.</InfoTip>}
         />
         <Kpi
           label="Active champions"
@@ -139,7 +139,7 @@ export default function Overview() {
           <h2 className="mt-1 text-xl font-semibold text-white">The search</h2>
           <p className="mt-2 text-sm leading-relaxed text-white/65">
             The current search is a fixed library of cited daily BTC strategies, long or flat, exiting when the
-            signal turns off. Each one is scored once under gate v6. Almost everything fails — that is the point.
+            signal turns off. Each one is scored once under gate v7. A pass is profitable after fees. It is proposed, not seated.
           </p>
           <div className="mt-4 grid grid-cols-3 gap-2 text-center">
             {[

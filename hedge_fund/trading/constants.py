@@ -78,34 +78,50 @@ RISK_POLICY = "rm_v1"
 # 2 holdout trades; the 5m floors stay 30 and 8. DSR trial count = every
 # grid point in the library. The 5m rm_v1 engine is unchanged for the
 # existing champions. Workers on an older tag are paused.
+# Amendment 2026-10-29 (Alexander, 10:35 CET): gate v7 for lib.* only.
+# A library name passes when net P&L after fees and slippage is positive
+# on the warmed out-of-sample book (2018-12-01..2025-09-30) and on the
+# sealed holdout, when the same is true at 2× fees + 5 bps on both spans,
+# when the 8 / 2 trade floors hold, and when at least 70% of parameter
+# neighbours clear those three profit checks. DSR, PBO, Sharpe floors,
+# sma_stack, and buy-and-hold are warnings. The 5m path is unchanged.
 V4_GATE_RULES = "gate_v4_btc_holdout_dsr_pbo_20261027"
 V5_GATE_RULES = "gate_v5_btc_holdout_dsr_pbo_20261027"
 # First library stamp. Superseded before merge: indicators were read from
 # 2021-01-26, so a NaN lookback was scored as flat. Kept so a row written
 # on that stamp is not mistaken for the warmed gate.
 V6_GATE_RULES = "gate_v6_library_signal_exit_20261028"
-GATE_RULES = "gate_v6_library_warmup_20261029"
+# Warmed library stamp. Superseded by gate v7: DSR, PBO, Sharpe, and
+# sma_stack were vetoes. Kept so a v6 row is not re-read as a v7 pass.
+V6_WARMUP_GATE_RULES = "gate_v6_library_warmup_20261029"
+GATE_RULES = "gate_v7_library_profit_20261029"
 # 5m rm_v1 rows under these tags measure the same engine with the same
-# floors, so the exploratory atom reports may pool them.
-ATOM_GATE_RULES = frozenset({V5_GATE_RULES, V6_GATE_RULES, GATE_RULES})
-# Shown on the discovery API and the Discovery page. B&H is not a pass rule.
+# floors, so the exploratory atom reports may pool them. The v7 tag is
+# the worker stamp; random mode still applies the 5m floors.
+ATOM_GATE_RULES = frozenset({
+    V5_GATE_RULES,
+    V6_GATE_RULES,
+    V6_WARMUP_GATE_RULES,
+    GATE_RULES,
+})
+# Shown on the discovery API and the Discovery page.
 GATE_CRITERIA = (
-    "Gate v6 (paper only): BTC-only. Discovery evaluates a pre-registered "
-    "library of cited strategies on completed daily bars with the signal_exit "
-    "engine (long or flat, all-in, enter when the signal turns on, exit when "
-    "it turns off, fills at the next daily open after 0.1% fee + 2 bps, "
-    "20% catastrophic stop also filled at the next open). Indicators use "
-    "BTC history from the Binance listing (2017-08-17); a day whose lookback "
-    "is not warm is not scored. PBO blocks of about 390 days tile the warmed "
-    "span that ends before the sealed holdout 2025-10-01..2026-10-01. "
-    "Daily floors: at least 8 out-of-sample round-trips, daily-equity Sharpe "
-    "≥ 0.30, beat sma_stack, holdout Sharpe ≥ 0.30, at least 2 holdout "
-    "trades, holdout vs sma_stack. DSR ≥ 0.95 with N = every grid point in "
-    "the library; PBO ≤ 0.20; at least 70% of parameter neighbours pass; "
-    "cost stress at 2× fees + 5 bps/side still clears Sharpe ≥ 0.30. "
-    "Buy-and-hold is informational. The 5m floors (30 trades, 8 holdout "
-    "trades, 18×87-day grid) are unchanged. Fail-once. Forward-test kill "
-    "rules only flag. The existing 5m champions keep the rm_v1 engine."
+    "Gate v7 (paper only, daily library): BTC-only. A pre-registered "
+    "library is scored with signal_exit on completed daily bars (long or "
+    "flat, all-in, next-open fill after 0.1% fee + 2 bps, 20% stop at the "
+    "next open). Indicators use BTC history from 2017-08-17; a day that is "
+    "not warm fails. The sealed holdout stays 2025-10-01..2026-10-01. "
+    "Hard vetoes: out-of-sample net P&L > 0 after fees and slippage "
+    "(2018-12-01 through 2025-09-30), holdout net P&L > 0, the same P&L > 0 "
+    "on both spans at 2× fees + 5 bps, at least 8 out-of-sample round-trips, "
+    "at least 2 holdout trades, and at least 70% of parameter neighbours "
+    "also profitable on those three profit checks. DSR (N = every library "
+    "grid point), PBO, Sharpe floors, sma_stack, and buy-and-hold stay "
+    "informational warnings. They are computed, stored, and shown. They "
+    "do not reject a name. "
+    "A pass is proposed, not seated. The 5m floors (30 trades, Sharpe, "
+    "sma_stack, holdout Sharpe, DSR, PBO, 8 holdout trades, 18×87-day grid) "
+    "are unchanged. The existing 5m champions keep the rm_v1 engine."
 )
 BH_METRIC_ROLE = "informational"
 # Historical full-tape grid (23 x 87d, last segment open). Discovery no

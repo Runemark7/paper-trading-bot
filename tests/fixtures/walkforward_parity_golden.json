@@ -38,7 +38,7 @@
         "daily_sharpe": 12.844,
         "bh_daily_sharpe": 10.961,
         "avg_hold_hours": 5.84,
-        "gate_rules": "gate_v6_library_warmup_20261029",
+        "gate_rules": "gate_v7_library_profit_20261029",
         "fail_reasons": [
           "oos_pnl 4047.49 <= sma_stack 13153.61"
         ],
@@ -295,7 +295,7 @@
         "daily_sharpe": 8.884,
         "bh_daily_sharpe": 10.961,
         "avg_hold_hours": 6.99,
-        "gate_rules": "gate_v6_library_warmup_20261029",
+        "gate_rules": "gate_v7_library_profit_20261029",
         "fail_reasons": [
           "oos_trades 16 < 30",
           "oos_pnl 1401.04 <= sma_stack 13153.61"
@@ -553,7 +553,7 @@
         "daily_sharpe": 8.884,
         "bh_daily_sharpe": 10.961,
         "avg_hold_hours": 6.99,
-        "gate_rules": "gate_v6_library_warmup_20261029",
+        "gate_rules": "gate_v7_library_profit_20261029",
         "fail_reasons": [
           "oos_trades 16 < 30",
           "oos_pnl 1401.04 <= sma_stack 13153.61"
@@ -811,7 +811,7 @@
         "daily_sharpe": 8.732,
         "bh_daily_sharpe": 10.961,
         "avg_hold_hours": 6.42,
-        "gate_rules": "gate_v6_library_warmup_20261029",
+        "gate_rules": "gate_v7_library_profit_20261029",
         "fail_reasons": [
           "oos_trades 14 < 30",
           "oos_pnl 1322.93 <= sma_stack 13153.61"
@@ -1069,7 +1069,7 @@
         "daily_sharpe": 15.113,
         "bh_daily_sharpe": 10.961,
         "avg_hold_hours": 6.39,
-        "gate_rules": "gate_v6_library_warmup_20261029",
+        "gate_rules": "gate_v7_library_profit_20261029",
         "fail_reasons": [
           "oos_pnl 13153.61 <= sma_stack 13153.61"
         ],

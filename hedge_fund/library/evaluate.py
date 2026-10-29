@@ -1,7 +1,9 @@
-"""Gate v6 evaluation of one library strategy (paper only, BTC only).
+"""Gate v7 evaluation of one library strategy (paper only, BTC only).
 
-Same honesty as gate v5, measured on completed UTC daily bars with the
-``signal_exit`` engine:
+Measured on completed UTC daily bars with the ``signal_exit`` engine.
+Alexander, 2026-10-29 10:35 CET: gate on profit after fees and costs in
+the test years and the final year. DSR and PBO are warnings, not vetoes.
+The success criterion is profitable after fees, not beating buy-and-hold.
 
 * History starts at the Binance BTCUSDT listing (``LIBRARY_TAPE_START_MS``,
   2017-08-17), shared with the live cycle. Indicators are computed on that
@@ -9,26 +11,28 @@ Same honesty as gate v5, measured on completed UTC daily bars with the
   longest neighbour, is finite on the previous close and stays finite.
   A day that is not warm fails the evaluation; it is never a flat signal.
   A tape that does not start in 2017 is refused, not trimmed into a result.
-* Discovery is one continuous book from that shared open through the day
-  before the holdout. PBO slices it into blocks of about
-  ``LIBRARY_BLOCK_TARGET_DAYS`` (390). A position is not closed and
-  reopened at a block boundary. Nothing after a bar is used, and discovery
-  bars are cut strictly before the holdout.
+* Discovery is one continuous book from that shared open (2018-12-01 on
+  the warmed tape) through the day before the holdout (2025-09-30). PBO
+  slices it into blocks of about ``LIBRARY_BLOCK_TARGET_DAYS`` (390) and
+  is a warning. A position is not closed and reopened at a block boundary.
+  Nothing after a bar is used, and discovery bars are cut strictly before
+  the holdout.
 * Sealed holdout ``[2025-10-01, 2026-10-01)``: a separate fresh book. Its
   indicators still see the prefix. A fresh book whose signal is already on
   buys at the first scored open.
-* Daily floors: trades >= ``LIBRARY_MIN_OOS_TRADES`` (8), holdout trades
-  >= ``LIBRARY_HOLDOUT_MIN_TRADES`` (2). Sharpe >= ``MIN_BACKTEST_SHARPE``,
-  OOS and holdout P&L above ``sma_stack`` (the same rule on daily bars,
-  same engine, stop off), DSR >= ``DSR_MIN_PROBABILITY`` with N = every
-  grid point, CSCV PBO <= ``PBO_MAX``, >= ``NEIGHBOR_PASS_MIN_FRACTION``
-  of neighbours at the Sharpe and 8-trade floors, and the same Sharpe
-  floor at 2x fees + 5 bps. The 5m floors (30 and 8) are a different path.
+* Hard vetoes: out-of-sample net P&L > 0, holdout net P&L > 0, both spans
+  still net P&L > 0 at 2× fees + 5 bps, at least 8 out-of-sample
+  round-trips, at least 2 holdout trades, and at least 70% of parameter
+  neighbours also clearing the three profit checks. Net P&L is ending
+  equity minus starting cash after fees and slippage.
+* Warnings, stored and shown, never a veto: DSR with N = every grid
+  point, PBO, the Sharpe floors, out-of-sample and holdout versus
+  ``sma_stack``, and the buy-and-hold comparison. The 5m path is separate
+  and still vetoes on those.
 * The 20% stop is on for every library strategy and is not a second trial.
-* Buy-and-hold (the same book, always long, no stop) is informational.
 
-Every check is computed for every strategy and every failing check is
-listed, so a strategy that fails only on a trade-count floor is visible.
+Every check is computed for every strategy. A veto is a fail reason. A
+warning is listed beside a pass.
 """
 from __future__ import annotations
 
@@ -94,21 +98,36 @@ STRESS_COSTS = Costs(
     slippage=BASE_COSTS.slippage + COST_STRESS_EXTRA_SLIPPAGE,
 )
 SHARPE_KIND = "daily_equity_annualized_sqrt365"
-# Floors that only count trades. A strategy whose every failing check is one
-# of these (or a neighbour check that passes on Sharpe alone) is flagged.
+# Floors that only count trades. A strategy whose every veto is one of
+# these is flagged. Neighbour profit and the P&L checks are not counts.
 COUNT_CHECKS = ("oos_trades", "holdout_trades")
-CHECK_ORDER = (
+# Hard vetoes for lib.*. Order is the order fail reasons are listed.
+VETO_CHECKS = (
     "windows",
     "oos_trades",
+    "oos_pnl",
+    "holdout_pnl",
+    "holdout_trades",
+    "cost_stress",
+    "neighbours",
+)
+# Computed, stored, and shown. A miss here never rejects the name.
+WARNING_CHECKS = (
     "oos_sharpe",
     "beat_sma_stack",
     "holdout_sharpe",
-    "holdout_trades",
     "holdout_beat_sma_stack",
     "dsr",
     "pbo",
-    "neighbours",
-    "cost_stress",
+    "buy_and_hold",
+)
+CHECK_ORDER = VETO_CHECKS + WARNING_CHECKS
+_LIBRARY_ATTESTATION_KEYS = (
+    "oos_pnl_pass",
+    "trades_pass",
+    "holdout_pass",
+    "cost_pass",
+    "perturb_pass",
 )
 
 
@@ -428,18 +447,320 @@ def dsr_hurdles(moments: dict | None, n_trials: int, confidence: float = DSR_MIN
     }
 
 
-def count_only_failure(checks: dict) -> bool:
-    """True when something fails and every failure is a trade-count floor.
+def book_pnl(metrics: SpanMetrics) -> float:
+    """Net profit of one continuous book: ending equity minus starting cash.
 
-    The neighbour check counts as a trade-count failure only when the
-    neighbours would pass on the Sharpe floor alone.
+    Fees and slippage are already out of the cash. This is the profit the
+    gate uses. The sum of rebased block P&Ls is a different number and stays
+    on ``SpanMetrics.pnl`` for the PBO blocks.
     """
-    failing = [key for key in CHECK_ORDER if not checks.get(key, {}).get("pass")]
-    return bool(failing) and all(
-        key in COUNT_CHECKS
-        or (key == "neighbours" and bool(checks.get("neighbours", {}).get("sharpe_only_pass")))
-        for key in failing
+    eq = metrics.result.equity
+    if eq.size == 0:
+        return 0.0
+    return float(eq[-1] - eq[0])
+
+
+def count_only_failure(checks: dict) -> bool:
+    """True when a veto fails and every veto is a trade-count floor.
+
+    Warnings are not vetoes, so a Sharpe or DSR miss does not change this.
+    """
+    failing = [key for key in VETO_CHECKS if not checks.get(key, {}).get("pass")]
+    return bool(failing) and all(key in COUNT_CHECKS for key in failing)
+
+
+def library_pass_attestation(**extra) -> dict:
+    """Minimal ``gate_v4`` block a qualified library ingest row must carry.
+
+    DSR and PBO are absent on purpose. A warning may be false on a pass.
+    """
+    block = {
+        "passed": True,
+        "rules": GATE_RULES,
+        "oos_pnl_pass": True,
+        "trades_pass": True,
+        "holdout_pass": True,
+        "cost_pass": True,
+        "perturb_pass": True,
+    }
+    block.update(extra)
+    return block
+
+
+def library_attestation_ok(row: dict) -> bool:
+    """True when a qualified library row carries the v7 veto attestation.
+
+    ``dsr_pass`` and ``pbo_pass`` are not required. The 5m path still uses
+    ``v4_attestation_ok``, which does require them.
+    """
+    block = row.get("gate_v4") if isinstance(row, dict) else None
+    if not isinstance(block, dict):
+        return False
+    if block.get("passed") is not True or block.get("rules") != GATE_RULES:
+        return False
+    return all(block.get(key) is True for key in _LIBRARY_ATTESTATION_KEYS)
+
+
+def library_verdict(
+    *,
+    windows_ok: bool,
+    n_windows: int,
+    expected_windows: int,
+    window_span: str,
+    oos_pnl: float,
+    oos_trades: int,
+    oos_sharpe: float,
+    sma_oos_pnl: float | None,
+    bh_oos_pnl: float | None,
+    holdout_present: bool,
+    holdout_note: str | None,
+    holdout_pnl: float | None,
+    holdout_trades: int | None,
+    holdout_sharpe: float | None,
+    sma_holdout_pnl: float | None,
+    bh_holdout_pnl: float | None,
+    stress_oos_pnl: float | None,
+    stress_holdout_pnl: float | None,
+    dsr_value: float | None,
+    n_trials: int,
+    pbo: float | None,
+    pbo_undefined: str | None,
+    neighbour_passes: list[bool],
+) -> dict:
+    """Split measured numbers into vetoes and warnings.
+
+    ``qualified`` is true only when every veto passes. A warning is stored
+    and does not change that.
+    """
+    reasons: list[str] = []
+    warnings: list[str] = []
+    checks: dict[str, dict] = {}
+    bps = COST_STRESS_EXTRA_SLIPPAGE * 1e4
+
+    def veto(key: str, passed: bool, value, threshold, kind: str, reason: str | None, **extra) -> None:
+        checks[key] = _check(passed, value, threshold, kind, role="veto", **extra)
+        if reason:
+            reasons.append(reason)
+
+    def warn(key: str, ok: bool, value, threshold, kind: str, text: str | None, **extra) -> None:
+        checks[key] = _check(ok, value, threshold, kind, role="warning", **extra)
+        if text:
+            warnings.append(text)
+
+    veto(
+        "windows",
+        windows_ok,
+        n_windows,
+        expected_windows,
+        "structure",
+        None if windows_ok else (
+            f"windows {n_windows} do not tile the warmed span ({window_span})"
+        ),
     )
+    trades_ok = oos_trades >= LIBRARY_MIN_OOS_TRADES
+    veto(
+        "oos_trades",
+        trades_ok,
+        oos_trades,
+        LIBRARY_MIN_OOS_TRADES,
+        "count",
+        None if trades_ok else f"oos_trades {oos_trades} < {LIBRARY_MIN_OOS_TRADES}",
+    )
+    oos_profit = oos_pnl > 0
+    veto(
+        "oos_pnl",
+        oos_profit,
+        _r(oos_pnl, 2),
+        0,
+        "profit",
+        None if oos_profit else f"oos_pnl {oos_pnl:.2f} <= 0",
+    )
+
+    if not holdout_present:
+        note = holdout_note or "holdout tape missing"
+        for key, kind in (("holdout_pnl", "profit"), ("holdout_trades", "count")):
+            checks[key] = _check(False, None, None, kind, role="veto", note=note)
+        reasons.append(note)
+        hold_trades_ok = False
+        hold_profit = False
+    else:
+        hold_profit = holdout_pnl is not None and holdout_pnl > 0
+        hold_trades_ok = holdout_trades is not None and holdout_trades >= LIBRARY_HOLDOUT_MIN_TRADES
+        veto(
+            "holdout_pnl",
+            hold_profit,
+            _r(holdout_pnl, 2),
+            0,
+            "profit",
+            None if hold_profit else f"holdout_pnl {float(holdout_pnl or 0):.2f} <= 0",
+        )
+        veto(
+            "holdout_trades",
+            hold_trades_ok,
+            holdout_trades,
+            LIBRARY_HOLDOUT_MIN_TRADES,
+            "count",
+            None if hold_trades_ok else (
+                f"holdout_trades {holdout_trades} < {LIBRARY_HOLDOUT_MIN_TRADES}"
+            ),
+        )
+
+    stress_oos_ok = stress_oos_pnl is not None and stress_oos_pnl > 0
+    stress_hold_ok = stress_holdout_pnl is not None and stress_holdout_pnl > 0
+    cost_bits: list[str] = []
+    if not stress_oos_ok:
+        shown = "missing" if stress_oos_pnl is None else f"{stress_oos_pnl:.2f} <= 0"
+        cost_bits.append(f"cost stress oos pnl {shown} (2x fee + {bps:.0f}bps)")
+    if not stress_hold_ok:
+        shown = "missing" if stress_holdout_pnl is None else f"{stress_holdout_pnl:.2f} <= 0"
+        cost_bits.append(f"cost stress holdout pnl {shown} (2x fee + {bps:.0f}bps)")
+    cost_ok = stress_oos_ok and stress_hold_ok
+    cost_value = None if stress_oos_pnl is None else _r(stress_oos_pnl, 2)
+    veto(
+        "cost_stress",
+        cost_ok,
+        cost_value,
+        0,
+        "robust",
+        None if cost_ok else "; ".join(cost_bits),
+        holdout_pnl=None if stress_holdout_pnl is None else _r(stress_holdout_pnl, 2),
+    )
+
+    n_nb = len(neighbour_passes)
+    n_pass = sum(1 for flag in neighbour_passes if flag)
+    frac = n_pass / n_nb if n_nb else 0.0
+    nb_ok = n_nb > 0 and frac + 1e-12 >= NEIGHBOR_PASS_MIN_FRACTION
+    if n_nb == 0:
+        nb_reason = "no parameter neighbours (lone spike)"
+    elif not nb_ok:
+        nb_reason = f"neighbours {n_pass}/{n_nb} = {frac:.0%} < {NEIGHBOR_PASS_MIN_FRACTION:.0%}"
+    else:
+        nb_reason = None
+    veto(
+        "neighbours",
+        nb_ok,
+        f"{n_pass}/{n_nb}",
+        NEIGHBOR_PASS_MIN_FRACTION,
+        "robust",
+        nb_reason,
+        n_pass=n_pass,
+        total=n_nb,
+    )
+
+    sharpe_ok = oos_sharpe >= MIN_BACKTEST_SHARPE
+    warn(
+        "oos_sharpe",
+        sharpe_ok,
+        _r(oos_sharpe),
+        MIN_BACKTEST_SHARPE,
+        "stat",
+        None if sharpe_ok else f"oos_sharpe {oos_sharpe:.2f} < {MIN_BACKTEST_SHARPE} (daily-equity)",
+    )
+    if sma_oos_pnl is None:
+        beat = False
+        beat_text = "sma_stack missing"
+    else:
+        beat = oos_pnl > sma_oos_pnl
+        beat_text = None if beat else f"oos_pnl {oos_pnl:.2f} <= sma_stack {sma_oos_pnl:.2f}"
+    warn("beat_sma_stack", beat, _r(oos_pnl, 2), _r(sma_oos_pnl, 2), "baseline", beat_text)
+
+    if not holdout_present:
+        note = holdout_note or "holdout tape missing"
+        checks["holdout_sharpe"] = _check(True, None, MIN_BACKTEST_SHARPE, "holdout", role="warning", note=note)
+        checks["holdout_beat_sma_stack"] = _check(True, None, None, "holdout", role="warning", note=note)
+    else:
+        h_sharpe_ok = holdout_sharpe is not None and holdout_sharpe >= MIN_BACKTEST_SHARPE
+        warn(
+            "holdout_sharpe",
+            h_sharpe_ok,
+            _r(holdout_sharpe),
+            MIN_BACKTEST_SHARPE,
+            "holdout",
+            None if h_sharpe_ok else (
+                f"holdout_sharpe {float(holdout_sharpe or 0):.2f} < {MIN_BACKTEST_SHARPE} (daily-equity)"
+            ),
+        )
+        if sma_holdout_pnl is None:
+            h_beat = False
+            h_text = "holdout sma_stack missing"
+        else:
+            h_beat = holdout_pnl is not None and holdout_pnl > sma_holdout_pnl
+            h_text = None if h_beat else (
+                f"holdout_pnl {float(holdout_pnl or 0):.2f} <= sma_stack {sma_holdout_pnl:.2f}"
+            )
+        warn(
+            "holdout_beat_sma_stack",
+            h_beat,
+            _r(holdout_pnl, 2),
+            _r(sma_holdout_pnl, 2),
+            "holdout",
+            h_text,
+        )
+
+    if dsr_value is None:
+        dsr_ok = False
+        dsr_text = "dsr daily returns missing"
+    else:
+        dsr_ok = dsr_value >= DSR_MIN_PROBABILITY
+        dsr_text = None if dsr_ok else (
+            f"dsr {dsr_value:.3f} < {DSR_MIN_PROBABILITY} (n_trials={n_trials})"
+        )
+    warn("dsr", dsr_ok, _r(dsr_value), DSR_MIN_PROBABILITY, "robust", dsr_text, n_trials=n_trials)
+
+    if pbo_undefined:
+        pbo_ok = False
+        pbo_text = pbo_undefined
+    elif pbo is None:
+        pbo_ok = False
+        pbo_text = "pbo undefined"
+    elif pbo > PBO_MAX:
+        pbo_ok = False
+        pbo_text = f"pbo {pbo:.3f} > {PBO_MAX}"
+    else:
+        pbo_ok = True
+        pbo_text = None
+    warn("pbo", pbo_ok, _r(pbo), PBO_MAX, "robust", pbo_text)
+
+    bh_bits: list[str] = []
+    if bh_oos_pnl is None:
+        bh_bits.append("buy-and-hold oos missing")
+    elif oos_pnl <= bh_oos_pnl:
+        bh_bits.append(f"oos_pnl {oos_pnl:.2f} <= buy-and-hold {bh_oos_pnl:.2f}")
+    if holdout_present:
+        if bh_holdout_pnl is None:
+            bh_bits.append("buy-and-hold holdout missing")
+        elif holdout_pnl is not None and holdout_pnl <= bh_holdout_pnl:
+            bh_bits.append(f"holdout_pnl {holdout_pnl:.2f} <= buy-and-hold {bh_holdout_pnl:.2f}")
+    warn(
+        "buy_and_hold",
+        not bh_bits,
+        _r(oos_pnl, 2),
+        _r(bh_oos_pnl, 2),
+        "baseline",
+        "; ".join(bh_bits) if bh_bits else None,
+        role_note=BH_METRIC_ROLE,
+    )
+
+    failing = [key for key in VETO_CHECKS if not checks[key]["pass"]]
+    warning_keys = [key for key in WARNING_CHECKS if not checks[key]["pass"]]
+    return {
+        "checks": checks,
+        "fail_reasons": reasons,
+        "warnings": warnings,
+        "failing_checks": failing,
+        "warning_checks": warning_keys,
+        "qualified": not failing,
+        "count_only": count_only_failure(checks),
+        "oos_pnl_pass": oos_profit,
+        "trades_pass": trades_ok and hold_trades_ok,
+        "holdout_pass": holdout_present and hold_profit and hold_trades_ok,
+        "cost_pass": cost_ok,
+        "perturb_pass": nb_ok,
+        "dsr_pass": dsr_ok,
+        "pbo_pass": pbo_ok,
+        "neighbours_pass": n_pass,
+        "neighbours": n_nb,
+    }
 
 
 def _iso_day(ts: int) -> str:
@@ -465,7 +786,7 @@ def evaluate_library_record(
     n_trials: int | None = None,
     tested_at: str | None = None,
 ) -> dict:
-    """Every gate-v6 check for one library variant, as a discovery record."""
+    """Every gate-v7 check for one library variant, as a discovery record."""
     strategy, params = parse_variant(name)
     trials = library_trial_count() if n_trials is None else int(n_trials)
     disc = discovery_metrics(data, strategy, params)
@@ -475,83 +796,52 @@ def evaluate_library_record(
     hold_bh = _benchmark(data, "bh", "holdout")
     hold_sma = _benchmark(data, "sma_stack", "holdout")
     stressed = discovery_metrics(data, strategy, params, costs=STRESS_COSTS)
+    stressed_hold = holdout_metrics(data, strategy, params, costs=STRESS_COSTS)
     stressed_bh = _benchmark(data, "bh", "discovery", STRESS_COSTS)
+    oos_net = book_pnl(disc)
+    hold_net = None if hold is None else book_pnl(hold)
+    sma_net = None if sma is None else book_pnl(sma)
+    bh_net = None if bh is None else book_pnl(bh)
+    hold_sma_net = None if hold_sma is None else book_pnl(hold_sma)
+    hold_bh_net = None if hold_bh is None else book_pnl(hold_bh)
+    stress_oos_net = book_pnl(stressed)
+    stress_hold_net = None if stressed_hold is None else book_pnl(stressed_hold)
 
     neighbours = []
     for nb in neighbour_names(name):
         _s, nb_params = parse_variant(nb)
         m = discovery_metrics(data, strategy, nb_params)
-        sharpe_ok = m.daily_sharpe >= MIN_BACKTEST_SHARPE
+        h = holdout_metrics(data, strategy, nb_params)
+        sm = discovery_metrics(data, strategy, nb_params, costs=STRESS_COSTS)
+        sh = holdout_metrics(data, strategy, nb_params, costs=STRESS_COSTS)
+        nb_oos = book_pnl(m)
+        nb_hold = None if h is None else book_pnl(h)
+        nb_stress_oos = book_pnl(sm)
+        nb_stress_hold = None if sh is None else book_pnl(sh)
+        profit_pass = (
+            nb_oos > 0
+            and nb_hold is not None
+            and nb_hold > 0
+            and nb_stress_oos > 0
+            and nb_stress_hold is not None
+            and nb_stress_hold > 0
+        )
         neighbours.append({
             "name": nb,
             "params": nb_params,
             "daily_sharpe": round(m.daily_sharpe, 4),
             "trades": m.trades,
-            "pnl": round(m.pnl, 2),
-            "pass": bool(sharpe_ok and m.trades >= LIBRARY_MIN_OOS_TRADES),
-            "sharpe_only_pass": bool(sharpe_ok),
+            "pnl": round(nb_oos, 2),
+            "holdout_pnl": None if nb_hold is None else round(nb_hold, 2),
+            "stress_oos_pnl": round(nb_stress_oos, 2),
+            "stress_holdout_pnl": None if nb_stress_hold is None else round(nb_stress_hold, 2),
+            "pass": bool(profit_pass),
             "_windows": m.window_pnl,
         })
 
-    reasons: list[str] = []
-    checks: dict[str, dict] = {}
-    n_windows = len(disc.window_pnl)
-    expected_windows = len(data.segments)
-    windows_ok = _blocks_tile(data) and n_windows == expected_windows
-    checks["windows"] = _check(windows_ok, n_windows, expected_windows, "structure")
-    if not windows_ok:
-        reasons.append(
-            f"windows {n_windows} do not tile the warmed span "
-            f"({_iso_day(int(data.discovery.ts[data.score_index]))} through the day before the holdout)"
-        )
-    checks["oos_trades"] = _check(
-        disc.trades >= LIBRARY_MIN_OOS_TRADES, disc.trades, LIBRARY_MIN_OOS_TRADES, "count",
-    )
-    if disc.trades < LIBRARY_MIN_OOS_TRADES:
-        reasons.append(f"oos_trades {disc.trades} < {LIBRARY_MIN_OOS_TRADES}")
-    checks["oos_sharpe"] = _check(
-        disc.daily_sharpe >= MIN_BACKTEST_SHARPE, _r(disc.daily_sharpe), MIN_BACKTEST_SHARPE, "stat",
-    )
-    if disc.daily_sharpe < MIN_BACKTEST_SHARPE:
-        reasons.append(f"oos_sharpe {disc.daily_sharpe:.2f} < {MIN_BACKTEST_SHARPE} (daily-equity)")
-    sma_pnl = None if sma is None else sma.pnl
-    beat = sma_pnl is not None and disc.pnl > sma_pnl
-    checks["beat_sma_stack"] = _check(beat, _r(disc.pnl, 2), _r(sma_pnl, 2), "baseline")
-    if sma_pnl is None:
-        reasons.append("sma_stack missing")
-    elif not beat:
-        reasons.append(f"oos_pnl {disc.pnl:.2f} <= sma_stack {sma_pnl:.2f}")
-
-    if hold is None:
-        note = data.holdout_note or "holdout tape missing"
-        for key in ("holdout_sharpe", "holdout_trades", "holdout_beat_sma_stack"):
-            checks[key] = _check(False, None, None, "holdout", note=note)
-        reasons.append(note)
-    else:
-        h_sma = None if hold_sma is None else hold_sma.pnl
-        checks["holdout_sharpe"] = _check(
-            hold.daily_sharpe >= MIN_BACKTEST_SHARPE, _r(hold.daily_sharpe), MIN_BACKTEST_SHARPE, "holdout",
-        )
-        checks["holdout_trades"] = _check(
-            hold.trades >= LIBRARY_HOLDOUT_MIN_TRADES, hold.trades, LIBRARY_HOLDOUT_MIN_TRADES, "count",
-        )
-        h_beat = h_sma is not None and hold.pnl > h_sma
-        checks["holdout_beat_sma_stack"] = _check(h_beat, _r(hold.pnl, 2), _r(h_sma, 2), "holdout")
-        if hold.daily_sharpe < MIN_BACKTEST_SHARPE:
-            reasons.append(f"holdout_sharpe {hold.daily_sharpe:.2f} < {MIN_BACKTEST_SHARPE} (daily-equity)")
-        if hold.trades < LIBRARY_HOLDOUT_MIN_TRADES:
-            reasons.append(f"holdout_trades {hold.trades} < {LIBRARY_HOLDOUT_MIN_TRADES}")
-        if h_sma is None:
-            reasons.append("holdout sma_stack missing")
-        elif not h_beat:
-            reasons.append(f"holdout_pnl {hold.pnl:.2f} <= sma_stack {h_sma:.2f}")
-
     moments = return_moments(list(disc.returns))
     dsr_value = None
-    if moments is None:
-        dsr_ok = False
-        reasons.append("dsr daily returns missing")
-    else:
+    if moments is not None:
         dsr_value = deflated_sharpe_ratio(
             sharpe=float(moments["sharpe"]),
             n_obs=int(moments["n"]),
@@ -559,54 +849,53 @@ def evaluate_library_record(
             skew=float(moments["skew"]),
             kurtosis=float(moments["kurtosis"]),
         )
-        dsr_ok = dsr_value >= DSR_MIN_PROBABILITY
-        if not dsr_ok:
-            reasons.append(f"dsr {dsr_value:.3f} < {DSR_MIN_PROBABILITY} (n_trials={trials})")
     hurdles = dsr_hurdles(moments, trials)
-    checks["dsr"] = _check(dsr_ok, _r(dsr_value), DSR_MIN_PROBABILITY, "robust", n_trials=trials)
-
     matrix = [disc.window_pnl] + [nb["_windows"] for nb in neighbours]
     pbo = None
+    pbo_undefined = None
     if len(matrix) < 2:
-        pbo_reason = "pbo undefined (fewer than 2 configurations)"
+        pbo_undefined = "pbo undefined (fewer than 2 configurations)"
     else:
         pbo = probability_of_backtest_overfitting(np.asarray(matrix, dtype=np.float64).T)
         if pbo is None:
-            pbo_reason = "pbo undefined"
-        elif pbo > PBO_MAX:
-            pbo_reason = f"pbo {pbo:.3f} > {PBO_MAX}"
-        else:
-            pbo_reason = None
-    if pbo_reason:
-        reasons.append(pbo_reason)
-    checks["pbo"] = _check(pbo_reason is None, _r(pbo), PBO_MAX, "robust", configs=len(matrix))
-
-    n_nb = len(neighbours)
-    n_pass = sum(1 for nb in neighbours if nb["pass"])
-    n_sharpe = sum(1 for nb in neighbours if nb["sharpe_only_pass"])
-    frac = n_pass / n_nb if n_nb else 0.0
-    nb_ok = n_nb > 0 and frac + 1e-12 >= NEIGHBOR_PASS_MIN_FRACTION
-    sharpe_only_ok = n_nb > 0 and (n_sharpe / n_nb) + 1e-12 >= NEIGHBOR_PASS_MIN_FRACTION
-    if n_nb == 0:
-        reasons.append("no parameter neighbours (lone spike)")
-    elif not nb_ok:
-        reasons.append(f"neighbours {n_pass}/{n_nb} = {frac:.0%} < {NEIGHBOR_PASS_MIN_FRACTION:.0%}")
-    checks["neighbours"] = _check(
-        nb_ok, f"{n_pass}/{n_nb}", NEIGHBOR_PASS_MIN_FRACTION, "robust",
-        n_pass=n_pass, total=n_nb, sharpe_only_pass=sharpe_only_ok, sharpe_only=f"{n_sharpe}/{n_nb}",
+            pbo_undefined = "pbo undefined"
+    n_windows = len(disc.window_pnl)
+    expected_windows = len(data.segments)
+    windows_ok = _blocks_tile(data) and n_windows == expected_windows
+    sma_pnl = None if sma is None else sma.pnl
+    verdict = library_verdict(
+        windows_ok=windows_ok,
+        n_windows=n_windows,
+        expected_windows=expected_windows,
+        window_span=(
+            f"{_iso_day(int(data.discovery.ts[data.score_index]))} through the day before the holdout"
+        ),
+        oos_pnl=oos_net,
+        oos_trades=disc.trades,
+        oos_sharpe=disc.daily_sharpe,
+        sma_oos_pnl=sma_net,
+        bh_oos_pnl=bh_net,
+        holdout_present=hold is not None,
+        holdout_note=data.holdout_note,
+        holdout_pnl=hold_net,
+        holdout_trades=None if hold is None else hold.trades,
+        holdout_sharpe=None if hold is None else hold.daily_sharpe,
+        sma_holdout_pnl=hold_sma_net,
+        bh_holdout_pnl=hold_bh_net,
+        stress_oos_pnl=stress_oos_net,
+        stress_holdout_pnl=stress_hold_net,
+        dsr_value=dsr_value,
+        n_trials=trials,
+        pbo=pbo,
+        pbo_undefined=pbo_undefined,
+        neighbour_passes=[bool(nb["pass"]) for nb in neighbours],
     )
-
-    cost_ok = stressed.daily_sharpe >= MIN_BACKTEST_SHARPE
-    if not cost_ok:
-        reasons.append(
-            f"cost stress sharpe {stressed.daily_sharpe:.2f} < {MIN_BACKTEST_SHARPE} "
-            f"(2x fee + {COST_STRESS_EXTRA_SLIPPAGE * 1e4:.0f}bps)"
-        )
-    checks["cost_stress"] = _check(cost_ok, _r(stressed.daily_sharpe), MIN_BACKTEST_SHARPE, "robust")
-
-    failing = [key for key in CHECK_ORDER if not checks[key]["pass"]]
-    count_only = count_only_failure(checks)
-    passed = not failing
+    checks = verdict["checks"]
+    reasons = verdict["fail_reasons"]
+    warnings = verdict["warnings"]
+    failing = verdict["failing_checks"]
+    count_only = verdict["count_only"]
+    passed = verdict["qualified"]
     for nb in neighbours:
         nb.pop("_windows", None)
 
@@ -620,7 +909,7 @@ def evaluate_library_record(
         }
         for (seg_start, seg_end), pnl, trades in zip(segments, disc.window_pnl, disc.window_trades)
     ]
-    holdout_block = {"pass": all(checks[k]["pass"] for k in ("holdout_sharpe", "holdout_trades", "holdout_beat_sma_stack"))}
+    holdout_block = {"pass": verdict["holdout_pass"]}
     if hold is None:
         holdout_block["reason"] = data.holdout_note or "holdout tape missing"
     else:
@@ -628,28 +917,33 @@ def evaluate_library_record(
             "sharpe": round(hold.daily_sharpe, 4),
             "daily_sharpe": round(hold.daily_sharpe, 4),
             "trades": int(hold.trades),
-            "pnl": round(hold.pnl, 2),
+            "pnl": round(hold_net, 2),
             "max_drawdown": round(hold.max_dd, 4),
             "bh_daily_sharpe": None if hold_bh is None else round(hold_bh.daily_sharpe, 4),
-            "bh_pnl": None if hold_bh is None else round(hold_bh.pnl, 2),
+            "bh_pnl": None if hold_bh_net is None else round(hold_bh_net, 2),
             "bh_role": BH_METRIC_ROLE,
-            "sma_pnl": None if hold_sma is None else round(hold_sma.pnl, 2),
+            "sma_pnl": None if hold_sma_net is None else round(hold_sma_net, 2),
         })
     gate_block = {
         "passed": passed,
         "rules": GATE_RULES,
         "engine": ENGINE_ID,
-        "holdout_pass": holdout_block["pass"],
-        "dsr_pass": checks["dsr"]["pass"],
-        "pbo_pass": checks["pbo"]["pass"],
-        "perturb_pass": checks["neighbours"]["pass"],
-        "cost_pass": checks["cost_stress"]["pass"],
+        "oos_pnl_pass": verdict["oos_pnl_pass"],
+        "trades_pass": verdict["trades_pass"],
+        "holdout_pass": verdict["holdout_pass"],
+        "dsr_pass": verdict["dsr_pass"],
+        "pbo_pass": verdict["pbo_pass"],
+        "perturb_pass": verdict["perturb_pass"],
+        "cost_pass": verdict["cost_pass"],
         "holdout": {k: v for k, v in holdout_block.items() if k != "pass"},
+        "oos_pnl": round(oos_net, 2),
         "dsr": _r(dsr_value, 6),
         "n_trials": trials,
         "pbo": _r(pbo, 6),
-        "neighbours": n_nb,
-        "neighbours_pass": n_pass,
+        "neighbours": verdict["neighbours"],
+        "neighbours_pass": verdict["neighbours_pass"],
+        "cost_oos_pnl": round(stress_oos_net, 2),
+        "cost_holdout_pnl": None if stress_hold_net is None else round(stress_hold_net, 2),
         "cost_sharpe": round(stressed.daily_sharpe, 4),
         "cost_daily_sharpe": round(stressed.daily_sharpe, 4),
         "cost_bh_daily_sharpe": None if stressed_bh is None else round(stressed_bh.daily_sharpe, 4),
@@ -681,6 +975,8 @@ def evaluate_library_record(
         "avg_hold_hours": None if disc.avg_hold_days is None else round(disc.avg_hold_days * 24.0, 2),
         "gate_rules": GATE_RULES,
         "fail_reasons": reasons,
+        "warnings": warnings,
+        "oos_net_pnl": round(oos_net, 2),
         "all_windows_nonneg": all(t >= 1 and p >= 0 for p, t in zip(disc.window_pnl, disc.window_trades)),
         "backtest_max_dd": round(disc.max_dd, 4),
         "symbols": ["BTC/USDT"],
@@ -699,18 +995,25 @@ def evaluate_library_record(
             "sharpe_kind": SHARPE_KIND,
             "checks": checks,
             "failing_checks": failing,
+            "warning_checks": verdict["warning_checks"],
             "count_only": count_only,
-            "discovery": disc.summary(),
+            "discovery": {**disc.summary(), "net_pnl": round(oos_net, 2)},
             "windows": windows,
             "bh": None if bh is None else bh.summary(),
             "sma_stack": None if sma is None else sma.summary(),
             "holdout": None if hold is None else {
                 **hold.summary(),
-                "bh": None if hold_bh is None else hold_bh.summary(),
-                "sma_stack": None if hold_sma is None else hold_sma.summary(),
+                "net_pnl": round(hold_net, 2),
+                "bh": None if hold_bh is None else {**hold_bh.summary(), "net_pnl": round(hold_bh_net, 2)},
+                "sma_stack": None if hold_sma is None else {
+                    **hold_sma.summary(),
+                    "net_pnl": None if hold_sma_net is None else round(hold_sma_net, 2),
+                },
             },
             "cost_stress": {
                 **stressed.summary(),
+                "net_pnl": round(stress_oos_net, 2),
+                "holdout_net_pnl": None if stress_hold_net is None else round(stress_hold_net, 2),
                 "taker_fee": STRESS_COSTS.taker_fee,
                 "slippage": STRESS_COSTS.slippage,
                 "bh_daily_sharpe": None if stressed_bh is None else round(stressed_bh.daily_sharpe, 4),

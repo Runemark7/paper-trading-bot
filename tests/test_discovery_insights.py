@@ -51,6 +51,7 @@ class ClassifyTests(unittest.TestCase):
     def test_reason_strings_map_to_gates(self):
         cases = {
             "oos_trades 12 < 30": "trades",
+            "oos_pnl -12.00 <= 0": "profit",
             "oos_sharpe 0.10 < 0.3": "sharpe",
             "oos_pnl 1.00 <= sma_stack 5.00": "baseline",
             "sma_stack missing": "baseline",

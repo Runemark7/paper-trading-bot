@@ -8,15 +8,21 @@ import { ErrorNote, Panel, SectionTitle, SkeletonRows, num } from "../components
 const CHECK_LABEL: Record<string, string> = {
   windows: "windows",
   oos_trades: "OOS trades",
+  oos_pnl: "OOS P&L",
+  holdout_pnl: "holdout P&L",
+  holdout_trades: "holdout trades",
+  neighbours: "neighbours",
+  cost_stress: "cost stress",
+};
+
+const WARNING_LABEL: Record<string, string> = {
   oos_sharpe: "OOS Sharpe",
   beat_sma_stack: "vs sma_stack",
   holdout_sharpe: "holdout Sharpe",
-  holdout_trades: "holdout trades",
   holdout_beat_sma_stack: "holdout vs sma_stack",
   dsr: "DSR",
   pbo: "PBO",
-  neighbours: "neighbours",
-  cost_stress: "cost stress",
+  buy_and_hold: "vs buy-and-hold",
 };
 
 function paramsOf(row: LibraryStrategyRow): string {
@@ -69,7 +75,7 @@ export default function LibraryTable() {
         title="Strategy library"
         aside={data?.gate_rules}
       >
-        Cited daily BTC rules. Long or flat, all-in, exit when the signal turns off. A pass is proposed, not seated.
+        Cited daily BTC rules. A pass is profitable after fees on the test years and the holdout year. It is proposed, not seated.
       </SectionTitle>
       {query.isError ? <ErrorNote what="the strategy library" error={query.error} stale={Boolean(data)} /> : null}
       {query.isPending && !data ? <SkeletonRows rows={6} /> : null}
@@ -85,20 +91,21 @@ export default function LibraryTable() {
             {data.source ? ` · queue: ${data.source}` : ""}
           </p>
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[980px] border-collapse text-left text-xs">
+            <table className="w-full min-w-[1100px] border-collapse text-left text-xs">
               <thead>
                 <tr className="border-b border-white/10 text-[10px] uppercase tracking-wider text-white/40">
                   <th className="px-2 py-2 font-medium">Strategy</th>
                   <th className="px-2 py-2 font-medium">Citation</th>
                   <th className="px-2 py-2 font-medium">Params</th>
-                  <th className="px-2 py-2 text-right font-medium">OOS Sharpe</th>
+                  <th className="px-2 py-2 text-right font-medium">OOS P&L</th>
                   <th className="px-2 py-2 text-right font-medium">Trades</th>
-                  <th className="px-2 py-2 text-right font-medium">Holdout</th>
-                  <th className="px-2 py-2 text-right font-medium">Cost Sharpe</th>
+                  <th className="px-2 py-2 text-right font-medium">Holdout P&L</th>
+                  <th className="px-2 py-2 text-right font-medium">Stressed P&L</th>
                   <th className="px-2 py-2 text-right font-medium">DSR</th>
                   <th className="px-2 py-2 text-right font-medium">PBO</th>
                   <th className="px-2 py-2 text-right font-medium">Buy & hold</th>
                   <th className="px-2 py-2 font-medium">Result</th>
+                  <th className="px-2 py-2 font-medium">Warnings</th>
                 </tr>
               </thead>
               <tbody>
@@ -125,17 +132,25 @@ export default function LibraryTable() {
                         )}
                       </td>
                       <td className="px-2 py-2 font-mono text-[10px] text-white/60 whitespace-nowrap">{paramsOf(row)}</td>
-                      <Cell>{result ? num(result.daily_sharpe, 2) : "—"}</Cell>
-                      <Cell>{result?.trades != null ? String(result.trades) : "—"}</Cell>
-                      <Cell title={result?.holdout_pnl != null ? `holdout P&L ${num(result.holdout_pnl, 0)}` : undefined}>
-                        {result ? `${num(result.holdout_sharpe, 2)} / ${result.holdout_trades ?? "—"}` : "—"}
+                      <Cell title={result?.daily_sharpe != null ? `OOS Sharpe ${num(result.daily_sharpe, 2)} (warning)` : undefined}>
+                        {result ? num(result.oos_net_pnl, 0) : "—"}
                       </Cell>
-                      <Cell>{result ? num(result.cost_sharpe, 2) : "—"}</Cell>
-                      <Cell title={result?.n_trials != null ? `N = ${result.n_trials}` : undefined}>
+                      <Cell>{result?.trades != null ? String(result.trades) : "—"}</Cell>
+                      <Cell title={result?.holdout_sharpe != null ? `holdout Sharpe ${num(result.holdout_sharpe, 2)} (warning) · ${result.holdout_trades ?? "—"} trades` : undefined}>
+                        {result ? `${num(result.holdout_pnl, 0)} / ${result.holdout_trades ?? "—"}` : "—"}
+                      </Cell>
+                      <Cell title={result?.cost_sharpe != null ? `stressed OOS Sharpe ${num(result.cost_sharpe, 2)} (warning)` : undefined}>
+                        {result
+                          ? `${num(result.cost_oos_pnl, 0)} / ${num(result.cost_holdout_pnl, 0)}`
+                          : "—"}
+                      </Cell>
+                      <Cell title={result?.n_trials != null ? `N = ${result.n_trials}. Warning, not a veto.` : undefined}>
                         {result ? num(result.dsr, 3) : "—"}
                       </Cell>
-                      <Cell title={neighbours}>{result ? num(result.pbo, 2) : "—"}</Cell>
-                      <Cell title="Informational. Not a pass rule.">
+                      <Cell title={neighbours ? `${neighbours}. Warning, not a veto.` : "Warning, not a veto."}>
+                        {result ? num(result.pbo, 2) : "—"}
+                      </Cell>
+                      <Cell title="Buy-and-hold Sharpe. A loss to buy-and-hold is a warning, not a veto.">
                         {result ? num(result.bh_daily_sharpe, 2) : "—"}
                       </Cell>
                       <td className="px-2 py-2 min-w-[9rem]">
@@ -145,13 +160,20 @@ export default function LibraryTable() {
                           <span className="text-white/40">{row.status === "testing" ? "testing" : "queued"}</span>
                         )}
                       </td>
+                      <td className="px-2 py-2 min-w-[8rem] text-amber-100/80" title={result?.warnings?.join("\n")}>
+                        {result
+                          ? (result.warning_checks?.length
+                            ? result.warning_checks.map((key) => WARNING_LABEL[key] ?? key).join(", ")
+                            : "none")
+                          : "—"}
+                      </td>
                     </tr>
                   );
                 })}
               </tbody>
             </table>
           </div>
-          <p className="mt-3 text-xs leading-relaxed text-white/45">{data.note} Buy-and-hold is shown for context and is not a pass rule.</p>
+          <p className="mt-3 text-xs leading-relaxed text-white/45">{data.note} Pass/fail uses the vetoes only. The warnings column is DSR, PBO, Sharpe, sma_stack, and buy-and-hold.</p>
         </>
       ) : null}
     </Panel>

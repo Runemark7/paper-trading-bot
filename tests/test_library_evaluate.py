@@ -18,6 +18,8 @@ from hedge_fund.library.catalog import (
 from hedge_fund.library.daily import DAY_MS
 from hedge_fund.library.evaluate import (
     CHECK_ORDER,
+    VETO_CHECKS,
+    WARNING_CHECKS,
     count_only_failure,
     discovery_metrics,
     evaluate_library_record,
@@ -132,10 +134,19 @@ class RecordTests(unittest.TestCase):
             self.assertEqual(record["gate_rules"], GATE_RULES)
             self.assertEqual(record["engine"], "signal_exit")
             self.assertEqual(record["timeframe"], "1d")
-            failing = [k for k in CHECK_ORDER if not lib["checks"][k]["pass"]]
-            self.assertEqual(lib["failing_checks"], failing)
-            self.assertEqual(record["qualified"], not failing)
-            self.assertEqual(bool(record["fail_reasons"]), bool(failing))
+            veto_failing = [k for k in VETO_CHECKS if not lib["checks"][k]["pass"]]
+            warn_failing = [k for k in WARNING_CHECKS if not lib["checks"][k]["pass"]]
+            self.assertEqual(lib["failing_checks"], veto_failing)
+            self.assertEqual(lib["warning_checks"], warn_failing)
+            self.assertEqual(record["qualified"], not veto_failing)
+            self.assertEqual(bool(record["fail_reasons"]), bool(veto_failing))
+            self.assertEqual(bool(record["warnings"]), bool(warn_failing))
+            for text in record["warnings"]:
+                self.assertNotIn(text, record["fail_reasons"])
+            for key in VETO_CHECKS:
+                self.assertEqual(lib["checks"][key]["role"], "veto", key)
+            for key in WARNING_CHECKS:
+                self.assertEqual(lib["checks"][key]["role"], "warning", key)
 
     def test_trial_count_is_the_whole_library(self):
         for record in self.records.values():
@@ -179,13 +190,15 @@ class CountOnlyTests(unittest.TestCase):
     def test_only_trade_floors(self):
         self.assertTrue(count_only_failure(self._checks(oos_trades=None, holdout_trades=None)))
 
-    def test_neighbours_count_only_when_sharpe_alone_passes(self):
-        self.assertTrue(count_only_failure(self._checks(oos_trades=None, neighbours={"sharpe_only_pass": True})))
-        self.assertFalse(count_only_failure(self._checks(oos_trades=None, neighbours={"sharpe_only_pass": False})))
+    def test_profit_and_neighbour_failures_are_not_count_only(self):
+        self.assertFalse(count_only_failure(self._checks(oos_pnl=None)))
+        self.assertFalse(count_only_failure(self._checks(neighbours=None)))
+        self.assertFalse(count_only_failure(self._checks(oos_trades=None, oos_pnl=None)))
 
-    def test_any_statistical_failure_is_not_count_only(self):
-        self.assertFalse(count_only_failure(self._checks(oos_trades=None, dsr=None)))
+    def test_a_warning_does_not_cancel_a_count_only_fail(self):
+        self.assertTrue(count_only_failure(self._checks(oos_trades=None, dsr=None)))
         self.assertFalse(count_only_failure(self._checks()))
+        self.assertFalse(count_only_failure(self._checks(dsr=None)))
 
 
 class WarmupTests(unittest.TestCase):

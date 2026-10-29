@@ -154,8 +154,8 @@ export default function Discovery() {
         aside={summary.data ? <Badge tone="neutral">updated {shortAgo(summary.data.as_of)}</Badge> : null}
       >
         Discovery evaluates a fixed library of cited daily BTC strategies: long or flat, all-in, exit when the
-        signal turns off. Each one goes through the same 8-check gate. A pass is proposed, awaiting approval.
-        The owner admits champions for live paper trading. There is no limit on how many.
+        signal turns off. Gate v7 passes a name that is profitable after fees on the test years and the final
+        year. DSR and PBO are warnings. A pass is proposed, awaiting approval. The owner admits champions by hand.
       </PageHeader>
 
       {summary.isError ? <ErrorNote what="discovery status" error={summary.error} stale={Boolean(summary.data)} /> : null}
@@ -170,7 +170,7 @@ export default function Discovery() {
         <Funnel
           steps={[
             { label: "Tested", value: tested, hint: "unique strategies backtested" },
-            { label: "Passed gate", value: counts?.tested_pass, hint: "cleared all 8 checks", tone: "pos" },
+            { label: "Passed gate", value: counts?.tested_pass, hint: "profitable after fees; warnings allowed", tone: "pos" },
             {
               label: "Proposed",
               value: forward ? forward.eligible : undefined,

@@ -643,11 +643,16 @@ export interface LibraryResult {
   bh_daily_sharpe?: number | null;
   bh_oos_pnl?: number | null;
   failing_checks?: string[];
+  warning_checks?: string[];
+  warnings?: string[];
   count_only?: boolean;
+  oos_net_pnl?: number | null;
   holdout_sharpe?: number | null;
   holdout_trades?: number | null;
   holdout_pnl?: number | null;
   holdout_bh_sharpe?: number | null;
+  cost_oos_pnl?: number | null;
+  cost_holdout_pnl?: number | null;
   cost_sharpe?: number | null;
   dsr?: number | null;
   n_trials?: number | null;

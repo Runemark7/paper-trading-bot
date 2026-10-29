@@ -26,9 +26,9 @@ MIN_REBUILD_SECONDS = 30.0
 NEAR_MISS_LIMIT = 8
 RECENT_LIMIT = 12
 
-BASE_GATES = ("trades", "sharpe", "baseline", "windows")
+BASE_GATES = ("trades", "profit", "sharpe", "baseline", "windows")
 ROBUST_GATES = ("holdout", "dsr", "pbo", "perturb", "cost")
-GATE_ORDER = BASE_GATES[:3] + ROBUST_GATES + ("windows", "bh_legacy", "ops")
+GATE_ORDER = ("trades", "profit", "windows") + ROBUST_GATES + ("sharpe", "baseline", "bh_legacy", "ops")
 
 COLD_WAIT_SECONDS = 5.0
 _CACHE = BackgroundCache("discovery-insights", min_interval=MIN_REBUILD_SECONDS, max_keys=2)
@@ -45,6 +45,8 @@ def classify_reason(reason: str) -> str:
         return "holdout"
     if r.startswith("oos_trades"):
         return "trades"
+    if r.startswith("oos_pnl") and "sma_stack" not in r and "buy-and-hold" not in r:
+        return "profit"
     if r.startswith("oos_sharpe"):
         return "sharpe"
     if "sma_stack" in r:
@@ -175,7 +177,8 @@ def build_insights(log: list[dict]) -> dict:
         "note": (
             "Counts cover the newest evaluation per name in the capped display log "
             "under the current gate tag. A name can fail several checks. "
-            "Buy-and-hold figures are informational and never a pass rule."
+            "On the daily library, DSR, PBO, Sharpe, sma_stack, and buy-and-hold are warnings. "
+            "The 5m path still treats Sharpe, sma_stack, DSR, and PBO as vetoes."
         ),
     }
 
