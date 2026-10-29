@@ -154,7 +154,7 @@ class DiscoveryPageContractTests(unittest.TestCase):
             'aria-label="Filter Result"',
             'label="Sharpe"',
             'label="OOS trades"',
-            'label="Test P&L"',
+            'label="Sum of window P&L"',
             'label="Fail reasons"',
         ):
             self.assertIn(label, DISCOVERY_TSX, label)
