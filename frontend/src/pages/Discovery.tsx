@@ -154,8 +154,8 @@ export default function Discovery() {
         aside={summary.data ? <Badge tone="neutral">updated {shortAgo(summary.data.as_of)}</Badge> : null}
       >
         Discovery evaluates a fixed library of cited daily BTC strategies: long or flat, all-in, exit when the
-        signal turns off. Gate v7 passes a name that is profitable after fees on the test years and the final
-        year. DSR and PBO are warnings. A pass is proposed, awaiting approval. The owner admits champions by hand.
+        signal turns off. Gate v7b passes a name that is profitable after fees on the test years and the final
+        year. Neighbours, DSR, and PBO are warnings. A pass is proposed, awaiting approval. The owner admits champions by hand.
       </PageHeader>
 
       {summary.isError ? <ErrorNote what="discovery status" error={summary.error} stale={Boolean(summary.data)} /> : null}

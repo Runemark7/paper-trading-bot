@@ -1,6 +1,7 @@
-"""Gate v7: library profit vetoes, and the checks that are only warnings.
+"""Gate v7b: library profit vetoes. Neighbours, DSR, and PBO are warnings.
 
-The 5m path still vetoes on Sharpe. A v6 worker gets no names.
+The 5m path still vetoes on Sharpe and on neighbours. A v6 or v7 worker
+gets no names.
 """
 from __future__ import annotations
 
@@ -18,6 +19,7 @@ from hedge_fund.library.evaluate import (
     library_verdict,
 )
 from hedge_fund.trading.constants import (
+    ATOM_GATE_RULES,
     DSR_MIN_PROBABILITY,
     GATE_RULES,
     HOLDOUT_MIN_TRADES,
@@ -28,6 +30,7 @@ from hedge_fund.trading.constants import (
     NEIGHBOR_PASS_MIN_FRACTION,
     PBO_MAX,
     V6_WARMUP_GATE_RULES,
+    V7_GATE_RULES,
 )
 from hedge_fund.trading.gate_v4 import v4_attestation_ok, v4_pass_attestation
 from hedge_fund.trading.qualify import aggregate_fail_reasons
@@ -64,8 +67,11 @@ def _facts(**overrides) -> dict:
 
 
 class TagTests(unittest.TestCase):
-    def test_gate_tag_is_v7_and_v6_is_history(self):
-        self.assertEqual(GATE_RULES, "gate_v7_library_profit_20261029")
+    def test_gate_tag_is_v7b_and_v7_is_history(self):
+        self.assertEqual(GATE_RULES, "gate_v7b_library_profit_20261029")
+        self.assertEqual(V7_GATE_RULES, "gate_v7_library_profit_20261029")
+        self.assertIn(V7_GATE_RULES, ATOM_GATE_RULES)
+        self.assertIn(GATE_RULES, ATOM_GATE_RULES)
         self.assertEqual(V6_WARMUP_GATE_RULES, "gate_v6_library_warmup_20261029")
         self.assertEqual(LIBRARY_MIN_OOS_TRADES, 8)
         self.assertEqual(LIBRARY_HOLDOUT_MIN_TRADES, 2)
@@ -154,17 +160,23 @@ class VetoTests(unittest.TestCase):
         self.assertEqual(out["failing_checks"], ["windows"])
         self.assertIn("do not tile the warmed span", out["fail_reasons"][0])
 
-    def test_neighbours_must_clear_the_three_profit_checks(self):
+    def test_neighbours_are_a_warning(self):
         short = _facts(neighbour_passes=[True, True, False, False])
-        self.assertFalse(short["qualified"])
-        self.assertEqual(short["failing_checks"], ["neighbours"])
-        self.assertIn("neighbours 2/4 = 50% < 70%", short["fail_reasons"])
+        self.assertTrue(short["qualified"])
+        self.assertEqual(short["failing_checks"], [])
+        self.assertEqual(short["fail_reasons"], [])
+        self.assertIn("neighbours", short["warning_checks"])
+        self.assertIn("neighbours 2/4 = 50% < 70%", short["warnings"])
+        self.assertFalse(short["perturb_pass"])
         exact = _facts(neighbour_passes=[True] * 7 + [False] * 3)
         self.assertTrue(exact["qualified"])
+        self.assertNotIn("neighbours", exact["warning_checks"])
         self.assertEqual(exact["neighbours_pass"], 7)
+        self.assertTrue(exact["perturb_pass"])
         lone = _facts(neighbour_passes=[])
-        self.assertFalse(lone["qualified"])
-        self.assertIn("no parameter neighbours (lone spike)", lone["fail_reasons"])
+        self.assertTrue(lone["qualified"])
+        self.assertIn("no parameter neighbours (lone spike)", lone["warnings"])
+        self.assertNotIn("neighbours", lone["failing_checks"])
 
 
 class WarningTests(unittest.TestCase):
@@ -230,6 +242,7 @@ class WarningTests(unittest.TestCase):
             sma_holdout_pnl=999.0,
             dsr_value=0.1,
             pbo=0.9,
+            neighbour_passes=[False],
             bh_oos_pnl=999.0,
             bh_holdout_pnl=999.0,
         )
@@ -244,6 +257,7 @@ class WarningTests(unittest.TestCase):
                 "holdout_beat_sma_stack",
                 "dsr",
                 "pbo",
+                "neighbours",
                 "buy_and_hold",
             ],
         )
@@ -296,6 +310,37 @@ class ProposeTests(unittest.TestCase):
         self.assertEqual(body["admission"], "manual")
         self.assertEqual(load_pool().get("champions"), [])
 
+    def test_a_neighbour_warning_still_proposes(self):
+        from hedge_fund.trading.ingest import ingest_discovery_payload
+
+        row = {
+            "strategy": "lib.sma200",
+            "tested_at": "2026-10-29T11:01:00+01:00",
+            "qualified": True,
+            "sharpe": 1.0,
+            "daily_sharpe": 1.0,
+            "win_rate_pct": 40.0,
+            "test_pnl": 100.0,
+            "trades": 27,
+            "fail_reasons": [],
+            "warnings": ["neighbours 0/3 = 0% < 70%"],
+            "timeframe": TIMEFRAME,
+            "risk_policy": RISK_POLICY,
+            "engine": ENGINE_ID,
+            "gate_rules": GATE_RULES,
+            "gate_v4": library_pass_attestation(
+                n_trials=library_trial_count(),
+                perturb_pass=False,
+                dsr_pass=False,
+                pbo_pass=False,
+            ),
+            "symbols": ["BTC/USDT"],
+        }
+        self.assertTrue(library_attestation_ok(row))
+        body = ingest_discovery_payload({"evaluations": [row]})
+        self.assertEqual(body["proposed"], ["lib.sma200"])
+        self.assertEqual(body["admitted"], [])
+
     def test_v6_worker_gets_stale_rules(self):
         from hedge_fund.trading.leases import claim_discovery_batch
 
@@ -311,6 +356,21 @@ class ProposeTests(unittest.TestCase):
         self.assertTrue(body["stale_rules"])
         self.assertEqual(body["gate_rules"], GATE_RULES)
         self.assertEqual(body["worker_gate_rules"], V6_WARMUP_GATE_RULES)
+
+    def test_v7_worker_gets_stale_rules(self):
+        from hedge_fund.trading.leases import claim_discovery_batch
+
+        body = claim_discovery_batch(
+            "zealous-lion",
+            4,
+            parallel=2,
+            now=datetime(2026, 10, 29, 11, 1, tzinfo=timezone.utc),
+            gate_rules=V7_GATE_RULES,
+            require_gate_rules=True,
+        )
+        self.assertEqual(body["names"], [])
+        self.assertTrue(body["stale_rules"])
+        self.assertEqual(body["gate_rules"], GATE_RULES)
 
 
 if __name__ == "__main__":

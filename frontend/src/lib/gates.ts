@@ -1,7 +1,7 @@
 /**
- * Gate v7 checks in plain words. Thresholds mirror hedge_fund/trading/constants.py
- * (GATE_RULES gate_v7_library_profit_20261029). These are the daily library
- * rules. The 5m path still vetoes on Sharpe, sma_stack, DSR, and PBO.
+ * Gate v7b checks in plain words. Thresholds mirror hedge_fund/trading/constants.py
+ * (GATE_RULES gate_v7b_library_profit_20261029). These are the daily library
+ * rules. The 5m path still vetoes on Sharpe, sma_stack, DSR, PBO, and neighbours.
  * Display only; the server decides.
  */
 
@@ -51,13 +51,6 @@ export const GATES: GateInfo[] = [
     stage: "robustness",
   },
   {
-    key: "perturb",
-    label: "Neighbours stay profitable",
-    rule: "≥ 70% pass the profit checks",
-    plain: "At least 70% of the declared parameter neighbours must also have positive net P&L out of sample, in the holdout, and on both spans at the higher costs.",
-    stage: "robustness",
-  },
-  {
     key: "cost",
     label: "Survives higher costs",
     rule: "P&L > 0 at 2× fees + 5 bps",
@@ -68,6 +61,13 @@ export const GATES: GateInfo[] = [
 
 /** Computed and shown. A miss here does not reject a library name. */
 export const WARNING_GATES: GateInfo[] = [
+  {
+    key: "perturb",
+    label: "Neighbours",
+    rule: "warning if fewer than 70% pass",
+    plain: "The share of parameter neighbours with positive net P&L out of sample, in the holdout, and on both spans at the higher costs. Below 70% is shown. It does not reject a library name. The 5m path still vetoes on it.",
+    stage: "other",
+  },
   {
     key: "sharpe",
     label: "Sharpe floor",

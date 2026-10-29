@@ -4,6 +4,7 @@ Measured on completed UTC daily bars with the ``signal_exit`` engine.
 Alexander, 2026-10-29 10:35 CET: gate on profit after fees and costs in
 the test years and the final year. DSR and PBO are warnings, not vetoes.
 The success criterion is profitable after fees, not beating buy-and-hold.
+Alexander, 2026-10-29 11:01 CET: the neighbour rule is a warning too.
 
 * History starts at the Binance BTCUSDT listing (``LIBRARY_TAPE_START_MS``,
   2017-08-17), shared with the live cycle. Indicators are computed on that
@@ -22,13 +23,14 @@ The success criterion is profitable after fees, not beating buy-and-hold.
   buys at the first scored open.
 * Hard vetoes: out-of-sample net P&L > 0, holdout net P&L > 0, both spans
   still net P&L > 0 at 2× fees + 5 bps, at least 8 out-of-sample
-  round-trips, at least 2 holdout trades, and at least 70% of parameter
-  neighbours also clearing the three profit checks. Net P&L is ending
-  equity minus starting cash after fees and slippage.
+  round-trips, and at least 2 holdout trades. Net P&L is ending equity
+  minus starting cash after fees and slippage.
 * Warnings, stored and shown, never a veto: DSR with N = every grid
-  point, PBO, the Sharpe floors, out-of-sample and holdout versus
-  ``sma_stack``, and the buy-and-hold comparison. The 5m path is separate
-  and still vetoes on those.
+  point, PBO, the Sharpe floors, parameter neighbours (at least 70% must
+  clear the three profit checks; the fraction is still computed),
+  out-of-sample and holdout versus ``sma_stack``, and the buy-and-hold
+  comparison. The 5m path is separate and still vetoes on those, including
+  neighbours.
 * The 20% stop is on for every library strategy and is not a second trial.
 
 Every check is computed for every strategy. A veto is a fail reason. A
@@ -99,7 +101,7 @@ STRESS_COSTS = Costs(
 )
 SHARPE_KIND = "daily_equity_annualized_sqrt365"
 # Floors that only count trades. A strategy whose every veto is one of
-# these is flagged. Neighbour profit and the P&L checks are not counts.
+# these is flagged. The P&L checks are not counts. Neighbours are a warning.
 COUNT_CHECKS = ("oos_trades", "holdout_trades")
 # Hard vetoes for lib.*. Order is the order fail reasons are listed.
 VETO_CHECKS = (
@@ -109,7 +111,6 @@ VETO_CHECKS = (
     "holdout_pnl",
     "holdout_trades",
     "cost_stress",
-    "neighbours",
 )
 # Computed, stored, and shown. A miss here never rejects the name.
 WARNING_CHECKS = (
@@ -119,6 +120,7 @@ WARNING_CHECKS = (
     "holdout_beat_sma_stack",
     "dsr",
     "pbo",
+    "neighbours",
     "buy_and_hold",
 )
 CHECK_ORDER = VETO_CHECKS + WARNING_CHECKS
@@ -127,7 +129,6 @@ _LIBRARY_ATTESTATION_KEYS = (
     "trades_pass",
     "holdout_pass",
     "cost_pass",
-    "perturb_pass",
 )
 
 
@@ -472,7 +473,8 @@ def count_only_failure(checks: dict) -> bool:
 def library_pass_attestation(**extra) -> dict:
     """Minimal ``gate_v4`` block a qualified library ingest row must carry.
 
-    DSR and PBO are absent on purpose. A warning may be false on a pass.
+    DSR, PBO, and the neighbour fraction are absent on purpose. A warning
+    may be false on a pass.
     """
     block = {
         "passed": True,
@@ -481,17 +483,16 @@ def library_pass_attestation(**extra) -> dict:
         "trades_pass": True,
         "holdout_pass": True,
         "cost_pass": True,
-        "perturb_pass": True,
     }
     block.update(extra)
     return block
 
 
 def library_attestation_ok(row: dict) -> bool:
-    """True when a qualified library row carries the v7 veto attestation.
+    """True when a qualified library row carries the v7b veto attestation.
 
-    ``dsr_pass`` and ``pbo_pass`` are not required. The 5m path still uses
-    ``v4_attestation_ok``, which does require them.
+    ``dsr_pass``, ``pbo_pass``, and ``perturb_pass`` are not required. The
+    5m path still uses ``v4_attestation_ok``, which does require them.
     """
     block = row.get("gate_v4") if isinstance(row, dict) else None
     if not isinstance(block, dict):
@@ -626,27 +627,6 @@ def library_verdict(
         holdout_pnl=None if stress_holdout_pnl is None else _r(stress_holdout_pnl, 2),
     )
 
-    n_nb = len(neighbour_passes)
-    n_pass = sum(1 for flag in neighbour_passes if flag)
-    frac = n_pass / n_nb if n_nb else 0.0
-    nb_ok = n_nb > 0 and frac + 1e-12 >= NEIGHBOR_PASS_MIN_FRACTION
-    if n_nb == 0:
-        nb_reason = "no parameter neighbours (lone spike)"
-    elif not nb_ok:
-        nb_reason = f"neighbours {n_pass}/{n_nb} = {frac:.0%} < {NEIGHBOR_PASS_MIN_FRACTION:.0%}"
-    else:
-        nb_reason = None
-    veto(
-        "neighbours",
-        nb_ok,
-        f"{n_pass}/{n_nb}",
-        NEIGHBOR_PASS_MIN_FRACTION,
-        "robust",
-        nb_reason,
-        n_pass=n_pass,
-        total=n_nb,
-    )
-
     sharpe_ok = oos_sharpe >= MIN_BACKTEST_SHARPE
     warn(
         "oos_sharpe",
@@ -720,6 +700,27 @@ def library_verdict(
         pbo_ok = True
         pbo_text = None
     warn("pbo", pbo_ok, _r(pbo), PBO_MAX, "robust", pbo_text)
+
+    n_nb = len(neighbour_passes)
+    n_pass = sum(1 for flag in neighbour_passes if flag)
+    frac = n_pass / n_nb if n_nb else 0.0
+    nb_ok = n_nb > 0 and frac + 1e-12 >= NEIGHBOR_PASS_MIN_FRACTION
+    if n_nb == 0:
+        nb_reason = "no parameter neighbours (lone spike)"
+    elif not nb_ok:
+        nb_reason = f"neighbours {n_pass}/{n_nb} = {frac:.0%} < {NEIGHBOR_PASS_MIN_FRACTION:.0%}"
+    else:
+        nb_reason = None
+    warn(
+        "neighbours",
+        nb_ok,
+        f"{n_pass}/{n_nb}",
+        NEIGHBOR_PASS_MIN_FRACTION,
+        "robust",
+        nb_reason,
+        n_pass=n_pass,
+        total=n_nb,
+    )
 
     bh_bits: list[str] = []
     if bh_oos_pnl is None:

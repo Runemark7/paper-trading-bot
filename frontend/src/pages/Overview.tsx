@@ -37,7 +37,7 @@ import {
 const JOURNEY = [
   { step: "Library", text: "A fixed list of cited daily BTC rules. The random mint is off." },
   { step: "Backtest", text: "Daily bars, long or flat, exit when the signal turns off, with fees." },
-  { step: "Gate v7", text: "The daily library must be profitable after fees on the test years and the holdout, including higher costs, with 8 and 2 trades and profitable neighbours. DSR, PBO, and Sharpe are warnings. The 5m floors stay." },
+  { step: "Gate v7b", text: "The daily library must be profitable after fees on the test years and the holdout, including higher costs, with 8 and 2 trades. Neighbours, DSR, PBO, and Sharpe are warnings. The 5m floors stay." },
   { step: "Propose", text: "Every passer is ranked and marked proposed, awaiting approval." },
   { step: "Admit", text: "The owner admits champions by hand. There is no limit on how many." },
   { step: "Forward test", text: "Paper-trade live Binance prices. Win = profit after fees." },
@@ -139,7 +139,7 @@ export default function Overview() {
           <h2 className="mt-1 text-xl font-semibold text-white">The search</h2>
           <p className="mt-2 text-sm leading-relaxed text-white/65">
             The current search is a fixed library of cited daily BTC strategies, long or flat, exiting when the
-            signal turns off. Each one is scored once under gate v7. A pass is profitable after fees. It is proposed, not seated.
+            signal turns off. Each one is scored once under gate v7b. A pass is profitable after fees. Neighbours are a warning. It is proposed, not seated.
           </p>
           <div className="mt-4 grid grid-cols-3 gap-2 text-center">
             {[
