@@ -134,6 +134,15 @@ export interface Champion {
   /** UTC ISO-8601 when this name joined the paper champion pool, or null if unknown. */
   champion_since?: string | null;
   source?: string;
+  /** forward_test_unproven when the owner seated a name that failed the gate. */
+  admission?: string;
+  /** False on an unproven forward test. Older champion rows omit this. */
+  qualified?: boolean;
+  gate_v4?: {
+    passed?: boolean;
+    fail_reasons?: string[];
+    dsr?: number;
+  };
   /** Read-only status from the criteria stored at admission. */
   forward_status?: ForwardStatus | null;
 }

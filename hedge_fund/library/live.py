@@ -19,7 +19,8 @@ is skipped: it is not a flat signal. The 20% safety stop is filled on the
 run that first includes the breach day's low (that run is the next open).
 The heartbeat does not sell these accounts on an intraday price, and its
 2:1 take-profit never touches them. A fresh book whose latest close is
-already long buys at that run's price.
+already long does not buy at that run's price when the run is intraday.
+It fills on the first cycle inside the next 00:00 UTC open window.
 """
 from __future__ import annotations
 
@@ -48,6 +49,7 @@ from hedge_fund.library.engine import (
     stop_price,
 )
 from hedge_fund.trading.constants import (
+    CYCLE_INTERVAL_SECONDS,
     LIBRARY_TAPE_START_MS,
     LIBRARY_TAPE_START_SLACK_MS,
     PAPER_START_CASH,
@@ -61,6 +63,33 @@ LOCK_NAME = "library-account"
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _stamp_ms(stamp: str) -> int | None:
+    try:
+        dt = datetime.fromisoformat(stamp)
+    except (TypeError, ValueError):
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return int(dt.astimezone(timezone.utc).timestamp() * 1000)
+
+
+def _at_daily_open(now_ms: int | None) -> bool:
+    """True for the first cycle after 00:00 UTC. That run's price is the open.
+
+    The window is ``CYCLE_INTERVAL_SECONDS`` long, inclusive of the far edge,
+    so a tick that lands on the cycle boundary still fills at the open.
+    """
+    if now_ms is None:
+        return False
+    return (int(now_ms) % DAY_MS) <= CYCLE_INTERVAL_SECONDS * 1000
+
+
+def _next_daily_open_ms(now_ms: int) -> int:
+    """00:00 UTC after ``now_ms``. Caller is outside the open window."""
+    day = int(now_ms) - (int(now_ms) % DAY_MS)
+    return day + DAY_MS
 
 
 def account_path(state: Path, name: str) -> Path:
@@ -274,10 +303,24 @@ def run_library_account(
             actions: list[dict] = []
             last_day = raw.get("last_day")
             signal_now = None
+            now_ms = _stamp_ms(stamp)
+            at_open = _at_daily_open(now_ms)
             if len(bars):
                 signal = strategy.signal(bars, params)
                 ready = _position_ready(strategy, bars, params)
-                if last_day is None:
+                if last_day is None and not at_open:
+                    # History is already decided. Buying here would fill an
+                    # already-long signal (lib.sma100 has been long since
+                    # 2026-08-19) at an arbitrary intraday price.
+                    raw["last_day"] = int(bars.ts[-1])
+                    if bool(ready[-1]):
+                        raw["last_signal"] = bool(signal[-1])
+                        if bool(signal[-1]):
+                            raw["defer_entry"] = True
+                            if now_ms is not None:
+                                raw["await_open_ms"] = _next_daily_open_ms(now_ms)
+                    pending = []
+                elif last_day is None:
                     pending = [len(bars) - 1]
                 else:
                     pending = [i for i in range(len(bars)) if int(bars.ts[i]) > int(last_day)]
@@ -324,20 +367,43 @@ def run_library_account(
                     signal_now = bool(signal[-1])
                 elif raw.get("last_signal") is not None:
                     signal_now = bool(raw["last_signal"])
+                deferring = bool(raw.get("defer_entry")) and not at_open
                 if machine.long and not was_long:
-                    actions.append(_buy(store, broker, price, strategy.stop_frac, condition))
-                    if actions[-1].get("action") != "ENTER":
+                    if deferring:
+                        # A new day arrived after the open window. Keep the
+                        # flat book and fill at the next 00:00 UTC open.
                         machine.long = False
+                    else:
+                        actions.append(_buy(store, broker, price, strategy.stop_frac, condition))
+                        raw.pop("defer_entry", None)
+                        raw.pop("await_open_ms", None)
+                        if actions[-1].get("action") != "ENTER":
+                            machine.long = False
                 elif was_long and not machine.long and broker.lots:
                     done = _sell(store, broker, price, exit_reason or REASON_SIGNAL)
                     if done:
                         actions.append(done)
+                elif raw.get("defer_entry") and at_open:
+                    raw.pop("defer_entry", None)
+                    raw.pop("await_open_ms", None)
+                    if signal_now and not machine.long and not machine.lockout:
+                        machine.long = True
+                        actions.append(_buy(store, broker, price, strategy.stop_frac, condition))
+                        if actions[-1].get("action") != "ENTER":
+                            machine.long = False
             equity = _snapshot(store, broker, price)
+            if raw.get("defer_entry") and signal_now:
+                flat_reason = "signal on; fill at the next 00:00 UTC open"
+            elif not len(bars):
+                flat_reason = "no completed day"
+            else:
+                flat_reason = (
+                    f"signal {'on' if signal_now else 'off'}"
+                    + (" (locked after stop)" if machine.lockout else "")
+                )
             decisions = actions or [{
                 "action": "HOLD" if machine.long else "FLAT",
-                "reason": "no completed day" if not len(bars) else (
-                    f"signal {'on' if signal_now else 'off'}" + (" (locked after stop)" if machine.lockout else "")
-                ),
+                "reason": flat_reason,
             }]
             for d in decisions:
                 store.record_decision(

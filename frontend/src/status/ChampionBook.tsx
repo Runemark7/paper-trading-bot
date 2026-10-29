@@ -18,6 +18,7 @@ import {
 } from "../components/kit";
 import TradeLog from "../components/TradeLog";
 import { MonoName } from "../components/ui";
+import { AdmissionBadge } from "./admission";
 import { ForwardStatusBadge, forwardStatusText } from "./forwardStatus";
 import { championDetailPath } from "./championPath";
 import { accountsMatch, fmtChampionSince } from "./format";
@@ -121,6 +122,7 @@ export function ChampionCard({
               <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
               {openEntries.length ? "In a position" : "Flat — waiting for entry"}
             </span>
+            <AdmissionBadge admission={champ.admission} />
             <ForwardStatusBadge status={champ.forward_status} />
           </div>
           <MonoName className="mt-2 block text-sm text-white/90">{champ.name}</MonoName>
