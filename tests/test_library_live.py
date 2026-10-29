@@ -5,6 +5,7 @@ import os
 import tempfile
 import unittest
 from dataclasses import replace
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -56,9 +57,10 @@ class _Book(unittest.TestCase):
         self._tmp.cleanup()
 
     def _run(self, n: int, price: float, bars: DailyBars | None = None):
+        # 00:02 UTC is inside the daily-open window, so a fresh long book fills.
         return run_library_account(
             "lib.sma200", self.root, bars=bars if bars is not None else _bars(n),
-            price=price, now="2026-10-28T18:00:00+00:00",
+            price=price, now="2026-10-30T00:02:00+00:00",
         )
 
     def _broker(self) -> PaperBroker:
@@ -81,8 +83,8 @@ class _Book(unittest.TestCase):
 
 class SignalExitLiveTests(_Book):
     def test_all_in_entry_uses_the_run_price_and_pays_the_paper_fee(self):
-        # The signal is day 0's close. The first cycle after that close fills
-        # at the cycle price, the live counterpart of the next open.
+        # The signal is day 0's close. The first cycle inside the 00:00 UTC
+        # open window fills at the cycle price, the live next-open fill.
         out = self._run(1, 105.0)
         self.assertTrue(out["long"])
         self.assertEqual(out["actions"][0]["action"], "ENTER")
@@ -143,7 +145,7 @@ class SignalExitLiveTests(_Book):
         other = tempfile.TemporaryDirectory()
         try:
             root = Path(other.name)
-            out = run_library_account("lib.sma200", root, bars=_bars(3), price=100.0, now="2026-10-28T18:00:00+00:00")
+            out = run_library_account("lib.sma200", root, bars=_bars(3), price=100.0, now="2026-10-30T00:02:00+00:00")
             self.assertTrue(out["long"])
             self.assertEqual([a["action"] for a in out["actions"]], ["ENTER"])
             store = TradeStore(account_path(root, "lib.sma200"))
@@ -300,6 +302,9 @@ class IsolatedCycleTests(unittest.TestCase):
             ), patch(
                 "hedge_fund.library.live.parse_variant",
                 return_value=(strategy, params),
+            ), patch(
+                "hedge_fund.trading.run_isolated.datetime",
+                type("Clock", (), {"now": staticmethod(lambda tz=None: datetime(2026, 10, 30, 0, 2, tzinfo=timezone.utc))}),
             ), patch("sys.argv", ["run_isolated", "--cycles", "1", "--state", str(root)]):
                 main()
             store = TradeStore(account_path(root, "lib.sma200"))
@@ -343,14 +348,63 @@ class UnwarmedDayTests(unittest.TestCase):
                 return_value=(strategy, params),
             ), patch("hedge_fund.library.live._position_ready", side_effect=ready):
                 first = run_library_account(
-                    "lib.sma200", root, bars=_bars(1), price=100.0, now="2026-10-28T18:00:00+00:00",
+                    "lib.sma200", root, bars=_bars(1), price=100.0, now="2026-10-30T00:02:00+00:00",
                 )
                 self.assertTrue(first["long"])
                 second = run_library_account(
                     "lib.sma200", root, bars=_bars(2), price=100.0, now="2026-10-28T19:00:00+00:00",
                 )
-            self.assertTrue(second["long"])
-            self.assertEqual(second["actions"], [])
+        self.assertTrue(second["long"])
+        self.assertEqual(second["actions"], [])
+
+
+class NextOpenEntryTests(_Book):
+    def test_already_long_signal_fills_at_the_next_daily_open(self):
+        """lib.sma100 is long from 2026-08-19. The first intraday run must not buy.
+
+        The fill is the first cycle of the next 00:00 UTC open, at that
+        run's price. A run just after the window still waits.
+        """
+        self._program["on"] = [True, True, True, True]
+        bars = _bars(4)
+        intraday = run_library_account(
+            "lib.sma200", self.root, bars=bars, price=111.0, now="2026-10-29T15:30:00+00:00",
+        )
+        self.assertFalse(intraday["long"])
+        self.assertEqual(intraday["actions"], [])
+        self.assertEqual(self._broker().lots, [])
+        self.assertAlmostEqual(self._broker().cash(), PAPER_START_CASH, places=6)
+        saved = self._saved()["library"]
+        self.assertTrue(saved["defer_entry"])
+        self.assertEqual(
+            saved["await_open_ms"],
+            int(datetime(2026, 10, 30, tzinfo=timezone.utc).timestamp() * 1000),
+        )
+        later = run_library_account(
+            "lib.sma200", self.root, bars=bars, price=120.0, now="2026-10-29T18:00:00+00:00",
+        )
+        self.assertFalse(later["long"])
+        self.assertEqual(self._broker().lots, [])
+
+        # 00:06 is past the 300s open window. Still not an open fill.
+        missed = run_library_account(
+            "lib.sma200", self.root, bars=bars, price=130.0, now="2026-10-30T00:06:00+00:00",
+        )
+        self.assertFalse(missed["long"])
+        self.assertEqual(self._broker().lots, [])
+        self.assertTrue(self._saved()["library"]["defer_entry"])
+        self.assertAlmostEqual(self._broker().cash(), PAPER_START_CASH, places=6)
+
+        opened = run_library_account(
+            "lib.sma200", self.root, bars=bars, price=105.0, now="2026-10-31T00:02:00+00:00",
+        )
+        self.assertTrue(opened["long"])
+        self.assertEqual(opened["actions"][0]["action"], "ENTER")
+        _qty, fill, _fee = buy_fill(PAPER_START_CASH, 105.0, COSTS)
+        lot = self._broker().lots[0]
+        self.assertAlmostEqual(lot.entry_price, fill, places=6)
+        self.assertNotAlmostEqual(lot.entry_price, 111.0 * (1.0 + SLIPPAGE), places=4)
+        self.assertNotIn("defer_entry", self._saved()["library"])
 
 
 if __name__ == "__main__":

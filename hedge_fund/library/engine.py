@@ -5,7 +5,9 @@ paper cycle (``hedge_fund.library.live``):
 
 * A signal is the desired position after the close of a completed UTC day.
   It is acted on at the next open: a backtest fills at the next daily open,
-  the live cycle at the price of its first run after that close.
+  the live cycle at the price of its first run after that close. A fresh
+  live book whose close is already long waits for the next 00:00 UTC open
+  window instead of buying at an intraday cycle price.
 * Flat and the signal is on: buy with all cash. Long and the signal is off:
   sell everything. No take-profit, no pyramiding, no partial sizing.
 * A fresh book enters at the first scored open when the previous close is

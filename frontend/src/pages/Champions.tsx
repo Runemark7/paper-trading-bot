@@ -38,6 +38,7 @@ import {
   type ChampionSortKey,
 } from "../status/championFilters";
 import { championDetailPath } from "../status/championPath";
+import { AdmissionBadge } from "../status/admission";
 import { ForwardStatusBadge } from "../status/forwardStatus";
 import {
   accountsMatch,
@@ -139,8 +140,10 @@ export default function Champions() {
         accent="emerald"
         aside={run ? `last cycle ${fmtWhen(run.cycle.last_cycle_at)}` : null}
       >
-        Strategies that passed every Discovery check and were admitted by the owner. Each one runs
-        its own $10k paper account on live BTC prices — no real money. A champion succeeds if it is profitable after fees.
+        Strategies the owner admitted to a paper account. A name that passed every Discovery check is a
+        qualified champion. An unproven forward test is badged on its card and did not pass gate v6.
+        Each one runs its own $10k paper account on live BTC prices — no real money. A champion succeeds
+        if it is profitable after fees.
       </PageHeader>
 
       {qChamps.error && !champs.length ? <ErrorNote what="champions" error={qChamps.error} /> : null}
@@ -346,6 +349,7 @@ export default function Champions() {
                     <div className="flex flex-wrap items-center justify-between gap-2 min-w-0">
                       <span className="flex flex-wrap items-center gap-1">
                         <Badge tone="run">running now</Badge>
+                        <AdmissionBadge admission={c.admission} />
                         <ForwardStatusBadge status={c.forward_status} />
                       </span>
                       <span aria-hidden className="shrink-0 text-white/40 text-sm leading-none">
@@ -403,7 +407,8 @@ export default function Champions() {
                           onClick={(e) => e.stopPropagation()}
                         >
                           <MonoName className="font-medium text-white">{c.name}</MonoName>
-                          <span className="mt-1 inline-flex">
+                          <span className="mt-1 inline-flex flex-wrap gap-1">
+                            <AdmissionBadge admission={c.admission} />
                             <ForwardStatusBadge status={c.forward_status} />
                           </span>
                         </Link>

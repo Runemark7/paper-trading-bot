@@ -323,7 +323,7 @@ class PayloadTests(_StateCase):
         from hedge_fund.trading import approved_admit
 
         _seed(self.root, [_champ(A130, _m(0.48)), _champ(A140, _m(0.561))])
-        with patch.object(approved_admit, "ensure_approved_admits_unlocked", lambda now: None), \
+        with patch.object(approved_admit, "ensure_approved_admits_unlocked", lambda now, **_kwargs: None), \
                 patch("hedge_fund.trading.families._open_lots", lambda n: 0):
             approved_admit.run_approved_admits()
         self.assertEqual(self.pool(), [A140])

@@ -34,6 +34,7 @@ import {
   openLotsByPair,
   openLotsForChampion,
 } from "../status/format";
+import { AdmissionBadge } from "../status/admission";
 import { ForwardStatusBadge, forwardStatusText } from "../status/forwardStatus";
 
 function findChampion(champs: Champion[], name: string): Champion | undefined {
@@ -177,6 +178,7 @@ export default function ChampionDetail() {
               </div>
               <div className="flex flex-wrap items-center gap-2 min-w-0">
                 {champ ? <Badge tone="run">running now</Badge> : <Badge tone="wait">not on the book</Badge>}
+                {champ ? <AdmissionBadge admission={champ.admission} /> : null}
                 {champ ? <ForwardStatusBadge status={champ.forward_status} /> : null}
                 <PairLotChips
                   btc={liveLotsKnown ? split.btc : "—"}
