@@ -554,12 +554,14 @@ def _drop_expired_and_tested(state: dict, now: datetime, tested: set[str]) -> in
 
     A pending buy-and-hold retest stays leased: the name is already
     in the tested index, and fail-once is lifted only until one fresh
-    result is stored. Returns how many expired (not tested) leases were
-    dropped.
+    result is stored. A pending library-gate retest stays leased for
+    the same reason, including when the name is already on the book.
+    Returns how many expired (not tested) leases were dropped.
     """
+    from hedge_fund.trading.requeue_library_gate import pending_library_retest_names
     from hedge_fund.trading.requeue_v4_bh import pending_retest_names
 
-    keep_tested = set(pending_retest_names())
+    keep_tested = set(pending_retest_names()) | set(pending_library_retest_names())
     leases: dict = state["leases"]
     expired = 0
     for name in list(leases):
@@ -1003,6 +1005,43 @@ def _claim_unlocked(
     }
 
 
+def _take_library_retests(
+    state: dict,
+    n: int,
+    worker_id: str,
+    expires: datetime,
+    now: datetime,
+) -> list[str]:
+    """Lease pending library-gate retests, including names already on the book.
+
+    Tested-name membership does not block these. A name that already has
+    a lease stays with that worker. Random mode does not call this.
+    """
+    if n <= 0:
+        return []
+    from hedge_fund.trading.requeue_library_gate import pending_library_retest_names
+
+    pending = pending_library_retest_names()
+    if not pending:
+        return []
+    leases: dict = state["leases"]
+    chosen: list[str] = []
+    for name in pending:
+        if len(chosen) >= n:
+            break
+        if name in leases:
+            continue
+        leases[name] = {
+            "worker_id": worker_id,
+            "claimed_at": _iso(now),
+            "expires_at": _iso(expires),
+            "library": True,
+            "library_retest": True,
+        }
+        chosen.append(name)
+    return chosen
+
+
 def _claim_library_unlocked(
     state: dict,
     worker_id: str,
@@ -1013,13 +1052,19 @@ def _claim_library_unlocked(
     ttl: int,
     tested: set[str],
 ) -> dict:
-    """Library mode: only canonical library names. No requalify lane, no
-    buy-and-hold retests, no leftovers, no mint, no lift."""
+    """Library mode: canonical library names, plus one pending gate retest.
+
+    No requalify lane, no buy-and-hold retests, no leftovers, no mint,
+    no lift. A library-gate retest is leased even when the name is
+    already tested or already seated. The seat itself is not touched.
+    """
     from hedge_fund.library.catalog import library_trial_count
 
     rest = min(int(n), lease_room(state, worker_id, parallel, now))
     expires = now + timedelta(seconds=ttl)
-    chosen = _take_library(state, rest, worker_id, expires, now, tested)
+    retest = _take_library_retests(state, rest, worker_id, expires, now)
+    rest -= len(retest)
+    chosen = list(retest) + _take_library(state, rest, worker_id, expires, now, tested)
     status = "running" if chosen else "idle"
     _touch(state, worker_id, status, now, parallel)
     _prune_workers(state, now)
@@ -1036,7 +1081,7 @@ def _claim_library_unlocked(
         "library": list(chosen),
         "library_trials": library_trial_count(),
         "refilled": [],
-        "retest": [],
+        "retest": list(retest),
         "refill": load_refill_status(),
         "ttl_seconds": ttl,
         "per_name_cap_seconds": per_name_lease_seconds(),

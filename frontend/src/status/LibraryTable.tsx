@@ -11,7 +11,6 @@ const CHECK_LABEL: Record<string, string> = {
   oos_pnl: "OOS P&L",
   holdout_pnl: "holdout P&L",
   holdout_trades: "holdout trades",
-  neighbours: "neighbours",
   cost_stress: "cost stress",
 };
 
@@ -22,6 +21,7 @@ const WARNING_LABEL: Record<string, string> = {
   holdout_beat_sma_stack: "holdout vs sma_stack",
   dsr: "DSR",
   pbo: "PBO",
+  neighbours: "neighbours",
   buy_and_hold: "vs buy-and-hold",
 };
 
@@ -75,7 +75,7 @@ export default function LibraryTable() {
         title="Strategy library"
         aside={data?.gate_rules}
       >
-        Cited daily BTC rules. A pass is profitable after fees on the test years and the holdout year. It is proposed, not seated.
+        Cited daily BTC rules. A pass is profitable after fees on the test years and the holdout year. Neighbours are a warning. It is proposed, not seated.
       </SectionTitle>
       {query.isError ? <ErrorNote what="the strategy library" error={query.error} stale={Boolean(data)} /> : null}
       {query.isPending && !data ? <SkeletonRows rows={6} /> : null}
@@ -173,7 +173,7 @@ export default function LibraryTable() {
               </tbody>
             </table>
           </div>
-          <p className="mt-3 text-xs leading-relaxed text-white/45">{data.note} Pass/fail uses the vetoes only. The warnings column is DSR, PBO, Sharpe, sma_stack, and buy-and-hold.</p>
+          <p className="mt-3 text-xs leading-relaxed text-white/45">{data.note} Pass/fail uses the vetoes only. The warnings column is DSR, PBO, neighbours, Sharpe, sma_stack, and buy-and-hold.</p>
         </>
       ) : null}
     </Panel>

@@ -177,8 +177,8 @@ def build_insights(log: list[dict]) -> dict:
         "note": (
             "Counts cover the newest evaluation per name in the capped display log "
             "under the current gate tag. A name can fail several checks. "
-            "On the daily library, DSR, PBO, Sharpe, sma_stack, and buy-and-hold are warnings. "
-            "The 5m path still treats Sharpe, sma_stack, DSR, and PBO as vetoes."
+            "On the daily library, DSR, PBO, Sharpe, neighbours, sma_stack, and buy-and-hold are warnings. "
+            "The 5m path still treats Sharpe, sma_stack, DSR, PBO, and neighbours as vetoes."
         ),
     }
 

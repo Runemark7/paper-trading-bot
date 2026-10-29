@@ -165,11 +165,11 @@ def library_table_payload(*, tested: set[str] | None = None, leased: set[str] | 
         "progress": library_progress(tested, leased),
         "strategies": rows,
         "note": (
-            "Pre-registered strategy library (gate v7). A name passes when net P&L after "
+            "Pre-registered strategy library (gate v7b). A name passes when net P&L after "
             "fees and slippage is positive on the warmed out-of-sample book and on the "
             "sealed holdout, including at 2× fees + 5 bps, with at least 8 out-of-sample "
-            "round-trips, 2 holdout trades, and 70% of neighbours also profitable on those "
-            "three checks. DSR, PBO, Sharpe, sma_stack, and buy-and-hold are warnings. "
-            "A pass is proposed, awaiting approval; it is not seated."
+            "round-trips and 2 holdout trades. DSR, PBO, Sharpe, neighbours, sma_stack, "
+            "and buy-and-hold are warnings. A pass is proposed, awaiting approval; it is "
+            "not seated."
         ),
     }

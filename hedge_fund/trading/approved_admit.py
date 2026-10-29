@@ -16,6 +16,13 @@ The marker in ``approved_admits.json`` makes each batch idempotent across
 restarts. Only the listed name is touched: no cull, no retire, no change
 to the requalify state, the discovery log, the tested index, or the
 one-per-family rule.
+
+``LIBRARY_APPROVED_ADMITS`` is the qualified branch of that same path for
+``lib.*``. Alexander approved ``lib.rsi2`` and ``lib.sma200`` at
+2026-10-29 11:01 CET. Each is seated only when ``evaluate_library_record``
+is a pass under the current ``GATE_RULES``. Warnings and ``approved_by``
+are stored on the champion row. ``qualified`` stays true. ``lib.sma100``
+stays on its unproven forward-test batch and is not rewritten.
 """
 from __future__ import annotations
 
@@ -58,6 +65,25 @@ FORWARD_TEST_ADMITS: tuple[dict, ...] = (
         "approved_by": "Alexander",
         "approved_at": "2026-10-29T09:30+01:00",
         "note": "unproven paper forward-test; fails gate v6 only on DSR 0.848 < 0.95",
+    },
+)
+# Alexander, 2026-10-29 11:01 CET: seat the two library names that pass
+# the profit gate. This is the qualified approved-admit path. A missing
+# or unqualified verdict leaves no marker, so a later start can retry.
+# lib.sma100 is not in this list.
+LIBRARY_APPROVED_BATCH = "lib-rsi2-sma200-v7-20261029"
+LIBRARY_APPROVED_ADMITS: tuple[dict, ...] = (
+    {
+        "name": "lib.rsi2",
+        "approved_by": "Alexander",
+        "approved_at": "2026-10-29T11:01+01:00",
+        "note": "qualified paper forward-test; gate v7b profit pass",
+    },
+    {
+        "name": "lib.sma200",
+        "approved_by": "Alexander",
+        "approved_at": "2026-10-29T11:01+01:00",
+        "note": "qualified paper forward-test; gate v7b profit pass",
     },
 )
 _GATE_V4_KEYS = (
@@ -214,6 +240,71 @@ def _label_forward_champion(row: dict, spec: dict, record: dict) -> None:
     }
 
 
+def _library_verdict_qualified(record: object, name: str) -> bool:
+    """True when ``record`` is a pass for ``name`` on the current gate tag."""
+    if not isinstance(record, dict) or record.get("strategy") != name:
+        return False
+    if record.get("qualified") is not True or record.get("gate_rules") != GATE_RULES:
+        return False
+    gate = record.get("gate_v4")
+    return isinstance(gate, dict) and gate.get("passed") is True and gate.get("rules") == GATE_RULES
+
+
+def _score_qualified_library(name: str, tested_at: str) -> dict | None:
+    """One library evaluation. None when the tape cannot be scored.
+
+    The returned record is the evaluation, including ``qualified=False``.
+    Nothing here writes the discovery log. A database error is logged by
+    type only, so a URL in the exception text cannot land in the log.
+    """
+    from hedge_fund.library.evaluate import build_library_data, evaluate_library_record
+    from hedge_fund.library.tape import load_library_daily
+
+    try:
+        bars = load_library_daily()
+    except Exception as exc:
+        log.warning("library approved admit: tape unreadable for %s (%s)", name, type(exc).__name__)
+        return None
+    if len(bars) == 0:
+        log.info("library approved admit: library tape empty; %s waits for the next start", name)
+        return None
+    try:
+        data = build_library_data(bars)
+        record = evaluate_library_record(name, data, tested_at=tested_at)
+    except Exception as exc:
+        log.warning("library approved admit: %s not evaluated (%s)", name, type(exc).__name__)
+        return None
+    if not isinstance(record, dict):
+        return None
+    return record
+
+
+def _warning_lines(record: dict) -> list[str]:
+    raw = record.get("warnings")
+    if not isinstance(raw, list):
+        return []
+    return [str(item) for item in raw if isinstance(item, str)]
+
+
+def _label_qualified_library(row: dict, spec: dict, record: dict) -> None:
+    """Record the approval on a library champion that passed the gate.
+
+    ``qualified`` stays true. ``lib.sma100`` is not passed through here, so
+    its ``forward_test_unproven`` label is not rewritten.
+    """
+    warnings = _warning_lines(record)
+    row["qualified"] = True
+    row["warnings"] = warnings
+    row["provenance"] = {
+        "admit_batch": LIBRARY_APPROVED_BATCH,
+        "approved_by": spec["approved_by"],
+        "approved_at": spec["approved_at"],
+        "note": spec["note"],
+        "gate_rules": record.get("gate_rules"),
+        "warnings": warnings,
+    }
+
+
 def _apply_requalify_unlocked(now: datetime, marker: dict) -> dict | None:
     """Seat ``APPROVED_ADMIT_BATCH`` once. Caller holds the discovery lock.
 
@@ -347,19 +438,93 @@ def _apply_forward_unlocked(
     return {"batch_id": FORWARD_TEST_BATCH, "admitted": admitted, "skipped": skipped}
 
 
+def _apply_library_approved_unlocked(
+    now: datetime,
+    marker: dict,
+    records: dict | None,
+    checked: bool,
+) -> dict | None:
+    """Seat ``LIBRARY_APPROVED_BATCH`` once, from qualified library verdicts.
+
+    Returns None and writes no marker when the tape cannot be scored or a
+    listed name that is not already on the book lacks a current-tag pass.
+    A later start tries again. Already-pooled names are not duplicated.
+    """
+    from hedge_fund.trading.ingest import _admit_qualified
+
+    stamp = now.astimezone(timezone.utc).isoformat()
+    scored: dict[str, dict]
+    if checked:
+        if not isinstance(records, dict):
+            return None
+        scored = records
+    else:
+        scored = {}
+        for spec in LIBRARY_APPROVED_ADMITS:
+            record = _score_qualified_library(spec["name"], stamp)
+            if record is None:
+                return None
+            scored[spec["name"]] = record
+
+    st = load_pool()
+    pooled = {c.get("name") for c in (st.get("champions") or []) if isinstance(c, dict)}
+    graduated = {g.get("name") for g in load_graduated() if isinstance(g, dict)}
+    retired = retired_names()
+    existing = set(pooled) | set(graduated) | set(retired)
+    pending: list[tuple[dict, dict]] = []
+    skipped: list[dict] = []
+    for spec in LIBRARY_APPROVED_ADMITS:
+        name = spec["name"]
+        if name in retired:
+            skipped.append({"strategy": name, "reason": "retired"})
+            continue
+        if name in pooled or name in graduated:
+            skipped.append({"strategy": name, "reason": "already_pooled_or_graduated"})
+            continue
+        record = scored.get(name)
+        if not _library_verdict_qualified(record, name):
+            return None
+        pending.append((spec, record))
+
+    admitted: list[str] = []
+    for spec, record in pending:
+        if not _admit_qualified(st, dict(record), existing):
+            skipped.append({"strategy": spec["name"], "reason": "not_seated"})
+            continue
+        _label_qualified_library(st["champions"][-1], spec, record)
+        admitted.append(spec["name"])
+    if admitted:
+        save_pool(st)
+    marker["applied"].append(LIBRARY_APPROVED_BATCH)
+    marker["batches"].append({
+        "batch_id": LIBRARY_APPROVED_BATCH,
+        "applied_at": stamp,
+        "admitted": admitted,
+        "skipped": skipped,
+        "qualified": True,
+    })
+    _save_marker(marker)
+    log.info("library approved admit: batch %s admitted %s", LIBRARY_APPROVED_BATCH, admitted)
+    return {"batch_id": LIBRARY_APPROVED_BATCH, "admitted": admitted, "skipped": skipped}
+
+
 def ensure_approved_admits_unlocked(
     now: datetime,
     *,
     forward_record: dict | None = None,
     forward_checked: bool = False,
+    library_records: dict | None = None,
+    library_checked: bool = False,
 ) -> dict | None:
     """Apply each approved batch once. Caller holds the discovery lock.
 
     The requalify batch still waits for a qualified verdict and leaves no
     marker until that verdict exists. The forward-test batch waits for a
     library-tape evaluation and also leaves no marker until that exists.
-    When both run, the requalify result is the return value so existing
-    callers keep seeing that batch.
+    The qualified library batch waits for a current-tag pass for every
+    name that is not already seated. When more than one batch runs, the
+    requalify result is the return value so existing callers keep seeing
+    that batch. The forward-test result is next.
     """
     marker = _load_marker()
     requalify_out = None
@@ -368,9 +533,25 @@ def ensure_approved_admits_unlocked(
     forward_out = None
     if FORWARD_TEST_BATCH not in marker["applied"]:
         forward_out = _apply_forward_unlocked(now, marker, forward_record, forward_checked)
+    library_out = None
+    if LIBRARY_APPROVED_BATCH not in marker["applied"]:
+        library_out = _apply_library_approved_unlocked(now, marker, library_records, library_checked)
     if requalify_out is not None:
         return requalify_out
-    return forward_out
+    if forward_out is not None:
+        return forward_out
+    return library_out
+
+
+def _score_library_batch(tested_at: str) -> dict | None:
+    """Evaluations for every qualified-library admit, or None if the tape is not ready."""
+    scored: dict[str, dict] = {}
+    for spec in LIBRARY_APPROVED_ADMITS:
+        record = _score_qualified_library(spec["name"], tested_at)
+        if record is None:
+            return None
+        scored[spec["name"]] = record
+    return scored
 
 
 def run_approved_admits() -> dict | None:
@@ -379,14 +560,24 @@ def run_approved_admits() -> dict | None:
     now = datetime.now(timezone.utc)
     forward_checked = False
     forward_record = None
+    library_checked = False
+    library_records = None
+    applied = _load_marker()["applied"]
     # Score outside the discovery lock. The web process does this once per
     # start, and only until the marker exists.
-    if FORWARD_TEST_BATCH not in _load_marker()["applied"] and FORWARD_TEST_ADMITS:
+    if FORWARD_TEST_BATCH not in applied and FORWARD_TEST_ADMITS:
         forward_checked = True
         forward_record = _library_forward_record(FORWARD_TEST_ADMITS[0]["name"], now.isoformat())
+    if LIBRARY_APPROVED_BATCH not in applied and LIBRARY_APPROVED_ADMITS:
+        library_checked = True
+        library_records = _score_library_batch(now.isoformat())
     with paper_state_lock("discovery"):
         out = ensure_approved_admits_unlocked(
-            now, forward_record=forward_record, forward_checked=forward_checked,
+            now,
+            forward_record=forward_record,
+            forward_checked=forward_checked,
+            library_records=library_records,
+            library_checked=library_checked,
         )
         # Startup pass of the one-per-family rule (idempotent; runs after the
         # approved admits so it sees them). The rule itself is unchanged.

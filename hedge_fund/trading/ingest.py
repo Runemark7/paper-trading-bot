@@ -2,7 +2,10 @@
 
 Fail-once: a name that already has any discovery_log row is skipped
 (no second walk-forward), except one pending v4 buy-and-hold retest
-(``requeue_v4_bh``). A qualified pass is logged and proposed. It is not
+(``requeue_v4_bh``) and one pending library-gate retest
+(``requeue_library_gate``). A library retest of a name that is already
+seated appends the discovery-log row and does not rewrite the champion
+or the paper account. A qualified pass is logged and proposed. It is not
 seated. On ingest, parked rows that now pass on stored aggregates
 (Sharpe / trades / sma) are flipped the same way and stay proposals.
 Buy-and-hold is not a fail reason. Seating is the explicit
@@ -36,6 +39,11 @@ from hedge_fund.trading.families import (
 from hedge_fund.trading.farm import apply_heartbeat_unlocked
 from hedge_fund.trading.leases import clear_leases_unlocked, touch_worker_unlocked
 from hedge_fund.trading.qualify import requalify_parked_log
+from hedge_fund.trading.requeue_library_gate import (
+    complete_library_retest_unlocked,
+    library_retest_entry,
+    stamp_library_retest_result,
+)
 from hedge_fund.trading.requeue_v4_bh import (
     complete_retest_unlocked,
     retest_entry,
@@ -389,6 +397,7 @@ def ingest_discovery_payload(payload: dict) -> dict:
         }
 
     to_append: list[tuple[dict, str | None]] = []
+    library_retests: set[str] = set()
     with paper_state_lock("discovery"):
         requal_state = load_requalify_state() if requalify_path().exists() else None
         # Fail-once is the index union the display log (including the delta).
@@ -411,6 +420,18 @@ def ingest_discovery_payload(payload: dict) -> dict:
                 )
                 continue
             name = rec["strategy"]
+            # Library gate retest, including a name that is already seated.
+            # One fresh log row. The champion row and the paper account stay.
+            # A pass is proposed, not seated.
+            lib_entry = library_retest_entry(name)
+            if lib_entry is not None:
+                stamp_library_retest_result(rec, lib_entry)
+                library_retests.add(name)
+                to_append.append((rec, name))
+                ingested.append(name)
+                if rec["qualified"]:
+                    proposed.append(name)
+                continue
             # Requalify lane: record separately. No log row, no admit, no cull.
             if requal_state is not None and record_requalify_unlocked(
                 requal_state, rec, datetime.now(timezone.utc)
@@ -464,6 +485,18 @@ def ingest_discovery_payload(payload: dict) -> dict:
                 return name not in cached_tested_names()
 
             wrote = append_discovery_evaluation(rec, still_valid=_still_untested)
+        elif retest_name in library_retests:
+            tested_at = rec.get("tested_at")
+
+            def _close_library(name=retest_name, stamp=tested_at):
+                complete_library_retest_unlocked(name, tested_at=stamp)
+
+            def _still_library(name=retest_name):
+                return library_retest_entry(name) is not None
+
+            wrote = append_discovery_evaluation(
+                rec, after_commit=_close_library, still_valid=_still_library
+            )
         else:
             tested_at = rec.get("tested_at")
 

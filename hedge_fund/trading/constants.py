@@ -85,6 +85,9 @@ RISK_POLICY = "rm_v1"
 # when the 8 / 2 trade floors hold, and when at least 70% of parameter
 # neighbours clear those three profit checks. DSR, PBO, Sharpe floors,
 # sma_stack, and buy-and-hold are warnings. The 5m path is unchanged.
+# Amendment 2026-10-29 later (Alexander, 11:01 CET): gate v7b. The
+# neighbour fraction stays computed and shown, and it is a warning. It
+# does not reject a library name. The 5m path still vetoes on neighbours.
 V4_GATE_RULES = "gate_v4_btc_holdout_dsr_pbo_20261027"
 V5_GATE_RULES = "gate_v5_btc_holdout_dsr_pbo_20261027"
 # First library stamp. Superseded before merge: indicators were read from
@@ -94,19 +97,23 @@ V6_GATE_RULES = "gate_v6_library_signal_exit_20261028"
 # Warmed library stamp. Superseded by gate v7: DSR, PBO, Sharpe, and
 # sma_stack were vetoes. Kept so a v6 row is not re-read as a v7 pass.
 V6_WARMUP_GATE_RULES = "gate_v6_library_warmup_20261029"
-GATE_RULES = "gate_v7_library_profit_20261029"
+# Profit gate that still vetoed on neighbours. Superseded the same day
+# by v7b. Kept so a v7 row is not re-read as a v7b pass.
+V7_GATE_RULES = "gate_v7_library_profit_20261029"
+GATE_RULES = "gate_v7b_library_profit_20261029"
 # 5m rm_v1 rows under these tags measure the same engine with the same
-# floors, so the exploratory atom reports may pool them. The v7 tag is
-# the worker stamp; random mode still applies the 5m floors.
+# floors, so the exploratory atom reports may pool them. The current tag
+# is the worker stamp; random mode still applies the 5m floors.
 ATOM_GATE_RULES = frozenset({
     V5_GATE_RULES,
     V6_GATE_RULES,
     V6_WARMUP_GATE_RULES,
+    V7_GATE_RULES,
     GATE_RULES,
 })
 # Shown on the discovery API and the Discovery page.
 GATE_CRITERIA = (
-    "Gate v7 (paper only, daily library): BTC-only. A pre-registered "
+    "Gate v7b (paper only, daily library): BTC-only. A pre-registered "
     "library is scored with signal_exit on completed daily bars (long or "
     "flat, all-in, next-open fill after 0.1% fee + 2 bps, 20% stop at the "
     "next open). Indicators use BTC history from 2017-08-17; a day that is "
@@ -114,14 +121,14 @@ GATE_CRITERIA = (
     "Hard vetoes: out-of-sample net P&L > 0 after fees and slippage "
     "(2018-12-01 through 2025-09-30), holdout net P&L > 0, the same P&L > 0 "
     "on both spans at 2× fees + 5 bps, at least 8 out-of-sample round-trips, "
-    "at least 2 holdout trades, and at least 70% of parameter neighbours "
-    "also profitable on those three profit checks. DSR (N = every library "
-    "grid point), PBO, Sharpe floors, sma_stack, and buy-and-hold stay "
-    "informational warnings. They are computed, stored, and shown. They "
-    "do not reject a name. "
+    "and at least 2 holdout trades. DSR (N = every library grid point), "
+    "PBO, Sharpe floors, parameter neighbours, sma_stack, and buy-and-hold "
+    "stay informational warnings. They are computed, stored, and shown. "
+    "They do not reject a name. "
     "A pass is proposed, not seated. The 5m floors (30 trades, Sharpe, "
-    "sma_stack, holdout Sharpe, DSR, PBO, 8 holdout trades, 18×87-day grid) "
-    "are unchanged. The existing 5m champions keep the rm_v1 engine."
+    "sma_stack, holdout Sharpe, DSR, PBO, neighbours, 8 holdout trades, "
+    "18×87-day grid) are unchanged. The existing 5m champions keep the "
+    "rm_v1 engine."
 )
 BH_METRIC_ROLE = "informational"
 # Historical full-tape grid (23 x 87d, last segment open). Discovery no

@@ -166,8 +166,8 @@ class ForwardTestAdmitTests(unittest.TestCase):
         with _env(self.root), load_p, build_p, eval_p as ev:
             first = run_approved_admits()
             second = run_approved_admits()
-        self.assertEqual(ev.call_count, 1)
-        self.assertEqual(ev.call_args.args[0], NAME)
+        sma_calls = [call.args[0] for call in ev.call_args_list if call.args and call.args[0] == NAME]
+        self.assertEqual(sma_calls, [NAME])
         self.assertEqual(first["admitted"], [NAME])
         self.assertIsNone(second)
         pool = json.loads((self.root / "champions.json").read_text())

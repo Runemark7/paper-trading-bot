@@ -3,23 +3,23 @@ import { BlockChips, EmptyState, GatePill, InfoTip, Panel, RuleList, SectionTitl
 import { MonoName } from "../components/ui";
 import { GATES, GATE_THRESHOLDS, HOLDOUT_SPAN, WARNING_GATES, gateInfo } from "../lib/gates";
 
-/** Gate v7 vetoes, plus the warnings that are stored and never reject a library name. */
+/** Gate v7b vetoes, plus the warnings that are stored and never reject a library name. */
 export function GateLegend({ insights }: { insights?: DiscoveryInsights }) {
   const counts = new Map((insights?.gate_failures ?? []).map((g) => [g.gate, g.count]));
   const max = Math.max(1, ...GATES.map((g) => counts.get(g.key) ?? 0));
   const tested = insights?.current_gate.tested;
   const groups: { title: string; note: string; stage: "floor" | "robustness" }[] = [
     { title: "Vetoes · profit and sample size", note: "A miss here rejects the library name.", stage: "floor" },
-    { title: "Vetoes · holdout, neighbours, costs", note: "Still required. Sharpe is not in this list.", stage: "robustness" },
+    { title: "Vetoes · holdout and costs", note: "Still required. Sharpe and neighbours are warnings.", stage: "robustness" },
   ];
   return (
     <Panel>
       <SectionTitle
-        title="Gate v7: profit after fees, then warnings"
+        title="Gate v7b: profit after fees. Neighbours warn."
         aside={insights ? `rejections among ${tested?.toLocaleString("en-US")} names under the current gate` : undefined}
         info={
           <InfoTip label="Gate v7" align="left">
-            The daily library passes when it is profitable after fees on the test years and the holdout year, including at higher costs, with the trade floors and profitable neighbours. DSR, PBO, Sharpe, sma_stack, and buy-and-hold are warnings. A pass is proposed, not seated. The 5m path is unchanged.
+            The daily library passes when it is profitable after fees on the test years and the holdout year, including at higher costs, with the trade floors. Neighbours, DSR, PBO, Sharpe, sma_stack, and buy-and-hold are warnings. A pass is proposed, not seated. The 5m path is unchanged.
           </InfoTip>
         }
       >
