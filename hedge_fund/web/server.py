@@ -28,6 +28,9 @@ A small, dependency-free HTTP server (stdlib only) that exposes:
                                 Serves the day-keyed file. 503 + Retry-After when
                                 that file is not ready; does not rebuild on the request.
   GET /api/discovery/history/tape -> that tape as a compressed npz (ingest token)
+  GET /api/discovery/library/daily -> BTC daily bars from 2017-08-17 (ingest token).
+                                The cycle writes the npz. This process sends that
+                                file (ETag / If-Modified-Since). It does not resample.
   POST /api/discovery/ingest -> Windows worker: append evals. A pass is proposed,
                                 not seated. force_admit seats (shared secret)
   POST /api/discovery/claim -> lease never-tested names (same ingest token)
@@ -634,6 +637,12 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(body, code, retry_after=body.get("retry_after") if code == 202 else None)
             except Exception as exc:
                 self._send_json({"error": str(exc), "paper_only": True, "exploratory": True}, 500)
+        elif route == "/api/discovery/library/daily":
+            ok, err, code = self._discovery_ingest_authorized()
+            if not ok:
+                self._send_json({"ok": False, "error": err, "paper_only": True}, code)
+                return
+            self._send_library_daily()
         elif route == "/api/discovery/history":
             ok, err, code = self._discovery_ingest_authorized()
             if not ok:
@@ -724,6 +733,54 @@ class Handler(BaseHTTPRequestHandler):
         if not isinstance(data, dict):
             return None, "payload must be an object"
         return data, None
+
+    def _send_library_daily(self) -> None:
+        """Send the cycle's daily npz. Never resamples, never logs the token."""
+        from hedge_fund.library.daily_cache import (
+            LibraryDailyNotReady,
+            etag_for,
+            last_modified_http,
+            not_modified,
+            served_library_daily,
+        )
+
+        try:
+            body, st = served_library_daily(_state_dir())
+        except LibraryDailyNotReady as exc:
+            self._send_json(
+                {
+                    "ok": False,
+                    "error": str(exc),
+                    "paper_only": True,
+                    "retry_after": exc.retry_after,
+                },
+                503,
+                retry_after=exc.retry_after,
+            )
+            return
+        except Exception as exc:
+            self._send_json({"error": str(exc), "paper_only": True}, 500)
+            return
+        etag = etag_for(st)
+        modified = last_modified_http(st.st_mtime)
+        if not_modified(self.headers, etag=etag, mtime=st.st_mtime):
+            self.send_response(304)
+            self.send_header("ETag", etag)
+            self.send_header("Last-Modified", modified)
+            self.send_header("Cache-Control", "private")
+            self.end_headers()
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "application/octet-stream")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("ETag", etag)
+        self.send_header("Last-Modified", modified)
+        self.send_header("Cache-Control", "private")
+        self.end_headers()
+        try:
+            self.wfile.write(body)
+        except OSError:
+            pass
 
     def _discovery_header_tokens(self) -> list[str]:
         """Same secrets as ingest: Bearer, X-Discovery-Token, X-Paper-Discovery-Token."""

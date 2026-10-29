@@ -154,7 +154,9 @@ kubectl -n trading rollout restart deploy/paperbot-backend
 
 Discovery workers keep calling `GET /api/discovery/history` and the npz
 route. They do not need `crypto_history_5m.json` in claim mode. The
-`'{}'` placeholder on worker disks can be deleted.
+`'{}'` placeholder on worker disks can be deleted. Library mode also
+calls `GET /api/discovery/library/daily` for BTC days from 2017-08-17.
+That file is written by the cycle. The 5m hash stays cut at 2021-01-26.
 
 ## Rollback
 

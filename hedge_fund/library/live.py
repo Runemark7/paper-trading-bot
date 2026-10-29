@@ -23,8 +23,6 @@ already long buys at that run's price.
 """
 from __future__ import annotations
 
-import json
-import os
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -33,6 +31,8 @@ import numpy as np
 from hedge_fund.brokers.paper import SLIPPAGE, TAKER_FEE, Order, PaperBroker
 from hedge_fund.library.catalog import parse_variant, signal_ready
 from hedge_fund.library.daily import DAY_MS, DailyBars, daily_from_tape, empty_daily
+from hedge_fund.library.daily_cache import DAILY_CACHE_NAME as DAILY_CACHE
+from hedge_fund.library.daily_cache import parse_daily_file, write_daily_npz
 from hedge_fund.library.engine import (
     ENGINE_ID,
     EXIT,
@@ -57,7 +57,6 @@ from hedge_fund.trading.constants import (
 SYMBOL = TRADE_SYMBOLS[0]
 STATE_KEY = "library"
 LOCK_NAME = "library-account"
-DAILY_CACHE = "library_daily_BTC_USDT.npz"
 
 
 def _now() -> str:
@@ -99,28 +98,11 @@ def _full_tape(state: Path, source: str) -> np.ndarray:
 
 
 def _read_cache(path: Path) -> tuple[DailyBars, dict] | None:
-    try:
-        with np.load(path) as packed:
-            meta = json.loads(str(packed["meta"]))
-            bars = DailyBars(
-                ts=np.asarray(packed["ts"], dtype=np.int64),
-                open=np.asarray(packed["open"], dtype=np.float64),
-                high=np.asarray(packed["high"], dtype=np.float64),
-                low=np.asarray(packed["low"], dtype=np.float64),
-                close=np.asarray(packed["close"], dtype=np.float64),
-            )
-    except (OSError, KeyError, ValueError):
-        return None
-    return bars, meta
+    return parse_daily_file(path)
 
 
 def _write_cache(path: Path, bars: DailyBars, meta: dict) -> None:
-    tmp = path.with_name(path.name + ".tmp.npz")
-    np.savez(
-        tmp, ts=bars.ts, open=bars.open, high=bars.high, low=bars.low, close=bars.close,
-        meta=np.asarray(json.dumps(meta)),
-    )
-    os.replace(tmp, path)
+    write_daily_npz(path, bars, meta)
 
 
 def live_daily_bars(state: Path) -> DailyBars:
@@ -131,6 +113,8 @@ def live_daily_bars(state: Path) -> DailyBars:
     (``LIBRARY_TAPE_START_MS``, 2017-08-17) it is reused; otherwise every
     day is rebuilt from the full tape, so a repaired historical bar is
     picked up the next day. The 5m canonical cut (2021-01-26) is not used.
+    ``GET /api/discovery/library/daily`` sends this file and does not
+    resample it again.
     """
     state = Path(state)
     source = _tape_source()
