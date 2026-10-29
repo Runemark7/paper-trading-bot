@@ -224,10 +224,10 @@ class SafetyStopTests(unittest.TestCase):
         signal = np.asarray([True, True, True, True, False, True, True, True])
         res = run(bars, signal, start=1, end=8, stop_frac=0.10)
         stop_trade = res.trades[0]
-        stop_level = 100 * (1 + SLIPPAGE) * 0.90
         self.assertEqual(stop_trade.reason, REASON_STOP)
-        self.assertAlmostEqual(stop_trade.exit_price, stop_level * (1 - SLIPPAGE))
-        self.assertEqual(stop_trade.exit_ts, int(bars.ts[2]))
+        # Day 2's low breaches. The fill is day 3's open, not the stop price.
+        self.assertAlmostEqual(stop_trade.exit_price, 95 * (1 - SLIPPAGE))
+        self.assertEqual(stop_trade.exit_ts, int(bars.ts[3]))
         # Signal still on at days 2-3: no re-entry. Off at day 4 re-arms;
         # on at day 5 enters at day 6's open.
         second = res.trades[1]
@@ -241,10 +241,27 @@ class SafetyStopTests(unittest.TestCase):
         self.assertAlmostEqual(res.trades[0].exit_price, 70 * (1 - SLIPPAGE))
 
     def test_stop_off_by_default(self):
-        self.assertTrue(all(s.stop_frac == 0.0 for s in LIBRARY))
+        from hedge_fund.trading.constants import LIBRARY_STOP_FRAC
+
+        self.assertEqual(LIBRARY_STOP_FRAC, 0.20)
+        self.assertTrue(all(s.stop_frac == LIBRARY_STOP_FRAC for s in LIBRARY))
         bars = make_bars([100, 100, 40, 40], lows=[100, 100, 30, 30])
+        # The engine default is still off, so a caller that omits the stop
+        # does not invent one. The library passes its pre-registered 20%.
         res = run(bars, np.ones(4, dtype=bool), start=1, end=4)
         self.assertEqual([t.reason for t in res.trades], [REASON_END])
+        stopped = run(bars, np.ones(4, dtype=bool), start=1, end=4, stop_frac=LIBRARY_STOP_FRAC)
+        self.assertEqual(stopped.trades[0].reason, REASON_STOP)
+        self.assertEqual(stopped.trades[0].exit_ts, int(bars.ts[3]))
+        self.assertAlmostEqual(stopped.trades[0].exit_price, 40 * (1 - SLIPPAGE))
+
+    def test_fresh_book_enters_when_the_signal_is_already_on(self):
+        bars = make_bars([100, 110, 120, 130])
+        signal = np.ones(4, dtype=bool)
+        res = run(bars, signal, start=1, end=4)
+        self.assertEqual(len(res.trades), 1)
+        self.assertEqual(res.trades[0].entry_ts, int(bars.ts[1]))
+        self.assertAlmostEqual(res.trades[0].entry_price, 110 * (1 + SLIPPAGE))
 
     def test_stop_out_state(self):
         st = MachineState(long=True)

@@ -151,7 +151,7 @@ export default function LibraryTable() {
               </tbody>
             </table>
           </div>
-          <p className="mt-3 text-xs leading-relaxed text-white/45">{data.note} Buy-and-hold is shown for context and is not a pass rule. Trade-count floors are unchanged.</p>
+          <p className="mt-3 text-xs leading-relaxed text-white/45">{data.note} Buy-and-hold is shown for context and is not a pass rule.</p>
         </>
       ) : null}
     </Panel>

@@ -1,9 +1,11 @@
 """Causal daily indicators for the strategy library.
 
 Every value at index ``t`` uses only bars ``0..t`` (the close of day ``t``
-included). A value that is not defined yet is NaN; a signal built on it is
-off. Calendar helpers read the bar's own UTC date, which is known at that
-close, so they are not lookahead either.
+included). A value that is not defined yet is NaN. A signal built on a NaN
+is false, and that is not a tradable flat: scored days must be finite
+(``signal_ready``). The scorer refuses a window that would treat the hole
+as off. Calendar helpers read the bar's own UTC date, which is known at
+that close, so they are not lookahead either.
 """
 from __future__ import annotations
 

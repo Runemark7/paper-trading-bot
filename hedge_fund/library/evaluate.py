@@ -3,25 +3,29 @@
 Same honesty as gate v5, measured on completed UTC daily bars with the
 ``signal_exit`` engine:
 
-* Discovery: the 18 sealed 87-day OOS segments that end before the holdout
-  (``DISCOVERY_N_WINDOWS``), scored as one continuous book from the first
-  segment's first open to the last segment's last close. A position is not
-  closed and reopened at a segment boundary; segments slice the daily
-  equity curve. Indicators use every completed day before each bar (from
-  the canonical tape start, 2021-01-26), which the 200-day and 12-month
-  rules need; nothing after a bar is used.
-* Sealed holdout ``[2025-10-01, 2026-10-01)``: a separate fresh book over
-  that year only. Discovery numbers are computed from daily bars cut
-  strictly before the holdout, so they cannot read it.
-* Floors are the existing constants: trades >= ``MIN_BACKTEST_TRADES``,
-  daily-equity Sharpe >= ``MIN_BACKTEST_SHARPE``, OOS P&L above
-  ``sma_stack`` (the same rule on daily bars, same engine), holdout Sharpe,
-  holdout trades >= ``HOLDOUT_MIN_TRADES`` and holdout P&L above
-  ``sma_stack``, DSR >= ``DSR_MIN_PROBABILITY`` with N = every grid point
-  in the library, CSCV PBO <= ``PBO_MAX`` on the strategy and its grid
-  neighbours, >= ``NEIGHBOR_PASS_MIN_FRACTION`` of neighbours at the Sharpe
-  and trade floors, and the same Sharpe floor at 2x fees + 5 bps.
-* Buy-and-hold (the same book, always long) is informational.
+* History starts at the Binance BTCUSDT listing (``LIBRARY_TAPE_START_MS``,
+  2017-08-17), shared with the live cycle. Indicators are computed on that
+  full prefix. Scoring starts only once every grid point, including the
+  longest neighbour, is finite on the previous close and stays finite.
+  A day that is not warm fails the evaluation; it is never a flat signal.
+  A tape that does not start in 2017 is refused, not trimmed into a result.
+* Discovery is one continuous book from that shared open through the day
+  before the holdout. PBO slices it into blocks of about
+  ``LIBRARY_BLOCK_TARGET_DAYS`` (390). A position is not closed and
+  reopened at a block boundary. Nothing after a bar is used, and discovery
+  bars are cut strictly before the holdout.
+* Sealed holdout ``[2025-10-01, 2026-10-01)``: a separate fresh book. Its
+  indicators still see the prefix. A fresh book whose signal is already on
+  buys at the first scored open.
+* Daily floors: trades >= ``LIBRARY_MIN_OOS_TRADES`` (8), holdout trades
+  >= ``LIBRARY_HOLDOUT_MIN_TRADES`` (2). Sharpe >= ``MIN_BACKTEST_SHARPE``,
+  OOS and holdout P&L above ``sma_stack`` (the same rule on daily bars,
+  same engine, stop off), DSR >= ``DSR_MIN_PROBABILITY`` with N = every
+  grid point, CSCV PBO <= ``PBO_MAX``, >= ``NEIGHBOR_PASS_MIN_FRACTION``
+  of neighbours at the Sharpe and 8-trade floors, and the same Sharpe
+  floor at 2x fees + 5 bps. The 5m floors (30 and 8) are a different path.
+* The 20% stop is on for every library strategy and is not a second trial.
+* Buy-and-hold (the same book, always long, no stop) is informational.
 
 Every check is computed for every strategy and every failing check is
 listed, so a strategy that fails only on a trade-count floor is visible.
@@ -37,9 +41,11 @@ from scipy.stats import norm
 
 from hedge_fund.library.catalog import (
     LibraryStrategy,
+    library_score_index,
     library_trial_count,
     neighbour_names,
     parse_variant,
+    signal_ready,
     sma_stack_signal,
 )
 from hedge_fund.library.daily import DAY_MS, DailyBars, daily_from_rows, daily_from_tape
@@ -59,19 +65,19 @@ from hedge_fund.trading.constants import (
     BH_METRIC_ROLE,
     COST_STRESS_EXTRA_SLIPPAGE,
     COST_STRESS_FEE_MULTIPLE,
-    DISCOVERY_N_WINDOWS,
     DSR_MIN_PROBABILITY,
     GATE_RULES,
     HOLDOUT_END_MS,
-    HOLDOUT_MIN_TRADES,
     HOLDOUT_START_MS,
+    LIBRARY_BLOCK_TARGET_DAYS,
+    LIBRARY_HOLDOUT_MIN_TRADES,
+    LIBRARY_MIN_OOS_TRADES,
+    LIBRARY_TAPE_START_MS,
+    LIBRARY_TAPE_START_SLACK_MS,
     MIN_BACKTEST_SHARPE,
-    MIN_BACKTEST_TRADES,
     NEIGHBOR_PASS_MIN_FRACTION,
     PAPER_START_CASH,
     PBO_MAX,
-    QUAL_OOS_START_MS,
-    QUAL_SEGMENT_MS,
 )
 from hedge_fund.trading.holdout import HoldoutLeak
 from hedge_fund.trading.multiple_testing import (
@@ -106,40 +112,92 @@ CHECK_ORDER = (
 )
 
 
-def discovery_segments() -> list[tuple[int, int]]:
-    """``[start, end)`` ms of the 18 sealed discovery segments."""
-    return [
-        (QUAL_OOS_START_MS + k * QUAL_SEGMENT_MS, QUAL_OOS_START_MS + (k + 1) * QUAL_SEGMENT_MS)
-        for k in range(DISCOVERY_N_WINDOWS)
-    ]
+def assert_library_history(bars: DailyBars) -> None:
+    """Refuse a tape that does not reach the Binance BTCUSDT listing.
+
+    A 2021-only tape leaves the 200-day and 12-month rules undefined on the
+    first scored year. Those NaNs used to count as flat. That is not a result.
+    """
+    if len(bars) == 0 or int(bars.ts[0]) > LIBRARY_TAPE_START_MS + LIBRARY_TAPE_START_SLACK_MS:
+        raise ValueError(
+            "BTC daily tape does not start at 2017-08-17; "
+            "a short tape is not trimmed into a result"
+        )
+
+
+def tile_blocks(start_ms: int, end_ms: int) -> list[tuple[int, int]]:
+    """Equal ``[start, end)`` blocks covering ``[start_ms, end_ms)``.
+
+    The count is ``round(span / LIBRARY_BLOCK_TARGET_DAYS)``, at least one.
+    The last edge is ``end_ms`` exactly (the holdout, for discovery).
+    """
+    start_ms = int(start_ms)
+    end_ms = int(end_ms)
+    span = end_ms - start_ms
+    if span <= 0:
+        raise ValueError("library block span is empty")
+    n = max(1, round(span / (LIBRARY_BLOCK_TARGET_DAYS * DAY_MS)))
+    edges = [start_ms + (span * k) // n for k in range(n + 1)]
+    edges[-1] = end_ms
+    return [(edges[k], edges[k + 1]) for k in range(n)]
+
+
+def _blocks_tile(data: "LibraryData") -> bool:
+    segments = data.segments
+    if not segments or data.score_index >= len(data.discovery):
+        return False
+    score_ts = int(data.discovery.ts[data.score_index])
+    if segments[0][0] != score_ts or segments[-1][1] != HOLDOUT_START_MS:
+        return False
+    prev = score_ts
+    for start, end in segments:
+        if start != prev or end <= start:
+            return False
+        prev = end
+    return prev == HOLDOUT_START_MS
+
+
+def discovery_segments(data: "LibraryData") -> list[tuple[int, int]]:
+    """``[start, end)`` ms of this batch's warmed PBO blocks.
+
+    This is not the 5m 18×87-day grid.
+    """
+    return list(data.segments)
 
 
 @dataclass
 class LibraryData:
     """Daily bars for one evaluation batch.
 
-    ``discovery`` ends strictly before ``HOLDOUT_START_MS``. ``holdout`` runs
-    through the last holdout day and is ``None`` when the tape does not
-    cover the whole holdout year.
+    ``discovery`` includes the warm-up prefix and ends strictly before
+    ``HOLDOUT_START_MS``. Scoring starts at ``score_index``. ``holdout``
+    keeps that same prefix so indicators stay warm, and is ``None`` when
+    the tape does not cover the whole holdout year.
     """
 
     discovery: DailyBars
     holdout: DailyBars | None
+    score_index: int
+    segments: list[tuple[int, int]]
     holdout_note: str | None = None
     cache: dict = field(default_factory=dict, repr=False, compare=False)
 
     def discovery_bounds(self) -> tuple[int, int]:
-        hit = self.cache.get("bounds")
-        if hit is None:
-            hit = _discovery_bounds(self.discovery)
-            self.cache["bounds"] = hit
-        return hit
+        return self.score_index, len(self.discovery)
 
 
 def build_library_data(full: DailyBars) -> LibraryData:
+    assert_library_history(full)
     discovery = full.before(HOLDOUT_START_MS)
     if len(discovery) and int(discovery.ts[-1]) >= HOLDOUT_START_MS:  # pragma: no cover
         raise HoldoutLeak("discovery daily bars reach the holdout")
+    if len(discovery) == 0 or int(discovery.ts[-1]) < HOLDOUT_START_MS - DAY_MS:
+        raise ValueError(
+            "daily tape does not reach the day before the holdout; "
+            "a missing lookback is not scored as flat"
+        )
+    score_index = library_score_index(discovery)
+    segments = tile_blocks(int(discovery.ts[score_index]), HOLDOUT_START_MS)
     holdout = None
     note = None
     last_holdout_day = HOLDOUT_END_MS - DAY_MS
@@ -147,7 +205,13 @@ def build_library_data(full: DailyBars) -> LibraryData:
         holdout = full.before(HOLDOUT_END_MS)
     else:
         note = "holdout tape incomplete (needs every day through 2026-09-30)"
-    return LibraryData(discovery=discovery, holdout=holdout, holdout_note=note)
+    return LibraryData(
+        discovery=discovery,
+        holdout=holdout,
+        score_index=score_index,
+        segments=segments,
+        holdout_note=note,
+    )
 
 
 def library_data_from_rows(rows) -> LibraryData:
@@ -158,14 +222,16 @@ def library_data_from_tape(arr) -> LibraryData:
     return build_library_data(daily_from_tape(arr))
 
 
-def _discovery_bounds(bars: DailyBars) -> tuple[int, int]:
-    segments = discovery_segments()
-    first, last_end = segments[0][0], segments[-1][1]
-    if len(bars) == 0 or int(bars.ts[0]) > first or int(bars.ts[-1]) < last_end - DAY_MS:
-        raise ValueError("daily tape does not cover the 18 discovery segments")
-    if int(bars.ts[-1]) >= HOLDOUT_START_MS:
-        raise HoldoutLeak("discovery daily bars reach the holdout")
-    return bars.index_of(first), bars.index_of(last_end)
+def _require_ready(strategy: LibraryStrategy, bars: DailyBars, params: dict, start: int, end: int) -> None:
+    """Every close the book acts on must be finite. A hole is a failure."""
+    ready = signal_ready(strategy, bars, params)
+    lo = int(start) - 1
+    hi = int(end) - 1
+    if lo < 0 or hi > len(ready) or hi <= lo or not bool(ready[lo:hi].all()):
+        raise ValueError(
+            f"{strategy.key} scored a day whose lookback is not warm; "
+            "a missing lookback is not scored as flat"
+        )
 
 
 @dataclass
@@ -269,9 +335,10 @@ def discovery_metrics(
     costs: Costs = BASE_COSTS,
 ) -> SpanMetrics:
     a, b = data.discovery_bounds()
+    _require_ready(strategy, data.discovery, params, a, b)
     signal = strategy.signal(data.discovery, params)
     return span_metrics(
-        data.discovery, signal, a, b, discovery_segments(),
+        data.discovery, signal, a, b, data.segments,
         costs=costs, stop_frac=strategy.stop_frac,
     )
 
@@ -287,6 +354,7 @@ def holdout_metrics(
     if bars is None:
         return None
     a = bars.index_of(HOLDOUT_START_MS)
+    _require_ready(strategy, bars, params, a, len(bars))
     signal = strategy.signal(bars, params)
     return span_metrics(
         bars, signal, a, len(bars), [(HOLDOUT_START_MS, HOLDOUT_END_MS)],
@@ -305,7 +373,7 @@ def _benchmark(data: LibraryData, which: str, span: str, costs: Costs = BASE_COS
     signal = np.ones(len(bars), dtype=bool) if which == "bh" else sma_stack_signal(bars)
     if span == "discovery":
         a, b = data.discovery_bounds()
-        out = span_metrics(bars, signal, a, b, discovery_segments(), costs=costs)
+        out = span_metrics(bars, signal, a, b, data.segments, costs=costs)
     else:
         out = span_metrics(
             bars, signal, bars.index_of(HOLDOUT_START_MS), len(bars),
@@ -420,7 +488,7 @@ def evaluate_library_record(
             "daily_sharpe": round(m.daily_sharpe, 4),
             "trades": m.trades,
             "pnl": round(m.pnl, 2),
-            "pass": bool(sharpe_ok and m.trades >= MIN_BACKTEST_TRADES),
+            "pass": bool(sharpe_ok and m.trades >= LIBRARY_MIN_OOS_TRADES),
             "sharpe_only_pass": bool(sharpe_ok),
             "_windows": m.window_pnl,
         })
@@ -428,12 +496,19 @@ def evaluate_library_record(
     reasons: list[str] = []
     checks: dict[str, dict] = {}
     n_windows = len(disc.window_pnl)
-    checks["windows"] = _check(n_windows == DISCOVERY_N_WINDOWS, n_windows, DISCOVERY_N_WINDOWS, "structure")
-    if n_windows != DISCOVERY_N_WINDOWS:
-        reasons.append(f"windows {n_windows} != expected {DISCOVERY_N_WINDOWS}")
-    checks["oos_trades"] = _check(disc.trades >= MIN_BACKTEST_TRADES, disc.trades, MIN_BACKTEST_TRADES, "count")
-    if disc.trades < MIN_BACKTEST_TRADES:
-        reasons.append(f"oos_trades {disc.trades} < {MIN_BACKTEST_TRADES}")
+    expected_windows = len(data.segments)
+    windows_ok = _blocks_tile(data) and n_windows == expected_windows
+    checks["windows"] = _check(windows_ok, n_windows, expected_windows, "structure")
+    if not windows_ok:
+        reasons.append(
+            f"windows {n_windows} do not tile the warmed span "
+            f"({_iso_day(int(data.discovery.ts[data.score_index]))} through the day before the holdout)"
+        )
+    checks["oos_trades"] = _check(
+        disc.trades >= LIBRARY_MIN_OOS_TRADES, disc.trades, LIBRARY_MIN_OOS_TRADES, "count",
+    )
+    if disc.trades < LIBRARY_MIN_OOS_TRADES:
+        reasons.append(f"oos_trades {disc.trades} < {LIBRARY_MIN_OOS_TRADES}")
     checks["oos_sharpe"] = _check(
         disc.daily_sharpe >= MIN_BACKTEST_SHARPE, _r(disc.daily_sharpe), MIN_BACKTEST_SHARPE, "stat",
     )
@@ -457,13 +532,15 @@ def evaluate_library_record(
         checks["holdout_sharpe"] = _check(
             hold.daily_sharpe >= MIN_BACKTEST_SHARPE, _r(hold.daily_sharpe), MIN_BACKTEST_SHARPE, "holdout",
         )
-        checks["holdout_trades"] = _check(hold.trades >= HOLDOUT_MIN_TRADES, hold.trades, HOLDOUT_MIN_TRADES, "count")
+        checks["holdout_trades"] = _check(
+            hold.trades >= LIBRARY_HOLDOUT_MIN_TRADES, hold.trades, LIBRARY_HOLDOUT_MIN_TRADES, "count",
+        )
         h_beat = h_sma is not None and hold.pnl > h_sma
         checks["holdout_beat_sma_stack"] = _check(h_beat, _r(hold.pnl, 2), _r(h_sma, 2), "holdout")
         if hold.daily_sharpe < MIN_BACKTEST_SHARPE:
             reasons.append(f"holdout_sharpe {hold.daily_sharpe:.2f} < {MIN_BACKTEST_SHARPE} (daily-equity)")
-        if hold.trades < HOLDOUT_MIN_TRADES:
-            reasons.append(f"holdout_trades {hold.trades} < {HOLDOUT_MIN_TRADES}")
+        if hold.trades < LIBRARY_HOLDOUT_MIN_TRADES:
+            reasons.append(f"holdout_trades {hold.trades} < {LIBRARY_HOLDOUT_MIN_TRADES}")
         if h_sma is None:
             reasons.append("holdout sma_stack missing")
         elif not h_beat:
@@ -533,7 +610,7 @@ def evaluate_library_record(
     for nb in neighbours:
         nb.pop("_windows", None)
 
-    segments = discovery_segments()
+    segments = data.segments
     windows = [
         {
             "start": _iso_day(seg_start),
@@ -653,6 +730,12 @@ def evaluate_library_record(
                 "signal": disc.exits.get(REASON_SIGNAL, 0),
                 "safety_stop": disc.exits.get(REASON_STOP, 0),
                 "window_end": disc.exits.get(REASON_END, 0),
+            },
+            "blocks": {
+                "count": len(data.segments),
+                "target_days": LIBRARY_BLOCK_TARGET_DAYS,
+                "score_start": _iso_day(int(data.discovery.ts[data.score_index])),
+                "score_end": _iso_day(HOLDOUT_START_MS - DAY_MS),
             },
         },
     }

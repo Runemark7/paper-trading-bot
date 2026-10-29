@@ -113,6 +113,14 @@ kubectl -n trading logs -f job/paperbot-candle-backfill
 The default start is the canonical tape start (2021-01-26), not the
 Binance listing date. Re-running the Job resumes: each page is committed,
 and the next run continues from the stored frontier and fills holes.
+The daily library needs BTC/USDT from the listing (2017-08-17). That
+backfill is separate and BTC only:
+
+```bash
+python -m hedge_fund.data.candle_backfill --library
+```
+
+It does not move `QUAL_CANONICAL_START_MS`, the ETH tape, or this Job.
 Expect on the order of 600 requests per symbol. The log line to read is:
 
 ```text

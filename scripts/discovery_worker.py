@@ -495,14 +495,24 @@ def _load_eval_bundle(history_stamp: dict | None, n_windows: int, *, claim_mode:
 
 
 def _library_data(data: dict):
-    """Completed daily BTC bars for library names. The sealed holdout is cut
-    out of the discovery series inside ``build_library_data``."""
-    rows = data.get(TRADE_SYMBOLS[0])
-    if not _looks_like_bars(rows):
-        return None
-    from hedge_fund.library.evaluate import library_data_from_rows
+    """Completed daily BTC bars for library names.
+
+    Prefer the library tape (Binance listing, 2017-08-17). The canonical
+    5m rows are cut at 2021-01-26, which leaves long lookbacks undefined.
+    A short tape raises inside ``build_library_data`` and this returns
+    None, so the name is not scored as if those days were flat. The sealed
+    holdout is cut out of the discovery series inside ``build_library_data``.
+    """
+    from hedge_fund.library.evaluate import build_library_data, library_data_from_rows
+    from hedge_fund.library.tape import load_library_daily
 
     try:
+        bars = load_library_daily()
+        if len(bars):
+            return build_library_data(bars)
+        rows = data.get(TRADE_SYMBOLS[0])
+        if not _looks_like_bars(rows):
+            return None
         return library_data_from_rows(rows)
     except Exception as exc:
         print(f"discovery_worker: library daily bars unavailable: {exc}", flush=True)

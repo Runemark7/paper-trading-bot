@@ -16,7 +16,11 @@ whole library (``library_trial_count``).
 
 A signal is the desired position after the close of each completed UTC day
 (``True`` long, ``False`` flat). The engine acts on day ``t``'s value at the
-open of day ``t + 1``.
+open of day ``t + 1``. A fresh book whose signal is already on at the close
+before the first scored open buys at that open; that entry is accepted.
+
+A NaN indicator is not a flat signal. :func:`signal_ready` is false on those
+days, and the scorer trims or refuses the window instead of trading it.
 
 Names: ``lib.<key>`` is the canonical variant; ``lib.<key>.<v1>_<v2>...`` is
 the same strategy with explicit parameter values in declaration order.
@@ -29,6 +33,7 @@ from typing import Callable
 import numpy as np
 
 from hedge_fund.library.daily import DailyBars
+from hedge_fund.trading.constants import LIBRARY_STOP_FRAC
 from hedge_fund.library.indicators import (
     ema,
     hold_between,
@@ -95,8 +100,10 @@ class LibraryStrategy:
     params: tuple[Param, ...]
     citation: Citation
     signal: Callable[[DailyBars, dict], np.ndarray] = field(repr=False, compare=False)
-    # Wide safety stop below the entry fill, as a fraction (0 = off).
-    stop_frac: float = 0.0
+    # Catastrophic stop below the entry fill. Pre-registered at 20% for
+    # every strategy (LIBRARY_STOP_FRAC). It is not a grid axis: scoring
+    # a no-stop twin would double the deflated-Sharpe trial count.
+    stop_frac: float = LIBRARY_STOP_FRAC
 
     @property
     def center(self) -> dict[str, int]:
@@ -222,6 +229,116 @@ def _rsi2(bars: DailyBars, p: dict) -> np.ndarray:
             long = False
         out[t] = long
     return out
+
+
+def _defined_from(n: int, first: int) -> np.ndarray:
+    out = np.zeros(int(n), dtype=bool)
+    if 0 <= int(first) < int(n):
+        out[int(first) :] = True
+    return out
+
+
+def _eval_ready(bars: DailyBars, start_j: int, lag: int, mask: np.ndarray, period: np.ndarray) -> np.ndarray:
+    """True from the first evaluation whose ``lag`` earlier period exists, onward.
+
+    A later evaluation that skips a period (a missing month-end) makes the
+    whole mask false: that tape is not stably warm, and the caller refuses
+    it instead of reading the gap as flat.
+    """
+    idx = np.flatnonzero(np.asarray(mask, dtype=bool))
+    out = np.zeros(len(bars), dtype=bool)
+    if lag <= 0 or idx.size <= start_j:
+        return out
+    per = np.asarray(period)
+    first = None
+    for j in range(int(start_j), int(idx.shape[0])):
+        if int(per[idx[j]] - per[idx[j - lag]]) != lag:
+            if first is not None:
+                return np.zeros(len(bars), dtype=bool)
+            continue
+        if first is None:
+            first = int(idx[j])
+    if first is None:
+        return out
+    out[first:] = True
+    return out
+
+
+def signal_ready(strategy: LibraryStrategy, bars: DailyBars, params: dict) -> np.ndarray:
+    """True where every input of this parameter set is finite.
+
+    The longest neighbour is a separate ``params`` dict. Callers score a day
+    only when this mask is true on the close that day acts on. False means
+    "not defined yet", not "be flat".
+    """
+    n = len(bars)
+    key = strategy.key
+    if key in ("sma200", "sma5x150", "golden_cross"):
+        short_n = int(params["short"])
+        long_ok = _defined_from(n, int(params["long"]) - 1)
+        if short_n <= 1:
+            return long_ok
+        return long_ok & _defined_from(n, short_n - 1)
+    if key == "sma100":
+        return _defined_from(n, int(params["n"]) - 1)
+    if key == "ema20x50":
+        return _defined_from(n, max(int(params["fast"]), int(params["slow"])) - 1)
+    if key == "macd":
+        # Slow EMA is finite at ``slow - 1``. The signal EMA then needs
+        # ``signal`` finite values of that line.
+        first = (int(params["slow"]) - 1) + (int(params["signal"]) - 1)
+        return _defined_from(n, first)
+    if key == "detzel2w":
+        return _defined_from(n, int(params["n"]) - 1)
+    if key == "faber10m":
+        months = int(params["months"])
+        return _eval_ready(
+            bars, months - 1, months - 1, is_month_end(bars.ts), month_number(bars.ts),
+        )
+    if key in ("tsmom12m", "tsmom6m", "tsmom3m"):
+        k = int(params["months"])
+        return _eval_ready(bars, k, k, is_month_end(bars.ts), month_number(bars.ts))
+    if key == "tsmom1w":
+        k = int(params["weeks"])
+        return _eval_ready(bars, k, k, is_week_end(bars.ts), week_number(bars.ts))
+    if key == "bll_trb50":
+        # prior_max is finite at index n (the window excludes day t).
+        return _defined_from(n, int(params["n"]))
+    if key == "turtle55":
+        return _defined_from(n, max(int(params["entry"]), int(params["exit"])))
+    if key == "rsi2":
+        first = max(2, int(params["trend"]) - 1, int(params["exit_ma"]) - 1)
+        return _defined_from(n, first)
+    raise ValueError(f"no warmup rule for {key}")
+
+
+def library_score_index(bars: DailyBars) -> int:
+    """First bar index whose open may be scored.
+
+    Every grid point, including each strategy's longest neighbour, is finite
+    on the previous close, and stays finite through the end of ``bars``.
+    One index for the whole library, so every strategy and buy-and-hold
+    share the span.
+    """
+    if len(bars) < 2:
+        raise ValueError("BTC daily tape cannot warm the library (fewer than 2 days)")
+    latest = 1
+    for strategy in LIBRARY:
+        for params in grid_params(strategy):
+            ready = signal_ready(strategy, bars, params)
+            if not bool(ready.any()) or not bool(ready[int(np.flatnonzero(ready)[0]) :].all()):
+                raise ValueError(
+                    f"{strategy.key} {params} is not warm on this tape; "
+                    "a missing lookback is not scored as flat"
+                )
+            first = int(np.flatnonzero(ready)[0]) + 1
+            if first >= len(bars):
+                raise ValueError(
+                    f"{strategy.key} {params} warms only on the last bar; "
+                    "a missing lookback is not scored as flat"
+                )
+            latest = max(latest, first)
+    return latest
 
 
 def sma_stack_signal(bars: DailyBars) -> np.ndarray:

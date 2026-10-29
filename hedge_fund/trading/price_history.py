@@ -145,7 +145,7 @@ def _source_array(root: Path, symbol: str) -> tuple[np.ndarray, str]:
     if _use_candle_store():
         from hedge_fund.data.candle_store import clear_ready, load_tape
 
-        arr = load_tape(symbol)
+        arr = load_tape(symbol, since_ms=QUAL_CANONICAL_START_MS)
         if len(arr) == 0:
             clear_ready()
         else:

@@ -122,7 +122,7 @@ class DiscoveryWindowTests(unittest.TestCase):
 
 class UnchangedV4ChecksTests(unittest.TestCase):
     def test_holdout_constants_and_trial_formula_stay(self):
-        self.assertEqual(GATE_RULES, "gate_v6_library_signal_exit_20261028")
+        self.assertEqual(GATE_RULES, "gate_v6_library_warmup_20261029")
         self.assertEqual(V5_GATE_RULES, "gate_v5_btc_holdout_dsr_pbo_20261027")
         self.assertEqual(V4_GATE_RULES, "gate_v4_btc_holdout_dsr_pbo_20261027")
         self.assertEqual(HOLDOUT_START_MS, 1_759_276_800_000)

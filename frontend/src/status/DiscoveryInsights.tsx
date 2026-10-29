@@ -105,7 +105,7 @@ function NearMissCard({ row, rank }: { row: InsightRow; rank: number }) {
       </div>
       <div className="mt-3 grid grid-cols-3 sm:grid-cols-6 gap-1.5">
         <Metric label="Sharpe" value={num(row.sharpe)} ok={row.sharpe != null ? row.sharpe >= GATE_THRESHOLDS.sharpe : null} hint="walk-forward Sharpe, needs ≥ 0.30" />
-        <Metric label="Trades" value={row.trades != null ? String(row.trades) : "—"} ok={row.trades != null ? row.trades >= GATE_THRESHOLDS.trades : null} hint="out-of-sample trades, needs ≥ 30" />
+        <Metric label="Trades" value={row.trades != null ? String(row.trades) : "—"} ok={row.trades != null ? row.trades >= GATE_THRESHOLDS.trades : null} hint="out-of-sample round-trips, daily library needs ≥ 8" />
         <Metric label="Holdout" value={num(g?.holdout_sharpe)} ok={g?.holdout_sharpe != null ? !row.failed_gates.includes("holdout") : null} hint="Sharpe on the sealed holdout year" />
         <Metric label="DSR" value={num(g?.dsr, 3)} ok={g?.dsr != null ? g.dsr >= GATE_THRESHOLDS.dsr : null} hint="deflated Sharpe, needs ≥ 0.95" />
         <Metric label="PBO" value={num(g?.pbo, 2)} ok={g?.pbo != null ? g.pbo <= GATE_THRESHOLDS.pbo : null} hint="overfitting probability, needs ≤ 0.20" />

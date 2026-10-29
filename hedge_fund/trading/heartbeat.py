@@ -13,9 +13,9 @@ It does NOT open new trades (that stays with the decision cycle). Pure $ /
 no-agent script. Run continuously or on a short cron.
 
 Library champions (``lib.*``, gate v6 signal_exit) have no take-profit.
-The heartbeat only checks their optional safety stop
-(``hedge_fund.library.live.library_stop_check``); the 2:1 rule never
-touches them.
+Their 20% stop fills at the next daily open inside the library cycle, not
+on an intraday heartbeat price (``library_stop_check`` returns 0). The
+2:1 rule never touches them.
 
 Usage:
   .venv/bin/python -m hedge_fund.trading.heartbeat [--once]

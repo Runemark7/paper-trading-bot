@@ -158,9 +158,12 @@ def library_table_payload(*, tested: set[str] | None = None, leased: set[str] | 
         "progress": library_progress(tested, leased),
         "strategies": rows,
         "note": (
-            "Pre-registered strategy library (gate v6). Each strategy is evaluated once "
-            "with its canonical parameters; its grid neighbours are scored inside that "
-            "evaluation and count toward the deflated-Sharpe trial count. Buy-and-hold "
-            "is informational. A pass is proposed, awaiting approval; it is not seated."
+            "Pre-registered strategy library (gate v6). Indicators use BTC history from "
+            "2017-08-17; a day that is not warm is not scored. Each strategy is evaluated "
+            "once with its canonical parameters and a 20% stop that fills at the next open. "
+            "The stop is not a second trial. Grid neighbours are scored inside that "
+            "evaluation and count toward the deflated-Sharpe trial count. Daily floors are "
+            "8 out-of-sample round-trips and 2 holdout trades. Buy-and-hold is informational. "
+            "A pass is proposed, awaiting approval; it is not seated."
         ),
     }

@@ -55,8 +55,11 @@ class _Book(unittest.TestCase):
         self._env.stop()
         self._tmp.cleanup()
 
-    def _run(self, n: int, price: float):
-        return run_library_account("lib.sma200", self.root, bars=_bars(n), price=price, now="2026-10-28T18:00:00+00:00")
+    def _run(self, n: int, price: float, bars: DailyBars | None = None):
+        return run_library_account(
+            "lib.sma200", self.root, bars=bars if bars is not None else _bars(n),
+            price=price, now="2026-10-28T18:00:00+00:00",
+        )
 
     def _broker(self) -> PaperBroker:
         store = TradeStore(account_path(self.root, "lib.sma200"))
@@ -163,7 +166,18 @@ class SignalExitLiveTests(_Book):
         held = self._run(1, 250.0)
         self.assertTrue(held["long"])
         self.assertEqual(held["actions"], [])
-        stopped = self._run(1, stop - 1.0)
+        # An intraday price through the stop is not the next daily open.
+        intraday = self._run(1, stop - 1.0)
+        self.assertTrue(intraday["long"])
+        self.assertEqual(intraday["actions"], [])
+        self.assertEqual(len(self._broker().lots), 1)
+        # The run that first includes the breach day sells at that run's price.
+        self._program["on"] = [True, True]
+        breach = _bars(2)
+        low = breach.low.copy()
+        low[1] = stop - 1.0
+        breach = DailyBars(ts=breach.ts, open=breach.open, high=breach.high, low=low, close=breach.close)
+        stopped = self._run(2, 100.0, bars=breach)
         self.assertFalse(stopped["long"])
         self.assertEqual(stopped["actions"][0]["reason"], "safety_stop")
         self.assertEqual(self._broker().lots, [])
@@ -206,7 +220,17 @@ class SignalExitLiveTests(_Book):
             self.assertEqual(heartbeat_once(), 0)
             self.assertEqual(len(self._broker().lots), 1)
             prices["BTC/USDT"] = stop - 0.5
-            self.assertEqual(heartbeat_once(), 1)
+            # The heartbeat does not sell on an intraday print.
+            self.assertEqual(heartbeat_once(), 0)
+        self.assertEqual(len(self._broker().lots), 1)
+        self.assertFalse(self._saved()["library"]["machine"]["lockout"])
+        self._program["on"] = [True, True]
+        breach = _bars(2)
+        low = breach.low.copy()
+        low[1] = stop - 1.0
+        breach = DailyBars(ts=breach.ts, open=breach.open, high=breach.high, low=low, close=breach.close)
+        stopped = self._run(2, 90.0, bars=breach)
+        self.assertFalse(stopped["long"])
         self.assertEqual(self._broker().lots, [])
         self.assertTrue(self._saved()["library"]["machine"]["lockout"])
         store = TradeStore(account_path(self.root, "lib.sma200"))
@@ -215,7 +239,7 @@ class SignalExitLiveTests(_Book):
         finally:
             store.close()
         self.assertEqual(closed[0]["exit_reason"], "safety_stop")
-        # The direct check agrees: already flat, nothing to close.
+        # The direct check never closes a lot. The daily cycle owns the stop.
         self.assertEqual(library_stop_check("lib.sma200", self.root, stop - 1.0, "2026-10-28T19:00:00+00:00"), 0)
 
 
@@ -292,6 +316,41 @@ class IsolatedCycleTests(unittest.TestCase):
         self.assertEqual(len(open_rows), 1)
         self.assertEqual(saved["library"]["engine"], "signal_exit")
         self.assertTrue(saved["library"]["last_signal"])
+
+
+class UnwarmedDayTests(unittest.TestCase):
+    def test_a_missing_lookback_does_not_flatten(self):
+        """A new day that is not warm is skipped, even when its signal is off."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            base, params = parse_variant("lib.sma200")
+
+            def signal(bars, _params):
+                out = np.zeros(len(bars), dtype=bool)
+                if len(bars):
+                    out[0] = True
+                return out
+
+            def ready(_strategy, bars, _params):
+                out = np.ones(len(bars), dtype=bool)
+                if len(bars) >= 2:
+                    out[1:] = False
+                return out
+
+            strategy = replace(base, signal=signal, stop_frac=0.0)
+            with patch.dict(os.environ, {"PAPER_STATE": str(root)}), patch(
+                "hedge_fund.library.live.parse_variant",
+                return_value=(strategy, params),
+            ), patch("hedge_fund.library.live._position_ready", side_effect=ready):
+                first = run_library_account(
+                    "lib.sma200", root, bars=_bars(1), price=100.0, now="2026-10-28T18:00:00+00:00",
+                )
+                self.assertTrue(first["long"])
+                second = run_library_account(
+                    "lib.sma200", root, bars=_bars(2), price=100.0, now="2026-10-28T19:00:00+00:00",
+                )
+            self.assertTrue(second["long"])
+            self.assertEqual(second["actions"], [])
 
 
 if __name__ == "__main__":

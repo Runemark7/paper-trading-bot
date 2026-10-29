@@ -43,7 +43,13 @@ from hedge_fund.library.evaluate import (  # noqa: E402
     library_data_from_tape,
 )
 from hedge_fund.paths import state_root  # noqa: E402
-from hedge_fund.trading.constants import QUAL_CANONICAL_START_MS  # noqa: E402
+from hedge_fund.trading.constants import (  # noqa: E402
+    DISCOVERY_N_WINDOWS,
+    LIBRARY_STOP_FRAC,
+    LIBRARY_TAPE_START_MS,
+    QUAL_OOS_START_MS,
+    QUAL_SEGMENT_MS,
+)
 
 PUBLIC_BASES = (
     "https://data-api.binance.vision",
@@ -100,17 +106,27 @@ def fetch_klines(interval: str, start_ms: int, end_ms: int | None = None, *, qui
 
 
 def ensure_tape(state: Path, fetch: bool) -> np.ndarray:
+    """BTC 5m bars from the Binance listing (2017-08-17), not the 2021 canonical cut."""
     from hedge_fund.trading.live_tape import load_array, merge_arrays, save_array
 
     arr = load_array(SYMBOL, state)
     if fetch:
-        since = int(arr["ts"][-1]) if len(arr) else QUAL_CANONICAL_START_MS
-        print(f"fetching {SYMBOL} 5m from {_day(since)} (Binance public API)", flush=True)
-        arr = merge_arrays(arr, fetch_klines("5m", since))
+        if len(arr) == 0 or int(arr["ts"][0]) > LIBRARY_TAPE_START_MS:
+            end = int(arr["ts"][0]) if len(arr) else None
+            print(
+                f"fetching {SYMBOL} 5m prefix from {_day(LIBRARY_TAPE_START_MS)} "
+                f"to {_day(end) if end else 'now'} (Binance public API)",
+                flush=True,
+            )
+            arr = merge_arrays(fetch_klines("5m", LIBRARY_TAPE_START_MS, end_ms=end), arr)
+        if len(arr):
+            since = int(arr["ts"][-1])
+            print(f"fetching {SYMBOL} 5m tail from {_day(since)} (Binance public API)", flush=True)
+            arr = merge_arrays(arr, fetch_klines("5m", since))
         save_array(SYMBOL, arr, state)
     if len(arr) == 0:
         raise SystemExit(f"no {SYMBOL} tape under {state}/live_tape; run with --fetch")
-    lo = int(np.searchsorted(arr["ts"], np.int64(QUAL_CANONICAL_START_MS), side="left"))
+    lo = int(np.searchsorted(arr["ts"], np.int64(LIBRARY_TAPE_START_MS), side="left"))
     return arr[lo:]
 
 
@@ -213,6 +229,77 @@ def markdown_table(records: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def pandas_sma200_check(data) -> dict:
+    """Signal check against ``pandas.Series.rolling``, plus the reviewer's span.
+
+    The reviewer's 23 trades and +33.8% are the old score window with full
+    history and the stop off. That book is not a trial: N stays the grid.
+    """
+    import pandas as pd
+    from hedge_fund.library.catalog import signal_ready
+    from hedge_fund.library.engine import run
+
+    bars = data.discovery
+    strategy = strategy_by_key("sma200")
+    signal = strategy.signal(bars, strategy.center)
+    ready = signal_ready(strategy, bars, strategy.center)
+    close = pd.Series(np.asarray(bars.close, dtype=np.float64))
+    average = close.rolling(200).mean()
+    expected = (close > average).fillna(False).to_numpy()
+    a = bars.index_of(QUAL_OOS_START_MS)
+    through_holdout = run(bars, signal, start=a, end=len(bars), stop_frac=0.0)
+    old_end_ms = QUAL_OOS_START_MS + DISCOVERY_N_WINDOWS * QUAL_SEGMENT_MS
+    b18 = bars.index_of(old_end_ms)
+    tiled = run(bars, signal, start=a, end=b18, stop_frac=0.0)
+    plain = _plain_next_open(bars, signal, a, b18)
+
+    def pack(res) -> dict:
+        return {
+            "trades": len(res.trades),
+            "return": round(float(res.equity[-1] / res.equity[0] - 1.0), 4) if res.equity[0] else None,
+            "start": _day(int(bars.ts[res.start])),
+            "end": _day(int(bars.ts[res.end - 1])),
+        }
+
+    return {
+        "role": "diagnostic, not a trial",
+        "pandas_signal_match": bool(np.array_equal(signal, expected)),
+        "pandas_ready_match": bool(np.array_equal(ready, average.notna().to_numpy())),
+        "scored_days_have_a_finite_sma": bool(average.iloc[data.score_index - 1 :].notna().all()),
+        "stop": "off",
+        "reviewer_target": {"trades": 23, "return": 0.338},
+        "qual_oos_through_day_before_holdout": pack(through_holdout),
+        "old_18x87_segments": pack(tiled),
+        "plain_pandas_next_open_on_18x87": plain,
+        "library_stop_frac_not_applied": LIBRARY_STOP_FRAC,
+    }
+
+
+def _plain_next_open(bars, signal, start: int, end: int) -> dict:
+    """Next-open long-or-flat with the paper fee and slippage, no engine import."""
+    from hedge_fund.brokers.paper import SLIPPAGE, TAKER_FEE
+
+    cash = 10_000.0
+    qty = 0.0
+    trades = 0
+    for d in range(int(start), int(end)):
+        on = bool(signal[d - 1]) if d >= 1 else False
+        if qty == 0.0 and on:
+            fill = float(bars.open[d]) * (1.0 + SLIPPAGE)
+            qty = cash / (fill * (1.0 + TAKER_FEE))
+            cash = 0.0
+        elif qty > 0.0 and not on:
+            fill = float(bars.open[d]) * (1.0 - SLIPPAGE)
+            cash = qty * fill * (1.0 - TAKER_FEE)
+            qty = 0.0
+            trades += 1
+    if qty > 0.0:
+        fill = float(bars.close[end - 1]) * (1.0 - SLIPPAGE)
+        cash = qty * fill * (1.0 - TAKER_FEE)
+        trades += 1
+    return {"trades": trades, "return": round(cash / 10_000.0 - 1.0, 4)}
+
+
 def sanity_drawdowns() -> dict:
     """200-day SMA long-or-flat vs buy-and-hold inside calendar 2018 and 2022.
 
@@ -231,9 +318,11 @@ def sanity_drawdowns() -> dict:
     for year in (2018, 2022):
         a = full.index_of(int(datetime(year, 1, 1, tzinfo=timezone.utc).timestamp() * 1000))
         b = full.index_of(int(datetime(year + 1, 1, 1, tzinfo=timezone.utc).timestamp() * 1000))
-        s = run(full, signal, start=a, end=b)
+        s = run(full, signal, start=a, end=b, stop_frac=0.0)
+        stopped = run(full, signal, start=a, end=b, stop_frac=LIBRARY_STOP_FRAC)
         h = run(full, np.ones(len(full), dtype=bool), start=a, end=b)
         out[str(year)] = {
+            "stop": "off (the published comparison; the gated book uses 20%)",
             "sma200_max_drawdown": round(_mdd(s.equity), 4),
             "bh_max_drawdown": round(_mdd(h.equity), 4),
             "sma200_return": round(float(s.equity[-1] / s.equity[0] - 1.0), 4),
@@ -241,6 +330,12 @@ def sanity_drawdowns() -> dict:
             "sma200_trades": len(s.trades),
             "sma200_days_long": int(s.days_long),
             "days": int(b - a),
+            "with_20pct_stop": {
+                "sma200_max_drawdown": round(_mdd(stopped.equity), 4),
+                "sma200_return": round(float(stopped.equity[-1] / stopped.equity[0] - 1.0), 4),
+                "sma200_trades": len(stopped.trades),
+                "sma200_days_long": int(stopped.days_long),
+            },
         }
     return out
 
@@ -333,6 +428,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.json:
         Path(args.json).write_text(json.dumps(records, indent=2, default=str))
         print(f"\nwrote {args.json}")
+    check = pandas_sma200_check(data)
+    print("\npandas sma200 check (not a trial):")
+    print(json.dumps(check, indent=2))
     if args.before_after:
         print("\nbefore/after, 200-day SMA entry on the discovery span:")
         print(json.dumps(before_after(data), indent=2))

@@ -5,22 +5,35 @@ import unittest
 
 import numpy as np
 
-from hedge_fund.library.catalog import claim_names, library_trial_count, strategy_by_key
+import pandas as pd
+
+from hedge_fund.library.catalog import (
+    LIBRARY,
+    claim_names,
+    grid_params,
+    library_trial_count,
+    signal_ready,
+    strategy_by_key,
+)
 from hedge_fund.library.daily import DAY_MS
 from hedge_fund.library.evaluate import (
     CHECK_ORDER,
     count_only_failure,
     discovery_metrics,
-    discovery_segments,
     evaluate_library_record,
     holdout_metrics,
     library_data_from_tape,
+    tile_blocks,
 )
 from hedge_fund.trading.constants import (
-    DISCOVERY_N_WINDOWS,
     GATE_RULES,
     HOLDOUT_END_MS,
     HOLDOUT_START_MS,
+    LIBRARY_BLOCK_TARGET_DAYS,
+    LIBRARY_HOLDOUT_MIN_TRADES,
+    LIBRARY_MIN_OOS_TRADES,
+    LIBRARY_STOP_FRAC,
+    LIBRARY_TAPE_START_MS,
     QUAL_CANONICAL_START_MS,
 )
 from hedge_fund.trading.gate_v4 import v4_attestation_ok
@@ -29,11 +42,16 @@ TAPE_DTYPE = np.dtype([("ts", "<i8"), ("open", "<f8"), ("high", "<f8"), ("low", 
 HOUR = 3_600_000
 
 
-def synthetic_tape(end_ms: int = HOLDOUT_END_MS + 20 * DAY_MS, seed: int = 3, drift: float = 0.00004) -> np.ndarray:
+def synthetic_tape(
+    end_ms: int = HOLDOUT_END_MS + 20 * DAY_MS,
+    seed: int = 3,
+    drift: float = 0.00004,
+    start_ms: int = LIBRARY_TAPE_START_MS,
+) -> np.ndarray:
     """Hourly bars are enough: daily bars only need the first and last bar of a day."""
     rng = np.random.default_rng(seed)
-    n = (end_ms - QUAL_CANONICAL_START_MS) // HOUR
-    ts = QUAL_CANONICAL_START_MS + np.arange(n, dtype=np.int64) * HOUR
+    n = (end_ms - start_ms) // HOUR
+    ts = start_ms + np.arange(n, dtype=np.int64) * HOUR
     close = 30_000.0 * np.exp(np.cumsum(rng.normal(drift, 0.007, n)))
     opens = np.concatenate(([close[0]], close[:-1]))
     arr = np.zeros(n, dtype=TAPE_DTYPE)
@@ -59,6 +77,7 @@ class HoldoutSealTests(unittest.TestCase):
             poisoned[field][sealed] *= ramp
         a = library_data_from_tape(tape)
         b = library_data_from_tape(poisoned)
+        holdout_moved = False
         for name in ("lib.sma200", "lib.tsmom12m", "lib.rsi2"):
             strategy = strategy_by_key(name[len("lib."):])
             ma = discovery_metrics(a, strategy, strategy.center)
@@ -68,7 +87,12 @@ class HoldoutSealTests(unittest.TestCase):
             ha = holdout_metrics(a, strategy, strategy.center)
             hb = holdout_metrics(b, strategy, strategy.center)
             self.assertIsNotNone(ha)
-            self.assertNotEqual(round(ha.pnl, 6), round(hb.pnl, 6))
+            self.assertIsNotNone(hb)
+            # A book that never enters the holdout has nothing for the crash to change.
+            if ha.trades or ha.exposure:
+                self.assertNotEqual(round(ha.pnl, 6), round(hb.pnl, 6))
+                holdout_moved = True
+        self.assertTrue(holdout_moved)
 
     def test_short_holdout_fails_closed(self):
         data = library_data_from_tape(synthetic_tape(end_ms=HOLDOUT_START_MS + 30 * DAY_MS))
@@ -78,12 +102,16 @@ class HoldoutSealTests(unittest.TestCase):
         self.assertFalse(record["gate_v4"]["holdout_pass"])
         self.assertTrue(any("holdout tape incomplete" in r for r in record["fail_reasons"]))
 
-    def test_tape_that_misses_discovery_raises(self):
-        short = synthetic_tape()
-        short = short[short["ts"] >= discovery_segments()[3][0]]
-        data = library_data_from_tape(short)
-        with self.assertRaises(ValueError):
-            evaluate_library_record("lib.sma200", data)
+    def test_tape_that_starts_in_2021_is_refused(self):
+        with self.assertRaises(ValueError) as caught:
+            library_data_from_tape(synthetic_tape(start_ms=QUAL_CANONICAL_START_MS))
+        self.assertIn("2017-08-17", str(caught.exception))
+
+    def test_tape_that_cannot_warm_the_longest_neighbour_is_refused(self):
+        short_end = LIBRARY_TAPE_START_MS + 200 * DAY_MS
+        with self.assertRaises(ValueError) as caught:
+            library_data_from_tape(synthetic_tape(end_ms=short_end))
+        self.assertIn("not scored as flat", str(caught.exception))
 
 
 class RecordTests(unittest.TestCase):
@@ -96,8 +124,11 @@ class RecordTests(unittest.TestCase):
         for name, record in self.records.items():
             lib = record["library"]
             self.assertEqual(set(lib["checks"]), set(CHECK_ORDER), name)
-            self.assertEqual(record["regimes_tested"], DISCOVERY_N_WINDOWS)
-            self.assertEqual(len(lib["windows"]), DISCOVERY_N_WINDOWS)
+            self.assertEqual(record["regimes_tested"], len(self.data.segments))
+            self.assertEqual(len(lib["windows"]), len(self.data.segments))
+            self.assertEqual(record["library"]["checks"]["oos_trades"]["threshold"], LIBRARY_MIN_OOS_TRADES)
+            self.assertEqual(record["library"]["checks"]["holdout_trades"]["threshold"], LIBRARY_HOLDOUT_MIN_TRADES)
+            self.assertEqual(record["library"]["safety_stop_pct"], LIBRARY_STOP_FRAC * 100.0)
             self.assertEqual(record["gate_rules"], GATE_RULES)
             self.assertEqual(record["engine"], "signal_exit")
             self.assertEqual(record["timeframe"], "1d")
@@ -155,6 +186,61 @@ class CountOnlyTests(unittest.TestCase):
     def test_any_statistical_failure_is_not_count_only(self):
         self.assertFalse(count_only_failure(self._checks(oos_trades=None, dsr=None)))
         self.assertFalse(count_only_failure(self._checks()))
+
+
+class WarmupTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.data = library_data_from_tape(synthetic_tape())
+
+    def test_no_nan_as_off_inside_scored_days(self):
+        discovery = self.data.discovery
+        a, b = self.data.discovery_bounds()
+        hold = self.data.holdout
+        self.assertIsNotNone(hold)
+        ha = hold.index_of(HOLDOUT_START_MS)
+        for strategy in LIBRARY:
+            for params in grid_params(strategy):
+                ready = signal_ready(strategy, discovery, params)
+                self.assertTrue(
+                    bool(ready[a - 1 : b - 1].all()),
+                    f"{strategy.key} {params} scored a discovery day that is not warm",
+                )
+                hold_ready = signal_ready(strategy, hold, params)
+                self.assertTrue(
+                    bool(hold_ready[ha - 1 : len(hold) - 1].all()),
+                    f"{strategy.key} {params} scored a holdout day that is not warm",
+                )
+
+    def test_sma200_matches_pandas_where_the_average_is_defined(self):
+        bars = self.data.discovery
+        strategy = strategy_by_key("sma200")
+        signal = strategy.signal(bars, strategy.center)
+        ready = signal_ready(strategy, bars, strategy.center)
+        close = pd.Series(bars.close)
+        average = close.rolling(200).mean()
+        expected = (close > average).fillna(False).to_numpy()
+        np.testing.assert_array_equal(signal, expected)
+        np.testing.assert_array_equal(ready, average.notna().to_numpy())
+        a, b = self.data.discovery_bounds()
+        scored = slice(a - 1, b - 1)
+        self.assertTrue(bool(average.iloc[scored].notna().all()))
+        np.testing.assert_array_equal(
+            signal[scored],
+            (close.to_numpy()[scored] > average.to_numpy()[scored]),
+        )
+
+    def test_blocks_tile_the_warmed_span_in_about_390_day_pieces(self):
+        score_ts = int(self.data.discovery.ts[self.data.score_index])
+        segments = self.data.segments
+        self.assertEqual(segments, tile_blocks(score_ts, HOLDOUT_START_MS))
+        span = HOLDOUT_START_MS - score_ts
+        expected = max(1, round(span / (LIBRARY_BLOCK_TARGET_DAYS * DAY_MS)))
+        self.assertEqual(len(segments), expected)
+        self.assertEqual(segments[0][0], score_ts)
+        self.assertEqual(segments[-1][1], HOLDOUT_START_MS)
+        self.assertGreater(expected, 1)
+        self.assertLess(expected, 18)
 
 
 if __name__ == "__main__":

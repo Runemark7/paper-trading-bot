@@ -8,9 +8,13 @@ paper cycle (``hedge_fund.library.live``):
   the live cycle at the price of its first run after that close.
 * Flat and the signal is on: buy with all cash. Long and the signal is off:
   sell everything. No take-profit, no pyramiding, no partial sizing.
-* Optional safety stop (``stop_frac`` below the entry fill, off by default):
-  a breach sells the position and locks re-entry until the signal has been
-  off at a close, so a stop is not undone by the next open.
+* A fresh book enters at the first scored open when the previous close is
+  already long. That entry is part of the rule, not a lookahead.
+* Safety stop (``stop_frac`` below the entry fill). The library pre-registers
+  20% and leaves it on; the engine still accepts 0 for a test. A day's low
+  at or through the stop does not fill at the stop price. The position is
+  sold at the next day's open, then re-entry stays locked until the signal
+  has been off at a close.
 * Fees are the paper broker's: 0.1% taker plus 2 bps slippage per side,
   charged on every fill (``hedge_fund.brokers.paper``).
 
@@ -78,15 +82,25 @@ class MachineState:
 
     long: bool = False
     lockout: bool = False
+    # A completed day traded through the stop. The next open sells.
+    stop_pending: bool = False
 
     def to_dict(self) -> dict:
-        return {"long": bool(self.long), "lockout": bool(self.lockout)}
+        return {
+            "long": bool(self.long),
+            "lockout": bool(self.lockout),
+            "stop_pending": bool(self.stop_pending),
+        }
 
     @classmethod
     def from_dict(cls, raw: object) -> "MachineState":
         if not isinstance(raw, dict):
             return cls()
-        return cls(long=bool(raw.get("long")), lockout=bool(raw.get("lockout")))
+        return cls(
+            long=bool(raw.get("long")),
+            lockout=bool(raw.get("lockout")),
+            stop_pending=bool(raw.get("stop_pending")),
+        )
 
 
 def step(state: MachineState, signal_on: bool) -> str | None:
@@ -111,6 +125,7 @@ def step(state: MachineState, signal_on: bool) -> str | None:
 def stop_out(state: MachineState) -> None:
     state.long = False
     state.lockout = True
+    state.stop_pending = False
 
 
 @dataclass
@@ -181,11 +196,12 @@ def run(
 ) -> RunResult:
     """Score days ``[start, end)``. The book starts flat with ``start_cash``.
 
-    At day ``d``'s open the signal of day ``d - 1`` is applied (a fresh book
-    with the signal on buys at the first open). A safety stop is checked
-    against day ``d``'s low and fills at the stop, or at the open when the
-    day opened below it. Equity is marked at each close. An open position
-    is sold at the close of day ``end - 1``.
+    At day ``d``'s open the signal of day ``d - 1`` is applied. A fresh book
+    whose previous close is already long buys at ``bars.open[start]``. A
+    safety stop is checked against day ``d``'s low after the open. The fill
+    is the next day's open, not the stop price and not this day's open.
+    Equity is marked at each close. An open position is sold at the close
+    of day ``end - 1`` (as a stop, if that last day was the breach).
     """
     sig = np.asarray(signal, dtype=bool)
     n = len(bars)
@@ -225,9 +241,12 @@ def run(
         stop = None
 
     for d in range(start, end):
+        ts = int(bars.ts[d])
+        if state.stop_pending and state.long:
+            close_trade(ts, float(bars.open[d]), REASON_STOP, d - entry_day)
+            stop_out(state)
         on = bool(sig[d - 1]) if d >= 1 else False
         action = step(state, on)
-        ts = int(bars.ts[d])
         if action == EXIT:
             close_trade(ts, float(bars.open[d]), REASON_SIGNAL, d - entry_day)
         elif action == ENTER:
@@ -239,15 +258,17 @@ def run(
             trade = Trade(entry_ts=ts, entry_price=fill, qty=q, entry_fee=fee)
             entry_day = d
         if state.long and stop is not None and float(bars.low[d]) <= stop:
-            close_trade(ts, min(float(bars.open[d]), stop), REASON_STOP, d - entry_day + 1)
-            stop_out(state)
+            state.stop_pending = True
         if state.long:
             days_long += 1
         points[d - start + 1] = cash + qty * float(bars.close[d])
 
     if trade is not None:
         last = end - 1
-        close_trade(int(bars.ts[last]), float(bars.close[last]), REASON_END, last - entry_day + 1)
+        reason = REASON_STOP if state.stop_pending else REASON_END
+        close_trade(int(bars.ts[last]), float(bars.close[last]), reason, last - entry_day + 1)
+        if state.stop_pending:
+            stop_out(state)
         points[-1] = cash
     result.equity = points
     result.days_long = days_long

@@ -37,7 +37,7 @@ import {
 const JOURNEY = [
   { step: "Library", text: "A fixed list of cited daily BTC rules. The random mint is off." },
   { step: "Backtest", text: "Daily bars, long or flat, exit when the signal turns off, with fees." },
-  { step: "Gate v6", text: "8 strict checks against luck, overfitting and costs. The trade floors are unchanged." },
+  { step: "Gate v6", text: "8 strict checks against luck, overfitting and costs. The daily library needs 8 out-of-sample round-trips and 2 holdout trades. The 5m floors stay 30 and 8." },
   { step: "Propose", text: "Every passer is ranked and marked proposed, awaiting approval." },
   { step: "Admit", text: "The owner admits champions by hand. There is no limit on how many." },
   { step: "Forward test", text: "Paper-trade live Binance prices. Win = profit after fees." },

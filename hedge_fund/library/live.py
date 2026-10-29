@@ -14,10 +14,12 @@ The decision for day ``d`` is taken by the first run after ``d`` has
 closed, at that run's price, which is the live counterpart of the
 backtest's next-open fill. Days that closed while the cycle was down are
 replayed through ``engine.step`` in order; only the resulting position
-change is traded, at the current price. The optional safety stop is
-checked against the current price on every run and by the heartbeat
-(``library_stop_check``). There is no take-profit: the heartbeat's 2:1 rule
-never touches these accounts.
+change is traded, at the current price. A day whose lookback is not warm
+is skipped: it is not a flat signal. The 20% safety stop is filled on the
+run that first includes the breach day's low (that run is the next open).
+The heartbeat does not sell these accounts on an intraday price, and its
+2:1 take-profit never touches them. A fresh book whose latest close is
+already long buys at that run's price.
 """
 from __future__ import annotations
 
@@ -29,7 +31,7 @@ from pathlib import Path
 import numpy as np
 
 from hedge_fund.brokers.paper import SLIPPAGE, TAKER_FEE, Order, PaperBroker
-from hedge_fund.library.catalog import parse_variant
+from hedge_fund.library.catalog import parse_variant, signal_ready
 from hedge_fund.library.daily import DAY_MS, DailyBars, daily_from_tape, empty_daily
 from hedge_fund.library.engine import (
     ENGINE_ID,
@@ -45,7 +47,12 @@ from hedge_fund.library.engine import (
     stop_out,
     stop_price,
 )
-from hedge_fund.trading.constants import PAPER_START_CASH, QUAL_CANONICAL_START_MS, TRADE_SYMBOLS
+from hedge_fund.trading.constants import (
+    LIBRARY_TAPE_START_MS,
+    LIBRARY_TAPE_START_SLACK_MS,
+    PAPER_START_CASH,
+    TRADE_SYMBOLS,
+)
 
 SYMBOL = TRADE_SYMBOLS[0]
 STATE_KEY = "library"
@@ -84,15 +91,11 @@ def _newest_5m_ts(state: Path, source: str) -> int | None:
 
 
 def _full_tape(state: Path, source: str) -> np.ndarray:
-    if source == "candles":
-        from hedge_fund.data.candle_store import load_tape
+    """BTC 5m bars from the Binance listing. ``source`` selects the store."""
+    del source  # load_library_tape picks the store the same way _tape_source does
+    from hedge_fund.library.tape import load_library_tape
 
-        return load_tape(SYMBOL, since_ms=QUAL_CANONICAL_START_MS)
-    from hedge_fund.trading.live_tape import load_array
-
-    arr = load_array(SYMBOL, state)
-    lo = int(np.searchsorted(arr["ts"], np.int64(QUAL_CANONICAL_START_MS), side="left"))
-    return arr[lo:]
+    return load_library_tape(state)
 
 
 def _read_cache(path: Path) -> tuple[DailyBars, dict] | None:
@@ -124,9 +127,10 @@ def live_daily_bars(state: Path) -> DailyBars:
     """Completed UTC days of the BTC tape the cycle keeps. Rebuilt once per day.
 
     The newest 5m bar decides the newest completed day. When the cached
-    file already ends on that day it is reused; otherwise every day is
-    rebuilt from the full tape (since the canonical start), so a repaired
-    historical bar is picked up the next day.
+    file already ends on that day and starts at the library tape
+    (``LIBRARY_TAPE_START_MS``, 2017-08-17) it is reused; otherwise every
+    day is rebuilt from the full tape, so a repaired historical bar is
+    picked up the next day. The 5m canonical cut (2021-01-26) is not used.
     """
     state = Path(state)
     source = _tape_source()
@@ -138,11 +142,24 @@ def live_daily_bars(state: Path) -> DailyBars:
     cached = _read_cache(path) if path.exists() else None
     if cached is not None:
         bars, meta = cached
-        if meta.get("source") == source and bars.last_ts == want_last:
+        starts = (
+            len(bars) > 0
+            and int(bars.ts[0]) <= LIBRARY_TAPE_START_MS + LIBRARY_TAPE_START_SLACK_MS
+            and meta.get("tape_start") == LIBRARY_TAPE_START_MS
+        )
+        if meta.get("source") == source and bars.last_ts == want_last and starts:
             return bars
     bars = daily_from_tape(_full_tape(state, source))
     try:
-        _write_cache(path, bars, {"source": source, "last_ts": bars.last_ts, "built_at": _now()})
+        _write_cache(
+            path, bars,
+            {
+                "source": source,
+                "last_ts": bars.last_ts,
+                "built_at": _now(),
+                "tape_start": LIBRARY_TAPE_START_MS,
+            },
+        )
     except OSError as exc:
         print(f"[library] daily cache not written: {exc}", flush=True)
     return bars
@@ -222,6 +239,20 @@ def _sell(store, broker: PaperBroker, price: float, reason: str) -> dict | None:
     return out
 
 
+def _position_ready(strategy, bars: DailyBars, params: dict) -> np.ndarray:
+    """Finite-input mask. A stub signal (tests) is treated as already warm.
+
+    The catalog function is the production path: a NaN lookback stays out
+    of the decision instead of being read as flat.
+    """
+    from hedge_fund.library.catalog import strategy_by_key
+
+    canonical = strategy_by_key(strategy.key)
+    if strategy.signal is not canonical.signal:
+        return np.ones(len(bars), dtype=bool)
+    return signal_ready(strategy, bars, params)
+
+
 def _stop_level(broker: PaperBroker) -> float | None:
     for lot in broker.lots:
         if lot.ticker == SYMBOL and lot.stop_loss and lot.stop_loss > 0:
@@ -257,33 +288,64 @@ def run_library_account(
         try:
             condition = f"{SYMBOL}|{TIMEFRAME}|{strategy.key}"
             actions: list[dict] = []
-            stop = _stop_level(broker)
-            if machine.long and stop is not None and price <= stop:
-                done = _sell(store, broker, price, REASON_STOP)
-                if done:
-                    actions.append(done)
-                stop_out(machine)
             last_day = raw.get("last_day")
             signal_now = None
             if len(bars):
                 signal = strategy.signal(bars, params)
+                ready = _position_ready(strategy, bars, params)
                 if last_day is None:
                     pending = [len(bars) - 1]
                 else:
                     pending = [i for i in range(len(bars)) if int(bars.ts[i]) > int(last_day)]
                 was_long = machine.long
+                exit_reason = None
+                skipped = False
+                # A lot opened during this replay fills only at the end price,
+                # so earlier lows do not stop it. The stored stop belongs to
+                # the position that was already on.
+                lot_stop = _stop_level(broker) if was_long else None
                 for i in pending:
-                    step(machine, bool(signal[i]))
+                    if machine.stop_pending and machine.long and was_long:
+                        stop_out(machine)
+                        exit_reason = REASON_STOP
+                    if bool(ready[i]):
+                        step(machine, bool(signal[i]))
+                    else:
+                        skipped = True
+                    if (
+                        was_long
+                        and machine.long
+                        and lot_stop is not None
+                        and float(bars.low[i]) <= lot_stop
+                    ):
+                        if i == pending[-1]:
+                            # This run is the next daily open.
+                            stop_out(machine)
+                            exit_reason = REASON_STOP
+                        else:
+                            machine.stop_pending = True
+                if skipped:
+                    print(
+                        f"[library] {name}: skipped an unwarmed day; "
+                        "a missing lookback is not a flat signal",
+                        flush=True,
+                    )
                 if pending:
                     raw["last_day"] = int(bars.ts[pending[-1]])
-                    raw["last_signal"] = bool(signal[pending[-1]])
-                signal_now = bool(signal[-1])
+                    for i in reversed(pending):
+                        if bool(ready[i]):
+                            raw["last_signal"] = bool(signal[i])
+                            break
+                if bool(ready[-1]):
+                    signal_now = bool(signal[-1])
+                elif raw.get("last_signal") is not None:
+                    signal_now = bool(raw["last_signal"])
                 if machine.long and not was_long:
                     actions.append(_buy(store, broker, price, strategy.stop_frac, condition))
                     if actions[-1].get("action") != "ENTER":
                         machine.long = False
                 elif was_long and not machine.long and broker.lots:
-                    done = _sell(store, broker, price, REASON_SIGNAL)
+                    done = _sell(store, broker, price, exit_reason or REASON_SIGNAL)
                     if done:
                         actions.append(done)
             equity = _snapshot(store, broker, price)
@@ -307,30 +369,14 @@ def run_library_account(
 
 
 def library_stop_check(name: str, state: Path, price: float | None, now: str | None = None) -> int:
-    """Heartbeat path: sell on a safety-stop breach. Returns lots closed (0 or 1)."""
-    from hedge_fund.trading.store import paper_state_lock
+    """Heartbeat hook. The daily bar owns the catastrophic stop, so this returns 0.
 
-    if price is None or not np.isfinite(price) or price <= 0:
-        return 0
-    with paper_state_lock(LOCK_NAME):
-        store, broker, saved, raw, machine = _open_account(Path(state), name)
-        try:
-            stop = _stop_level(broker)
-            if not machine.long or stop is None or price > stop:
-                return 0
-            done = _sell(store, broker, price, REASON_STOP)
-            stop_out(machine)
-            _snapshot(store, broker, price)
-            if done:
-                store.record_decision(
-                    SYMBOL, TIMEFRAME, f"{SYMBOL}|{TIMEFRAME}|safety_stop", None, None, "flat",
-                    done["action"], done["reason"], broker.equity({SYMBOL: price}), 0.0, 0.0,
-                    raw_signal={"engine": ENGINE_ID, "stop": stop},
-                )
-            _save(store, broker, saved, raw, machine, now or _now())
-            return 1 if done else 0
-        finally:
-            store.close()
+    Selling on an intraday price would exit minutes after the low, not at
+    the next daily open. The heartbeat still calls this so a ``lib.*``
+    account is not sent through the 2:1 take-profit path.
+    """
+    del name, state, price, now
+    return 0
 
 
 __all__ = [
