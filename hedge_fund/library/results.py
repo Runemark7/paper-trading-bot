@@ -1,7 +1,7 @@
 """Stored library evaluations for ``GET /api/discovery/library``.
 
 Ingest writes each library record to ``library_results.json`` (one small
-JSON object keyed by name, ~15 entries). The web request only reads that
+JSON object keyed by name, one entry per canonical strategy). The web request only reads that
 file, cached on its stat, and merges it with the static catalog. Nothing
 is evaluated on a request.
 """

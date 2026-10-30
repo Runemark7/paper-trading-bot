@@ -372,6 +372,39 @@ class DiscoverySummaryBucketTests(unittest.TestCase):
         self.assertEqual(s["library"]["queued"], 1)
         self.assertNotIn(held_back, [row["strategy"] for row in s["tested"]])
 
+    def test_library_counts_follow_the_catalog_past_the_original_fifteen(self):
+        """#119 idle/stuck uses tested/total from the live catalog, not a fixed 15."""
+        from hedge_fund.library.catalog import claim_names
+
+        names = claim_names()
+        original = names[:15]
+        self.assertEqual(original[0], "lib.sma200")
+        self.assertEqual(original[-1], "lib.macd")
+        self.assertGreater(len(names), len(original))
+        old = "2026-09-06T04:00:00+00:00"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "champions.json").write_text(json.dumps({"champions": [], "synced_until": ""}))
+            (root / "discovery_log.json").write_text(json.dumps([
+                _eval(name, qualified=False, tested_at=old) for name in original
+            ]))
+            with patch.dict(os.environ, {
+                "PAPER_STATE": str(root),
+                "PAPER_DISCOVERY_SOURCE": "library",
+            }):
+                with patch("hedge_fund.web.discovery.generate_universe", return_value=[]):
+                    with patch("hedge_fund.trading.universe.generate_universe", return_value=[]):
+                        s = build_discovery_summary()
+        self.assertEqual(s["library"]["strategies"], len(names))
+        self.assertEqual(s["library"]["tested"], len(original))
+        self.assertEqual(s["library"]["queued"], len(names) - len(original))
+        self.assertEqual(s["library"]["leased"], 0)
+        self.assertEqual(s["counts"]["claimable"], len(names) - len(original))
+        self.assertTrue(s["stuck"])
+        self.assertIn("library names remain", s["stuck_reason"])
+        self.assertIsNone(s["idle_reason"])
+        self.assertNotIn("library complete", (s["in_flight"]["note"] or "").lower())
+
     def test_in_flight_names_only_when_tournament_stamp_in_progress(self):
         universe = ["keep_me", "flying"]
         with tempfile.TemporaryDirectory() as tmp:

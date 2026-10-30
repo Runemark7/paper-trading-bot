@@ -279,9 +279,17 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual(library_trial_count(), expected)
         self.assertGreater(library_trial_count(), len(LIBRARY))
 
-    def test_ten_to_fifteen_cited_strategies(self):
-        self.assertGreaterEqual(len(LIBRARY), 10)
-        self.assertLessEqual(len(LIBRARY), 15)
+    def test_cited_strategies_keep_the_original_fifteen_first(self):
+        original = (
+            "sma200", "sma5x150", "sma100", "golden_cross", "ema20x50",
+            "faber10m", "tsmom12m", "tsmom6m", "tsmom3m", "tsmom1w",
+            "detzel2w", "bll_trb50", "turtle55", "rsi2", "macd",
+        )
+        self.assertEqual(tuple(s.key for s in LIBRARY[:15]), original)
+        # Batch 2 is appended. The lane cap is still 2 per core; the
+        # catalog is allowed to be larger than one claim.
+        self.assertGreaterEqual(len(LIBRARY), len(original) + 10)
+        self.assertLessEqual(len(LIBRARY), 40)
         for s in LIBRARY:
             c = s.citation
             for text in (c.authors, c.title, c.venue, c.tested_rule, c.implemented_rule, c.differences):

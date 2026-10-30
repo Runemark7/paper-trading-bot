@@ -322,6 +322,12 @@ class FixturePassTests(unittest.TestCase):
         assert bars is not None
         self.assertEqual(int(bars.ts[0]), LIBRARY_TAPE_START_MS)
         data = build_library_data(bars)
+        original = set(claim_names()[:15])
+        self.assertEqual(original, {
+            "lib.sma200", "lib.sma5x150", "lib.sma100", "lib.golden_cross", "lib.ema20x50",
+            "lib.faber10m", "lib.tsmom12m", "lib.tsmom6m", "lib.tsmom3m", "lib.tsmom1w",
+            "lib.detzel2w", "lib.bll_trb50", "lib.turtle55", "lib.rsi2", "lib.macd",
+        })
         passed = []
         for name in claim_names():
             record = evaluate_library_record(name, data, tested_at="2026-10-29T11:01:00+01:00")
@@ -329,8 +335,9 @@ class FixturePassTests(unittest.TestCase):
             if record["qualified"]:
                 passed.append(name)
                 self.assertNotIn("neighbours", record["library"]["failing_checks"])
-        self.assertEqual(set(passed), PASSES)
-        self.assertEqual(len(passed), 3)
+        # The original three still pass. A batch-2 name may also pass;
+        # that does not change the original fifteen.
+        self.assertEqual({name for name in passed if name in original}, PASSES)
 
 
 if __name__ == "__main__":

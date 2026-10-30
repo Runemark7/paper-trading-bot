@@ -35,16 +35,25 @@ import numpy as np
 from hedge_fund.library.daily import DailyBars
 from hedge_fund.trading.constants import LIBRARY_STOP_FRAC
 from hedge_fund.library.indicators import (
+    adx_first_index,
+    adx_wilder,
+    bollinger,
     ema,
     hold_between,
+    ibs,
+    ichimoku_cloud_top,
+    ichimoku_first_index,
     is_month_end,
     is_week_end,
+    keltner,
     month_number,
     prior_max,
     prior_min,
     rsi_wilder,
     sma,
+    supertrend_long,
     week_number,
+    williams_r,
 )
 
 NAME_PREFIX = "lib."
@@ -231,6 +240,143 @@ def _rsi2(bars: DailyBars, p: dict) -> np.ndarray:
     return out
 
 
+def _stateful(enter: np.ndarray, leave: np.ndarray) -> np.ndarray:
+    """Long from the bar ``enter`` becomes true until a later ``leave`` bar.
+
+    A bar where both are true enters and does not exit. Indicators that
+    are still NaN must be false in both masks: that is "not a signal",
+    and ``signal_ready`` is what keeps those days out of the score.
+    """
+    out = np.zeros(int(enter.shape[0]), dtype=bool)
+    long = False
+    for t in range(out.shape[0]):
+        if not long:
+            if bool(enter[t]):
+                long = True
+        elif bool(leave[t]):
+            long = False
+        out[t] = long
+    return out
+
+
+def _turtle20(bars: DailyBars, p: dict) -> np.ndarray:
+    """Faith (2003), Turtle System 1: 20-day high to enter, 10-day low to exit."""
+    return _turtle(bars, p)
+
+
+def _donchian20(bars: DailyBars, p: dict) -> np.ndarray:
+    """Donchian 4-week rule: enter on the prior 20-day high, exit on the prior 20-day low."""
+    n = int(p["n"])
+    return _turtle(bars, {"entry": n, "exit": n})
+
+
+def _ema12x26(bars: DailyBars, p: dict) -> np.ndarray:
+    """Appel (1979): the 12/26 EMA cross, which is the MACD line above zero."""
+    return _ema_cross(bars, p)
+
+
+def _ema50x200(bars: DailyBars, p: dict) -> np.ndarray:
+    """Practitioner 50/200 EMA golden cross. Distinct from the SMA ``lib.golden_cross``."""
+    return _ema_cross(bars, p)
+
+
+def _bb_revert(bars: DailyBars, p: dict) -> np.ndarray:
+    """Bollinger (2001): close below the lower band, exit at the middle band."""
+    mid, lower, _upper = bollinger(bars.close, int(p["n"]), float(p["width"]))
+    with np.errstate(invalid="ignore"):
+        enter = np.isfinite(lower) & (bars.close < lower)
+        leave = np.isfinite(mid) & (bars.close >= mid)
+    return _stateful(enter, leave)
+
+
+def _bb_break(bars: DailyBars, p: dict) -> np.ndarray:
+    """Bollinger (2001): close above the upper band, exit back through the middle band."""
+    mid, _lower, upper = bollinger(bars.close, int(p["n"]), float(p["width"]))
+    with np.errstate(invalid="ignore"):
+        leave = np.isfinite(mid) & (bars.close < mid)
+    return _stateful(_finite_gt(bars.close, upper), leave)
+
+
+def _keltner_break(bars: DailyBars, p: dict) -> np.ndarray:
+    """Keltner channel breakout: close above the upper band, exit below the EMA."""
+    mid, upper = keltner(
+        bars.high, bars.low, bars.close, int(p["ema"]), int(p["atr"]), float(p["width"]),
+    )
+    with np.errstate(invalid="ignore"):
+        leave = np.isfinite(mid) & (bars.close < mid)
+    return _stateful(_finite_gt(bars.close, upper), leave)
+
+
+def _rsi_level(bars: DailyBars, p: dict) -> np.ndarray:
+    """Wilder (1978): long while RSI(n) is above the centerline (textbook 50)."""
+    value = rsi_wilder(bars.close, int(p["n"]))
+    with np.errstate(invalid="ignore"):
+        return np.isfinite(value) & (value > float(p["thr"]))
+
+
+def _rsi2_10(bars: DailyBars, p: dict) -> np.ndarray:
+    """Connors & Alvarez (2008): RSI(2) below 10 above the 200-day SMA, exit at the 5-day SMA."""
+    return _rsi2(bars, p)
+
+
+def _tsmom_daily(bars: DailyBars, p: dict) -> np.ndarray:
+    """Moskowitz, Ooi & Pedersen (2012) sign rule: close above the close ``n`` days ago."""
+    n = int(p["n"])
+    prev = np.full(len(bars), np.nan, dtype=np.float64)
+    if 0 < n < len(bars):
+        prev[n:] = bars.close[:-n]
+    return _finite_gt(bars.close, prev)
+
+
+def _adx_trend(bars: DailyBars, p: dict) -> np.ndarray:
+    """Wilder (1978): +DI above -DI and ADX above 25, period 14."""
+    plus, minus, adx = adx_wilder(bars.high, bars.low, bars.close, int(p["n"]))
+    with np.errstate(invalid="ignore"):
+        return (
+            np.isfinite(plus) & np.isfinite(minus) & np.isfinite(adx)
+            & (plus > minus) & (adx > float(p["adx_gt"]))
+        )
+
+
+def _ichimoku(bars: DailyBars, p: dict) -> np.ndarray:
+    """Hosoda (1969): long when the close is above the cloud plotted on that day."""
+    top = ichimoku_cloud_top(
+        bars.high, bars.low, int(p["conv"]), int(p["base"]), int(p["span"]),
+    )
+    return _finite_gt(bars.close, top)
+
+
+def _supertrend(bars: DailyBars, p: dict) -> np.ndarray:
+    """Seban Supertrend: long while the ATR trailing band's direction is up."""
+    return supertrend_long(bars.high, bars.low, bars.close, int(p["n"]), float(p["mult"]))
+
+
+def _willr(bars: DailyBars, p: dict) -> np.ndarray:
+    """Williams (1973) %R: buy below -80 above the 200-day SMA, exit above -20."""
+    wr = williams_r(bars.high, bars.low, bars.close, int(p["n"]))
+    trend = sma(bars.close, int(p["trend"]))
+    with np.errstate(invalid="ignore"):
+        enter = (
+            np.isfinite(wr) & np.isfinite(trend)
+            & (bars.close > trend) & (wr < -float(p["os"]))
+        )
+        leave = np.isfinite(wr) & (wr > -20.0)
+    return _stateful(enter, leave)
+
+
+def _ibs_revert(bars: DailyBars, p: dict) -> np.ndarray:
+    """Pagonidis (2013) IBS, held until 0.80, and only entered above the 200-day SMA."""
+    value = ibs(bars.high, bars.low, bars.close)
+    trend = sma(bars.close, int(p["trend"]))
+    with np.errstate(invalid="ignore"):
+        enter = (
+            np.isfinite(value) & np.isfinite(trend)
+            & (bars.close > trend) & (value < float(p["ibs_lt"]) / 100.0)
+        )
+        leave = np.isfinite(value) & (value > 0.80)
+    return _stateful(enter, leave)
+
+
 def _defined_from(n: int, first: int) -> np.ndarray:
     out = np.zeros(int(n), dtype=bool)
     if 0 <= int(first) < int(n):
@@ -281,7 +427,7 @@ def signal_ready(strategy: LibraryStrategy, bars: DailyBars, params: dict) -> np
         return long_ok & _defined_from(n, short_n - 1)
     if key == "sma100":
         return _defined_from(n, int(params["n"]) - 1)
-    if key == "ema20x50":
+    if key in ("ema20x50", "ema12x26", "ema50x200"):
         return _defined_from(n, max(int(params["fast"]), int(params["slow"])) - 1)
     if key == "macd":
         # Slow EMA is finite at ``slow - 1``. The signal EMA then needs
@@ -304,11 +450,34 @@ def signal_ready(strategy: LibraryStrategy, bars: DailyBars, params: dict) -> np
     if key == "bll_trb50":
         # prior_max is finite at index n (the window excludes day t).
         return _defined_from(n, int(params["n"]))
-    if key == "turtle55":
+    if key in ("turtle55", "turtle20"):
         return _defined_from(n, max(int(params["entry"]), int(params["exit"])))
-    if key == "rsi2":
+    if key == "donchian20":
+        # Same prior-window rule as the turtle: finite at index ``n``.
+        return _defined_from(n, int(params["n"]))
+    if key in ("rsi2", "rsi2_10"):
         first = max(2, int(params["trend"]) - 1, int(params["exit_ma"]) - 1)
         return _defined_from(n, first)
+    if key in ("bb_revert", "bb_break"):
+        # SMA and population stdev of ``n`` closes are finite at index n - 1.
+        return _defined_from(n, int(params["n"]) - 1)
+    if key == "keltner20":
+        # EMA seed at ema-1; Wilder ATR at index ``atr``.
+        return _defined_from(n, max(int(params["ema"]) - 1, int(params["atr"])))
+    if key == "rsi14":
+        return _defined_from(n, int(params["n"]))
+    if key in ("tsmom30d", "tsmom90d", "tsmom180d"):
+        return _defined_from(n, int(params["n"]))
+    if key == "adx14":
+        return _defined_from(n, adx_first_index(int(params["n"])))
+    if key == "ichimoku":
+        return _defined_from(n, ichimoku_first_index(int(params["base"]), int(params["span"])))
+    if key == "supertrend":
+        return _defined_from(n, int(params["n"]))
+    if key == "willr":
+        return _defined_from(n, max(int(params["n"]) - 1, int(params["trend"]) - 1))
+    if key == "ibs":
+        return _defined_from(n, int(params["trend"]) - 1)
     raise ValueError(f"no warmup rule for {key}")
 
 
@@ -730,6 +899,504 @@ LIBRARY: tuple[LibraryStrategy, ...] = (
             ),
             implemented_rule="Long while the daily MACD(12,26) line is above its 9-day signal line.",
             differences="No published performance test is relied on; practitioner baseline.",
+        ),
+    ),
+    # Batch 2 (2026-10-30). Appended after the original 15. Claims walk
+    # this tuple in order, so these names are leased only once the names
+    # above are tested or on the book. Do not insert above ``macd``.
+    LibraryStrategy(
+        key="turtle20",
+        title="Donchian 20/10 breakout (Turtle System 1)",
+        family="breakout",
+        evaluation="daily",
+        params=(
+            Param("entry", 20, (16, 24)),
+            Param("exit", 10, (8, 12)),
+        ),
+        signal=_turtle20,
+        citation=Citation(
+            authors="Faith (Turtle rules)",
+            year=2003,
+            title="The Original Turtle Trading Rules (System 1)",
+            venue="Practitioner document; see also Faith, Way of the Turtle (2007)",
+            peer_reviewed=False,
+            tested_rule=(
+                "System 1: enter long when price exceeds the high of the preceding 20 days, "
+                "exit when it falls below the low of the preceding 10 days; traded intraday "
+                "at the breakout, with ATR sizing and a 2N stop."
+            ),
+            implemented_rule=(
+                "Long after a daily close above the prior 20-day high, flat after a close "
+                "below the prior 10-day low."
+            ),
+            differences=(
+                "Close-confirmed signals with next-open fills, all-in sizing, no 2N stop, "
+                "no pyramiding, long only. System 2 is already lib.turtle55 (55-day entry, "
+                "20-day exit)."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="donchian20",
+        title="Donchian 20-day channel (4-week rule)",
+        family="breakout",
+        evaluation="daily",
+        params=(Param("n", 20, (16, 24)),),
+        signal=_donchian20,
+        citation=Citation(
+            authors="Donchian",
+            year=0,
+            title="4-week rule (20-day Donchian channel)",
+            venue="Practitioner commodity trend rule; restated in Faith, Way of the Turtle (2007)",
+            peer_reviewed=False,
+            tested_rule=(
+                "Buy when price exceeds the highest high of the prior four weeks (20 trading "
+                "days) and sell when it falls below the lowest low of those four weeks."
+            ),
+            implemented_rule=(
+                "Long after a daily close above the prior 20-day high, flat after a close "
+                "below the prior 20-day low. Entry and exit use the same window."
+            ),
+            differences=(
+                "Close-confirmed, next-open fills, all-in, long only. Distinct from "
+                "lib.turtle20, which exits on the 10-day low, and from lib.turtle55."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="ema12x26",
+        title="12/26-day EMA cross (MACD line above zero)",
+        family="trend",
+        evaluation="daily",
+        params=(
+            Param("fast", 12, (10, 14)),
+            Param("slow", 26, (21, 31)),
+        ),
+        signal=_ema12x26,
+        citation=Citation(
+            authors="Appel",
+            year=1979,
+            title="MACD line above zero",
+            venue="Practitioner indicator; Appel, Technical Analysis: Power Tools for Active Investors (2005)",
+            peer_reviewed=False,
+            tested_rule=(
+                "The MACD line is the 12-period EMA minus the 26-period EMA. The line is "
+                "above zero exactly when the 12-period EMA is above the 26-period EMA. "
+                "The 9-period signal-line cross is a separate rule."
+            ),
+            implemented_rule="Long while the 12-day EMA of the close is above the 26-day EMA.",
+            differences=(
+                "This is the zero-line rule. lib.macd is the signal-line cross on the same "
+                "12/26 pair and is not this signal. EMAs are seeded with the SMA of their "
+                "first n closes. Long or flat, next-open fills, BTC."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="ema50x200",
+        title="50/200-day EMA cross",
+        family="trend",
+        evaluation="daily",
+        params=(
+            Param("fast", 50, (40, 60)),
+            Param("slow", 200, (150, 250)),
+        ),
+        signal=_ema50x200,
+        citation=Citation(
+            authors="Practitioner",
+            year=0,
+            title="50/200-day exponential moving-average cross",
+            venue="Practitioner convention",
+            peer_reviewed=False,
+            tested_rule=_PRACTITIONER_MA,
+            implemented_rule="Long when the 50-day EMA is above the 200-day EMA, flat otherwise.",
+            differences=(
+                "lib.golden_cross is the same 50/200 pair of simple averages. lib.ema20x50 "
+                "is the shorter EMA cross. EMAs are seeded with the SMA of their first n closes."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="bb_revert",
+        title="Bollinger mean reversion (20, 2)",
+        family="mean_reversion",
+        evaluation="daily",
+        params=(
+            Param("n", 20, (16, 24)),
+            Param("width", 2, (1, 3), unit="stdev"),
+        ),
+        signal=_bb_revert,
+        citation=Citation(
+            authors="Bollinger",
+            year=2001,
+            title="Bollinger on Bollinger Bands",
+            venue="Practitioner book (McGraw-Hill)",
+            peer_reviewed=False,
+            tested_rule=(
+                "Bands are a 20-period simple average plus and minus 2 population standard "
+                "deviations of the close. A close through the lower band is the downside "
+                "extreme; the middle band is the mean the price is reverting toward."
+            ),
+            implemented_rule=(
+                "Long after a close below the lower band; flat after a close at or above "
+                "the middle band (the 20-day SMA)."
+            ),
+            differences=(
+                "Bollinger presented the bands, not a single published performance test of "
+                "this exit. Long or flat, next-open fills, BTC, fees. The width is in "
+                "population standard deviations (divide by n)."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="bb_break",
+        title="Bollinger breakout (20, 2)",
+        family="breakout",
+        evaluation="daily",
+        params=(
+            Param("n", 20, (16, 24)),
+            Param("width", 2, (1, 3), unit="stdev"),
+        ),
+        signal=_bb_break,
+        citation=Citation(
+            authors="Bollinger",
+            year=2001,
+            title="Bollinger on Bollinger Bands",
+            venue="Practitioner book (McGraw-Hill)",
+            peer_reviewed=False,
+            tested_rule=(
+                "The same 20-period, 2-standard-deviation bands. A close through the upper "
+                "band is the upside breakout; a return through the middle band ends it."
+            ),
+            implemented_rule=(
+                "Long after a close above the upper band; flat after a close below the "
+                "middle band."
+            ),
+            differences=(
+                "Not the mean-reversion rule in lib.bb_revert. No published performance "
+                "test is relied on. Long or flat, next-open fills, BTC, no short side."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="keltner20",
+        title="Keltner channel breakout (20, 2 × ATR(10))",
+        family="breakout",
+        evaluation="daily",
+        params=(
+            Param("ema", 20, (16, 24)),
+            Param("atr", 10, (7, 14)),
+            Param("width", 2, (1, 3), unit="ATR"),
+        ),
+        signal=_keltner_break,
+        citation=Citation(
+            authors="Keltner",
+            year=1960,
+            title="How to Make Money in Commodities",
+            venue="Practitioner book; the 20-day EMA and 2×ATR(10) channel is the later textbook form",
+            peer_reviewed=False,
+            tested_rule=(
+                "Keltner's 1960 channel is a moving average of typical price with bands from "
+                "the average high-low range. Later textbooks and chart packages set the "
+                "middle line to a 20-period EMA of typical price and the bands at 2 times "
+                "Wilder ATR(10)."
+            ),
+            implemented_rule=(
+                "Long after a close above the upper band; flat after a close below the "
+                "20-day EMA of typical price. The band is 2 × Wilder ATR(10)."
+            ),
+            differences=(
+                "Not the 1960 SMA-of-range formula. EMA and Wilder ATR are the parameter "
+                "set in current textbooks, not values fit on this tape. Long or flat, "
+                "next-open fills, no short side, BTC."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="rsi14",
+        title="RSI(14) above 50",
+        family="trend",
+        evaluation="daily",
+        params=(
+            Param("n", 14, (10, 18)),
+            Param("thr", 50, (45, 55), unit="RSI"),
+        ),
+        signal=_rsi_level,
+        citation=Citation(
+            authors="Wilder",
+            year=1978,
+            title="New Concepts in Technical Trading Systems",
+            venue="Practitioner book",
+            peer_reviewed=False,
+            tested_rule=(
+                "Wilder's RSI defaults to 14 periods and is centered at 50. Above 50 the "
+                "average gain exceeds the average loss (a bullish trend filter); below 50 "
+                "the reverse."
+            ),
+            implemented_rule="Long while Wilder RSI(14) of the close is above 50, flat otherwise.",
+            differences=(
+                "Wilder's traded systems combine RSI with divergences and points, not this "
+                "level alone. The 50 line is his center, not a fitted threshold. Long or "
+                "flat, next-open fills, BTC."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="rsi2_10",
+        title="RSI(2) below 10 above the 200-day SMA",
+        family="mean_reversion",
+        evaluation="daily",
+        params=(
+            Param("rsi_lt", 10, (8, 12), unit="RSI"),
+            Param("trend", 200, (150, 250)),
+            Param("exit_ma", 5, (4, 6)),
+        ),
+        signal=_rsi2_10,
+        citation=Citation(
+            authors="Connors & Alvarez",
+            year=2008,
+            title="Short Term Trading Strategies That Work",
+            venue="Practitioner book (TradingMarkets)",
+            peer_reviewed=False,
+            tested_rule=(
+                "The same S&P 500 dip-buy as the RSI(2) rule: price above its 200-day MA, "
+                "enter when the 2-period RSI is below a published cutoff, exit on a close "
+                "above the 5-day MA. The cutoff of 5 is lib.rsi2. The looser cutoff "
+                "associated with that rule is 10."
+            ),
+            implemented_rule=(
+                "Long after a close above the 200-day SMA with Wilder RSI(2) below 10; flat "
+                "after a close above the 5-day SMA."
+            ),
+            differences=(
+                "Not a neighbour of lib.rsi2 (those cutoffs are 4 and 6). 10 is the "
+                "standard looser cutoff of this rule, not a value chosen on this tape. "
+                "Next-open fills, BTC, fees."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="tsmom30d",
+        title="30-day time-series momentum",
+        family="momentum",
+        evaluation="daily",
+        params=(Param("n", 30, (21, 42)),),
+        signal=_tsmom_daily,
+        citation=Citation(
+            **_MOP,
+            tested_rule=_MOP_TESTED,
+            implemented_rule=(
+                "Long when the daily close is above the close 30 days earlier, flat otherwise."
+            ),
+            differences=(
+                "MOP signed the past k-month excess return at month-end and went long or "
+                "short, volatility-scaled, across futures. 30 days is the daily form of "
+                "the 1-month look-back they tested. The month-end long/flat version is "
+                "lib.tsmom3m (and lib.tsmom1w at a week). One asset, no scaling, raw "
+                "close-to-close, next-open fills."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="tsmom90d",
+        title="90-day time-series momentum",
+        family="momentum",
+        evaluation="daily",
+        params=(Param("n", 90, (60, 120)),),
+        signal=_tsmom_daily,
+        citation=Citation(
+            **_MOP,
+            tested_rule=_MOP_TESTED,
+            implemented_rule=(
+                "Long when the daily close is above the close 90 days earlier, flat otherwise."
+            ),
+            differences=(
+                "Daily form of the 3-month look-back MOP tested (k=3). lib.tsmom3m is that "
+                "rule at month-end. Long or flat, no volatility scaling, raw close-to-close, "
+                "next-open fills, BTC."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="tsmom180d",
+        title="180-day time-series momentum",
+        family="momentum",
+        evaluation="daily",
+        params=(Param("n", 180, (150, 210)),),
+        signal=_tsmom_daily,
+        citation=Citation(
+            **_MOP,
+            tested_rule=_MOP_TESTED,
+            implemented_rule=(
+                "Long when the daily close is above the close 180 days earlier, flat otherwise."
+            ),
+            differences=(
+                "Daily form of the 6-month look-back MOP tested (k=6). lib.tsmom6m is that "
+                "rule at month-end. Long or flat, no volatility scaling, raw close-to-close, "
+                "next-open fills, BTC."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="adx14",
+        title="ADX(14) trend with +DI above -DI",
+        family="trend",
+        evaluation="daily",
+        params=(
+            Param("n", 14, (10, 18)),
+            Param("adx_gt", 25, (20, 30), unit="ADX"),
+        ),
+        signal=_adx_trend,
+        citation=Citation(
+            authors="Wilder",
+            year=1978,
+            title="New Concepts in Technical Trading Systems",
+            venue="Practitioner book (directional movement)",
+            peer_reviewed=False,
+            tested_rule=(
+                "14-period plus and minus directional movement, smoothed, as +DI and -DI, "
+                "and ADX as the smoothed DX. +DI above -DI is the bullish reading. A "
+                "developed trend is the textbook ADX level of 25 used with that system."
+            ),
+            implemented_rule=(
+                "Long while +DI(14) is above -DI(14) and ADX(14) is above 25, flat otherwise."
+            ),
+            differences=(
+                "Wilder's traded system also uses an extreme-point stop and a rising ADX. "
+                "This is the level filter only. A zero-range day is DI 0, not a missing "
+                "lookback. Long or flat, next-open fills, BTC. 25 is the textbook level, "
+                "not fit here."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="ichimoku",
+        title="Ichimoku price above the cloud (9, 26, 52)",
+        family="trend",
+        evaluation="daily",
+        params=(
+            Param("conv", 9, (7, 12)),
+            Param("base", 26, (22, 30)),
+            Param("span", 52, (42, 60)),
+        ),
+        signal=_ichimoku,
+        citation=Citation(
+            authors="Hosoda",
+            year=1969,
+            title="Ichimoku Kinko Hyo",
+            venue="Practitioner; standard parameters 9, 26, and 52",
+            peer_reviewed=False,
+            tested_rule=(
+                "Conversion line 9, base line 26, span B 52. The cloud (senkou A and B) is "
+                "plotted 26 periods ahead. Price above the cloud is the bullish filter."
+            ),
+            implemented_rule=(
+                "Long when the daily close is above both spans of the cloud plotted on "
+                "that day. The plotted cloud is the spans computed one base-period earlier."
+            ),
+            differences=(
+                "The tenkan/kijun cross and the chikou span are not required. The forward "
+                "plot uses only bars through t minus the base period, so it is not a "
+                "look-ahead. Long or flat, next-open fills, BTC."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="supertrend",
+        title="Supertrend (10, 3)",
+        family="trend",
+        evaluation="daily",
+        params=(
+            Param("n", 10, (7, 14)),
+            Param("mult", 3, (2, 4), unit="ATR"),
+        ),
+        signal=_supertrend,
+        citation=Citation(
+            authors="Seban",
+            year=0,
+            title="Supertrend",
+            venue="Practitioner indicator; the published chart default is ATR(10) and multiplier 3",
+            peer_reviewed=False,
+            tested_rule=(
+                "Bands sit a multiple of ATR around the median price. The trend turns up "
+                "after a close through the upper band and down after a close through the "
+                "lower band. Each band ratchets so the stop only tightens with the trend."
+            ),
+            implemented_rule=(
+                "Long while Supertrend direction is up: ATR period 10, multiplier 3, "
+                "median price (high+low)/2."
+            ),
+            differences=(
+                "No published performance test is relied on. The first ATR bar is long "
+                "only if that close is already above the upper band. Close-confirmed, "
+                "next-open fills, all-in, long only, BTC."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="willr",
+        title="Williams %R(14) dip above the 200-day SMA",
+        family="mean_reversion",
+        evaluation="daily",
+        params=(
+            Param("n", 14, (10, 20)),
+            Param("os", 80, (70, 90), unit="percent"),
+            Param("trend", 200, (150, 250)),
+        ),
+        signal=_willr,
+        citation=Citation(
+            authors="Williams",
+            year=1973,
+            title="How I Made One Million Dollars Last Year Trading Commodities",
+            venue="Practitioner book (Williams %R)",
+            peer_reviewed=False,
+            tested_rule=(
+                "Williams %R places the close in the recent high-low range on a scale from "
+                "0 down to -100. Below -80 is oversold and above -20 is overbought. "
+                "Textbooks use 14 periods; his own short length is 10, which is a neighbour."
+            ),
+            implemented_rule=(
+                "Long after a close above the 200-day SMA with %R(14) below -80; flat "
+                "after %R rises above -20."
+            ),
+            differences=(
+                "The 200-day SMA filter is not in the 1973 commodity method. The -20 exit "
+                "is the textbook overbought line and is not a grid axis. Next-open fills, "
+                "BTC, long only. 14 and -80 are the textbook pair, not fit here."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="ibs",
+        title="IBS mean reversion above the 200-day SMA",
+        family="mean_reversion",
+        evaluation="daily",
+        params=(
+            Param("ibs_lt", 20, (10, 30), unit="percent"),
+            Param("trend", 200, (150, 250)),
+        ),
+        signal=_ibs_revert,
+        citation=Citation(
+            authors="Pagonidis",
+            year=2013,
+            title="The IBS Effect: Mean Reversion in Equity ETFs",
+            venue="SSRN working paper",
+            peer_reviewed=False,
+            tested_rule=(
+                "Internal bar strength is (close - low) / (high - low). An IBS below 0.2 "
+                "was followed by a high next-day return in equity ETFs. The published "
+                "trade buys that close and is flat the next day."
+            ),
+            implemented_rule=(
+                "Long after IBS below 0.20 while the close is above the 200-day SMA; flat "
+                "after IBS rises above 0.80."
+            ),
+            differences=(
+                "The paper's trade is a one-day hold with no trend filter. This can stay "
+                "long until IBS exceeds 0.80, and it enters only above the 200-day SMA. "
+                "The 0.80 exit is the symmetric high threshold and is not a grid axis. "
+                "Next-open fills instead of the signal close, BTC, fees."
+            ),
         ),
     ),
 )
