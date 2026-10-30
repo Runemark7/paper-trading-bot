@@ -104,13 +104,19 @@ class LibraryClaimTests(_LibraryMode):
 
         self.assertEqual(discovery_source(), "library")
         self.assertTrue(library_mode())
+        from hedge_fund.trading.leases import LEASES_PER_LANE
+
         now = datetime(2026, 10, 28, 18, 0, tzinfo=timezone.utc)
-        # One lane-cap covers the whole catalog (2 × parallel).
-        body = claim_discovery_batch("zealous-lion", 64, parallel=8, now=now, gate_rules=GATE_RULES, require_gate_rules=True)
+        # The lane cap is still 2 names per core. A larger catalog is
+        # claimed in that order, across workers, and is not minted.
+        width = 8
+        cap = LEASES_PER_LANE * width
+        body = claim_discovery_batch("zealous-lion", 64, parallel=width, now=now, gate_rules=GATE_RULES, require_gate_rules=True)
         names = claim_names()
-        self.assertEqual(body["names"], names)
+        self.assertGreater(len(names), 15)
+        self.assertEqual(body["names"], names[:cap])
         self.assertEqual(body["source"], "library")
-        self.assertEqual(body["library"], names)
+        self.assertEqual(body["library"], names[:cap])
         self.assertEqual(body["library_trials"], library_trial_count())
         self.assertEqual(body["refilled"], [])
         self.assertEqual(body["retest"], [])
@@ -123,13 +129,49 @@ class LibraryClaimTests(_LibraryMode):
             # Canonical spelling: no parameter suffix.
             self.assertEqual(name.count("."), 1)
         leases = load_lease_state()["leases"]
-        for name in names:
+        for name in names[:cap]:
             self.assertTrue(leases[name]["library"])
             self.assertEqual(leases[name]["worker_id"], "zealous-lion")
-        again = claim_discovery_batch("zealous-lion", 64, parallel=8, now=now, gate_rules=GATE_RULES, require_gate_rules=True)
-        other = claim_discovery_batch("omarchy-1", 64, parallel=8, now=now, gate_rules=GATE_RULES, require_gate_rules=True)
+        again = claim_discovery_batch("zealous-lion", 64, parallel=width, now=now, gate_rules=GATE_RULES, require_gate_rules=True)
         self.assertEqual(again["names"], [])
-        self.assertEqual(other["names"], [])
+        got = list(body["names"])
+        rest = names[cap:]
+        for worker in ("omarchy-1", "omarchy-2", "omarchy-3"):
+            if not rest:
+                break
+            nxt = claim_discovery_batch(worker, 64, parallel=width, now=now, gate_rules=GATE_RULES, require_gate_rules=True)
+            self.assertEqual(nxt["names"], rest[:cap])
+            self.assertEqual(nxt["source"], "library")
+            got.extend(nxt["names"])
+            rest = rest[cap:]
+        self.assertEqual(got, names)
+        self.assertEqual(rest, [])
+        leases = load_lease_state()["leases"]
+        self.assertEqual(set(leases), set(names))
+        for name in names:
+            self.assertTrue(leases[name]["library"])
+
+    def test_tested_original_fifteen_leave_batch2_claimable(self):
+        from hedge_fund.trading.ingest import ingest_discovery_payload
+        from hedge_fund.trading.leases import LEASES_PER_LANE, claim_discovery_batch
+
+        original = claim_names()[:15]
+        self.assertEqual(original[-1], "lib.macd")
+        fresh = [name for name in claim_names() if name not in original]
+        self.assertGreaterEqual(len(fresh), 10)
+        for name in original:
+            ingested = ingest_discovery_payload({"evaluations": [_row(name)]})
+            self.assertEqual(ingested["ingested"], [name])
+            self.assertEqual(ingested["admitted"], [])
+        now = datetime(2026, 10, 30, 8, 0, tzinfo=timezone.utc)
+        body = claim_discovery_batch(
+            "zealous-lion", 64, parallel=8, now=now, gate_rules=GATE_RULES, require_gate_rules=True,
+        )
+        cap = LEASES_PER_LANE * 8
+        self.assertEqual(body["names"], fresh[:cap])
+        self.assertTrue(set(body["names"]).isdisjoint(original))
+        self.assertEqual(body["refilled"], [])
+        self.assertEqual(body["retest"], [])
 
     def test_stale_v5_worker_gets_no_names(self):
         from hedge_fund.trading.leases import claim_discovery_batch, load_lease_state
