@@ -86,6 +86,24 @@ LIBRARY_APPROVED_ADMITS: tuple[dict, ...] = (
         "note": "qualified paper forward-test; gate v7b profit pass",
     },
 )
+# Alexander, 2026-10-30 09:59 CET: seat the four batch-2 library names
+# that pass gate v7b as qualified paper forward tests. Same qualified
+# path and rules as LIBRARY_APPROVED_BATCH. Paper only; no champion cap.
+LIBRARY_APPROVED_BATCH_2 = "lib-batch2-four-v7b-20261030"
+LIBRARY_APPROVED_ADMITS_2: tuple[dict, ...] = tuple(
+    {
+        "name": name,
+        "approved_by": "Alexander",
+        "approved_at": "2026-10-30T09:59+01:00",
+        "note": "qualified paper forward-test; gate v7b profit pass (library batch 2)",
+    }
+    for name in ("lib.ichimoku", "lib.rsi14", "lib.tsmom180d", "lib.rsi2_10")
+)
+# Qualified library batches, applied in this order.
+LIBRARY_APPROVED_BATCHES: tuple[tuple[str, tuple[dict, ...]], ...] = (
+    (LIBRARY_APPROVED_BATCH, LIBRARY_APPROVED_ADMITS),
+    (LIBRARY_APPROVED_BATCH_2, LIBRARY_APPROVED_ADMITS_2),
+)
 _GATE_V4_KEYS = (
     "passed",
     "rules",
@@ -286,7 +304,9 @@ def _warning_lines(record: dict) -> list[str]:
     return [str(item) for item in raw if isinstance(item, str)]
 
 
-def _label_qualified_library(row: dict, spec: dict, record: dict) -> None:
+def _label_qualified_library(
+    row: dict, spec: dict, record: dict, batch_id: str = LIBRARY_APPROVED_BATCH
+) -> None:
     """Record the approval on a library champion that passed the gate.
 
     ``qualified`` stays true. ``lib.sma100`` is not passed through here, so
@@ -296,7 +316,7 @@ def _label_qualified_library(row: dict, spec: dict, record: dict) -> None:
     row["qualified"] = True
     row["warnings"] = warnings
     row["provenance"] = {
-        "admit_batch": LIBRARY_APPROVED_BATCH,
+        "admit_batch": batch_id,
         "approved_by": spec["approved_by"],
         "approved_at": spec["approved_at"],
         "note": spec["note"],
@@ -443,8 +463,10 @@ def _apply_library_approved_unlocked(
     marker: dict,
     records: dict | None,
     checked: bool,
+    batch_id: str = LIBRARY_APPROVED_BATCH,
+    admits: tuple[dict, ...] = LIBRARY_APPROVED_ADMITS,
 ) -> dict | None:
-    """Seat ``LIBRARY_APPROVED_BATCH`` once, from qualified library verdicts.
+    """Seat one qualified library batch once, from qualified library verdicts.
 
     Returns None and writes no marker when the tape cannot be scored or a
     listed name that is not already on the book lacks a current-tag pass.
@@ -460,7 +482,7 @@ def _apply_library_approved_unlocked(
         scored = records
     else:
         scored = {}
-        for spec in LIBRARY_APPROVED_ADMITS:
+        for spec in admits:
             record = _score_qualified_library(spec["name"], stamp)
             if record is None:
                 return None
@@ -473,7 +495,7 @@ def _apply_library_approved_unlocked(
     existing = set(pooled) | set(graduated) | set(retired)
     pending: list[tuple[dict, dict]] = []
     skipped: list[dict] = []
-    for spec in LIBRARY_APPROVED_ADMITS:
+    for spec in admits:
         name = spec["name"]
         if name in retired:
             skipped.append({"strategy": name, "reason": "retired"})
@@ -491,21 +513,21 @@ def _apply_library_approved_unlocked(
         if not _admit_qualified(st, dict(record), existing):
             skipped.append({"strategy": spec["name"], "reason": "not_seated"})
             continue
-        _label_qualified_library(st["champions"][-1], spec, record)
+        _label_qualified_library(st["champions"][-1], spec, record, batch_id)
         admitted.append(spec["name"])
     if admitted:
         save_pool(st)
-    marker["applied"].append(LIBRARY_APPROVED_BATCH)
+    marker["applied"].append(batch_id)
     marker["batches"].append({
-        "batch_id": LIBRARY_APPROVED_BATCH,
+        "batch_id": batch_id,
         "applied_at": stamp,
         "admitted": admitted,
         "skipped": skipped,
         "qualified": True,
     })
     _save_marker(marker)
-    log.info("library approved admit: batch %s admitted %s", LIBRARY_APPROVED_BATCH, admitted)
-    return {"batch_id": LIBRARY_APPROVED_BATCH, "admitted": admitted, "skipped": skipped}
+    log.info("library approved admit: batch %s admitted %s", batch_id, admitted)
+    return {"batch_id": batch_id, "admitted": admitted, "skipped": skipped}
 
 
 def ensure_approved_admits_unlocked(
@@ -521,8 +543,8 @@ def ensure_approved_admits_unlocked(
     The requalify batch still waits for a qualified verdict and leaves no
     marker until that verdict exists. The forward-test batch waits for a
     library-tape evaluation and also leaves no marker until that exists.
-    The qualified library batch waits for a current-tag pass for every
-    name that is not already seated. When more than one batch runs, the
+    Each qualified library batch (``LIBRARY_APPROVED_BATCHES``) waits for
+    a current-tag pass for every name in it that is not already seated. When more than one batch runs, the
     requalify result is the return value so existing callers keep seeing
     that batch. The forward-test result is next.
     """
@@ -534,8 +556,17 @@ def ensure_approved_admits_unlocked(
     if FORWARD_TEST_BATCH not in marker["applied"]:
         forward_out = _apply_forward_unlocked(now, marker, forward_record, forward_checked)
     library_out = None
-    if LIBRARY_APPROVED_BATCH not in marker["applied"]:
-        library_out = _apply_library_approved_unlocked(now, marker, library_records, library_checked)
+    for batch_id, admits in LIBRARY_APPROVED_BATCHES:
+        if batch_id in marker["applied"] or not admits:
+            continue
+        # ``library_records`` maps batch id -> pre-scored records (or None
+        # when that tape could not be scored) when ``library_checked``.
+        records = library_records.get(batch_id) if isinstance(library_records, dict) else None
+        out = _apply_library_approved_unlocked(
+            now, marker, records, library_checked, batch_id, admits
+        )
+        if library_out is None:
+            library_out = out
     if requalify_out is not None:
         return requalify_out
     if forward_out is not None:
@@ -543,10 +574,12 @@ def ensure_approved_admits_unlocked(
     return library_out
 
 
-def _score_library_batch(tested_at: str) -> dict | None:
-    """Evaluations for every qualified-library admit, or None if the tape is not ready."""
+def _score_library_batch(
+    tested_at: str, admits: tuple[dict, ...] = LIBRARY_APPROVED_ADMITS
+) -> dict | None:
+    """Evaluations for every name in one qualified-library batch, or None if the tape is not ready."""
     scored: dict[str, dict] = {}
-    for spec in LIBRARY_APPROVED_ADMITS:
+    for spec in admits:
         record = _score_qualified_library(spec["name"], tested_at)
         if record is None:
             return None
@@ -568,9 +601,10 @@ def run_approved_admits() -> dict | None:
     if FORWARD_TEST_BATCH not in applied and FORWARD_TEST_ADMITS:
         forward_checked = True
         forward_record = _library_forward_record(FORWARD_TEST_ADMITS[0]["name"], now.isoformat())
-    if LIBRARY_APPROVED_BATCH not in applied and LIBRARY_APPROVED_ADMITS:
+    pending = [(b, a) for b, a in LIBRARY_APPROVED_BATCHES if b not in applied and a]
+    if pending:
         library_checked = True
-        library_records = _score_library_batch(now.isoformat())
+        library_records = {b: _score_library_batch(now.isoformat(), a) for b, a in pending}
     with paper_state_lock("discovery"):
         out = ensure_approved_admits_unlocked(
             now,

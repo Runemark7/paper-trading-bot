@@ -117,7 +117,8 @@ def _seed(root: Path) -> dict:
         {"strategy": SMA200, "qualified": False, "fail_reasons": ["neighbours 0/3 = 0% < 70%"]},
     ]))
     (root / "approved_admits.json").write_text(json.dumps({
-        "applied": ["rules-v3-admit-20261009", "lib-sma100-forward-test-20261029"],
+        # Batch 2 (2026-10-30) is marked applied so these tests see batch 1 only.
+        "applied": ["rules-v3-admit-20261009", "lib-sma100-forward-test-20261029", "lib-batch2-four-v7b-20261030"],
         "batches": [],
         "paper_only": True,
     }))
