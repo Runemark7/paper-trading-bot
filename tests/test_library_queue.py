@@ -136,7 +136,10 @@ class LibraryClaimTests(_LibraryMode):
         self.assertEqual(again["names"], [])
         got = list(body["names"])
         rest = names[cap:]
-        for worker in ("omarchy-1", "omarchy-2", "omarchy-3", "omarchy-4", "omarchy-5", "omarchy-6"):
+        for worker in (
+            "omarchy-1", "omarchy-2", "omarchy-3", "omarchy-4", "omarchy-5",
+            "omarchy-6", "omarchy-7", "omarchy-8",
+        ):
             if not rest:
                 break
             nxt = claim_discovery_batch(worker, 64, parallel=width, now=now, gate_rules=GATE_RULES, require_gate_rules=True)
@@ -216,7 +219,7 @@ class LibraryClaimTests(_LibraryMode):
         cap = LEASES_PER_LANE * 8
         got: list[str] = []
         rest = fresh
-        for worker in ("zealous-lion", "omarchy-1", "omarchy-2", "omarchy-3"):
+        for worker in ("zealous-lion", "omarchy-1", "omarchy-2", "omarchy-3", "omarchy-4"):
             body = claim_discovery_batch(
                 worker, 64, parallel=8, now=now, gate_rules=GATE_RULES, require_gate_rules=True,
             )
@@ -240,8 +243,8 @@ class LibraryClaimTests(_LibraryMode):
         self.assertEqual(done[-1], "lib.weekend")
         fresh = claim_names()[82:]
         self.assertEqual(fresh[0], "lib.elder_impulse")
-        self.assertEqual(fresh[-1], "lib.three_dn")
-        self.assertEqual(len(fresh), 26)
+        self.assertEqual(fresh[25], "lib.three_dn")
+        self.assertGreater(len(fresh), 26)
         for name in done:
             ingested = ingest_discovery_payload({"evaluations": [_row(name)]})
             self.assertEqual(ingested["ingested"], [name])
@@ -250,7 +253,41 @@ class LibraryClaimTests(_LibraryMode):
         cap = LEASES_PER_LANE * 8
         got: list[str] = []
         rest = fresh
-        for worker in ("zealous-lion", "omarchy-1", "omarchy-2"):
+        for worker in ("zealous-lion", "omarchy-1", "omarchy-2", "omarchy-3"):
+            body = claim_discovery_batch(
+                worker, 64, parallel=8, now=now, gate_rules=GATE_RULES, require_gate_rules=True,
+            )
+            self.assertEqual(body["names"], rest[:cap])
+            self.assertTrue(set(body["names"]).isdisjoint(done))
+            self.assertEqual(body["source"], "library")
+            self.assertEqual(body["refilled"], [])
+            self.assertEqual(body["retest"], [])
+            got.extend(body["names"])
+            rest = rest[cap:]
+            if not rest:
+                break
+        self.assertEqual(got, fresh)
+        self.assertEqual(rest, [])
+
+    def test_tested_catalog_through_batch5_leaves_batch6_claimable(self):
+        from hedge_fund.trading.ingest import ingest_discovery_payload
+        from hedge_fund.trading.leases import LEASES_PER_LANE, claim_discovery_batch
+
+        done = claim_names()[:108]
+        self.assertEqual(done[-1], "lib.three_dn")
+        fresh = claim_names()[108:]
+        self.assertEqual(fresh[0], "lib.demarker")
+        self.assertEqual(fresh[-1], "lib.expiry")
+        self.assertEqual(len(fresh), 24)
+        for name in done:
+            ingested = ingest_discovery_payload({"evaluations": [_row(name)]})
+            self.assertEqual(ingested["ingested"], [name])
+            self.assertEqual(ingested["admitted"], [])
+        now = datetime(2026, 11, 1, 20, 0, tzinfo=timezone.utc)
+        cap = LEASES_PER_LANE * 8
+        got: list[str] = []
+        rest = fresh
+        for worker in ("zealous-lion", "omarchy-1"):
             body = claim_discovery_batch(
                 worker, 64, parallel=8, now=now, gate_rules=GATE_RULES, require_gate_rules=True,
             )

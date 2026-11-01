@@ -170,9 +170,8 @@ def _geo(n: int, growth: float) -> DailyBars:
 
 class CatalogOrderTests(unittest.TestCase):
     def test_batch5_is_appended_after_the_first_eighty_two(self):
-        self.assertEqual(tuple(s.key for s in LIBRARY[BATCH4_END:]), NEW)
+        self.assertEqual(tuple(s.key for s in LIBRARY[BATCH4_END:BATCH4_END + len(NEW)]), NEW)
         self.assertEqual(LIBRARY[BATCH4_END - 1].key, "weekend")
-        self.assertEqual(len(LIBRARY), BATCH4_END + len(NEW))
         for key, center in CENTERS.items():
             strategy = strategy_by_key(key)
             self.assertEqual(strategy.center, center)

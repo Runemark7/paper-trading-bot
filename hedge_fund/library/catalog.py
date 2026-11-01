@@ -38,6 +38,7 @@ from hedge_fund.trading.constants import LIBRARY_STOP_FRAC
 from hedge_fund.library.indicators import (
     adx_first_index,
     adx_wilder,
+    alma,
     aroon,
     atr_wilder,
     awesome_oscillator,
@@ -46,13 +47,17 @@ from hedge_fund.library.indicators import (
     cci,
     chande_momentum,
     choppiness_index,
+    cyber_cycle,
     connors_rsi,
     day_of_month,
     days_in_month,
     dema,
+    demarker,
     detrended_price,
     ema,
     fisher_transform,
+    frama,
+    garman_klass,
     hold_between,
     hull_ma,
     ibs,
@@ -64,8 +69,10 @@ from hedge_fund.library.indicators import (
     kaufman_ama,
     keltner,
     know_sure_thing,
+    laguerre_filter,
     laguerre_rsi,
     linreg_slope,
+    linreg_value,
     macd_histogram,
     mass_index,
     mcginley_dynamic,
@@ -91,20 +98,25 @@ from hedge_fund.library.indicators import (
     sma,
     sma_skip_leading,
     smma,
+    super_smoother,
     stoch_rsi,
     stochastic_k,
     supertrend_long,
     swing_index,
+    third_friday_dom,
     tillson_t3,
     trix,
     true_strength_index,
     ulcer_index,
     ultimate_oscillator,
+    variance_ratio,
+    vertical_horizontal_filter,
     vidya,
     vortex,
     week_number,
     weekday_utc,
     williams_r,
+    zero_lag_ema,
 )
 
 NAME_PREFIX = "lib."
@@ -1355,6 +1367,374 @@ def _three_dn(bars: DailyBars, p: dict) -> np.ndarray:
     return _stateful(enter, leave)
 
 
+def _demarker_up(bars: DailyBars, p: dict) -> np.ndarray:
+    """Long while DeMarker is above one half."""
+    value = demarker(bars.high, bars.low, int(p["n"]))
+    with np.errstate(invalid="ignore"):
+        return np.isfinite(value) & (value > 0.5)
+
+
+def _td_countdown(bars: DailyBars, p: dict) -> np.ndarray:
+    """Long on the bar a buy countdown completes, and only above the trend SMA.
+
+    A buy setup is ``setup`` consecutive closes each below the close four
+    days earlier. The four-day gap stays fixed. Counting starts on the
+    setup's last bar. A bar counts when its close is at or below the low
+    two bars earlier. The bars need not be consecutive. The final bar, when
+    the target is above 8, also needs its low at or below the close of
+    countdown bar 8. An opposing setup of the same length cancels an
+    unfinished count. A new buy setup restarts it. The long is that one close.
+    """
+    close = bars.close
+    low = bars.low
+    setup_n = int(p["setup"])
+    need = int(p["count"])
+    trend = sma(close, int(p["trend"]))
+    out = np.zeros(len(bars), dtype=bool)
+    buy_streak = 0
+    sell_streak = 0
+    active = False
+    counted = 0
+    close8 = np.nan
+    for t in range(len(bars)):
+        if t >= 4:
+            if close[t] < close[t - 4]:
+                buy_streak += 1
+                sell_streak = 0
+            elif close[t] > close[t - 4]:
+                sell_streak += 1
+                buy_streak = 0
+            else:
+                buy_streak = 0
+                sell_streak = 0
+        if t >= 4 and sell_streak == setup_n:
+            active = False
+            counted = 0
+            close8 = np.nan
+        if t >= 4 and buy_streak == setup_n:
+            active = True
+            counted = 0
+            close8 = np.nan
+        if active and t >= 2 and close[t] <= low[t - 2]:
+            if counted + 1 == need and need > 8:
+                if np.isfinite(close8) and low[t] <= close8:
+                    counted = need
+            else:
+                counted += 1
+                if counted == 8:
+                    close8 = float(close[t])
+            if counted == need:
+                if np.isfinite(trend[t]) and close[t] > trend[t]:
+                    out[t] = True
+                active = False
+                counted = 0
+                close8 = np.nan
+    return out
+
+
+def _trix_signal(bars: DailyBars, p: dict) -> np.ndarray:
+    """Long while TRIX(15) is above its signal average. The triple length stays 15."""
+    value = trix(bars.close, 15)
+    line = sma_skip_leading(value, int(p["signal"]))
+    return _finite_gt(value, line)
+
+
+def _stoch_slow(bars: DailyBars, p: dict) -> np.ndarray:
+    """Long while slow %D is above its own 3-day average.
+
+    Slow %D is an SMA of length ``d`` of an SMA of length ``d`` of fast %K.
+    The further 3-day average is Lane's signal on that slow line and is not
+    a grid axis.
+    """
+    fast_k = stochastic_k(bars.high, bars.low, bars.close, int(p["k"]))
+    slow_d = sma_skip_leading(sma_skip_leading(fast_k, int(p["d"])), int(p["d"]))
+    line = sma_skip_leading(slow_d, 3)
+    return _finite_gt(slow_d, line)
+
+
+def _zlema_up(bars: DailyBars, p: dict) -> np.ndarray:
+    """Long while the close is above the zero-lag EMA."""
+    return _finite_gt(bars.close, zero_lag_ema(bars.close, int(p["n"])))
+
+
+def _frama_up(bars: DailyBars, p: dict) -> np.ndarray:
+    """Long while the close is above FRAMA. The -4.6 alpha map stays fixed."""
+    return _finite_gt(bars.close, frama(bars.close, int(p["n"])))
+
+
+def _ssmooth_up(bars: DailyBars, p: dict) -> np.ndarray:
+    """Long while the close is above the two-pole super smoother."""
+    return _finite_gt(bars.close, super_smoother(bars.close, int(p["n"])))
+
+
+def _cyber_up(bars: DailyBars, p: dict) -> np.ndarray:
+    """Long while the cyber cycle is above its one-bar trigger.
+
+    The alpha is stored in hundredths. The price is the median,
+    ``(high + low) / 2``, which is the series in the book.
+    """
+    price = (bars.high + bars.low) / 2.0
+    cycle = cyber_cycle(price, float(p["alpha"]) / 100.0)
+    out = _finite_gt(cycle, shift_previous(cycle, 1))
+    # The seed formula covers indexes 2..5. The book filter starts at index 6.
+    out[:6] = False
+    return out
+
+
+def _lfilter_up(bars: DailyBars, p: dict) -> np.ndarray:
+    """Long while the close is above the Laguerre filter. Gamma is hundredths."""
+    return _finite_gt(bars.close, laguerre_filter(bars.close, float(p["gamma"]) / 100.0))
+
+
+def _alma_up(bars: DailyBars, p: dict) -> np.ndarray:
+    """Long while the close is above ALMA. Sigma stays 6. Offset is hundredths."""
+    value = alma(bars.close, int(p["n"]), float(p["offset"]) / 100.0, 6.0)
+    return _finite_gt(bars.close, value)
+
+
+def _tlbreak(bars: DailyBars, p: dict) -> np.ndarray:
+    """Long after a white line breaks the high of the prior ``n`` lines.
+
+    Lines are built from closes only, one new line on a bar at most. A line
+    in the current direction needs a close beyond that line. A reversal needs
+    a close beyond the extreme of the prior ``n`` lines. The long starts on
+    the bullish reversal and ends on the bearish one. The opening line, and
+    a continuation, do not enter.
+    """
+    n = int(p["n"])
+    close = bars.close
+    out = np.zeros(len(bars), dtype=bool)
+    lines: list[tuple[int, float, float]] = []
+    long = False
+    for t in range(1, len(bars)):
+        price = float(close[t])
+        if not lines:
+            base = float(close[0])
+            if price != base:
+                if price > base:
+                    lines.append((1, base, price))
+                else:
+                    lines.append((-1, price, base))
+            out[t] = long
+            continue
+        direction, bot, top = lines[-1]
+        hi = lo = None
+        if len(lines) >= n:
+            recent = lines[-n:]
+            hi = max(item[2] for item in recent)
+            lo = min(item[1] for item in recent)
+        added: tuple[int, float, float] | None = None
+        if direction == 1:
+            if price > top:
+                added = (1, top, price)
+            elif hi is not None and lo is not None and price < lo:
+                added = (-1, price, top)
+        elif price < bot:
+            added = (-1, price, bot)
+        elif hi is not None and price > hi:
+            added = (1, bot, price)
+        if added is not None:
+            if added[0] == 1 and direction == -1:
+                long = True
+            elif added[0] == -1 and direction == 1:
+                long = False
+            lines.append(added)
+        out[t] = long
+    return out
+
+
+def _engulf(bars: DailyBars, p: dict) -> np.ndarray:
+    """Bullish engulfing close, and only above the trend SMA. The long is that close."""
+    o = bars.open
+    c = bars.close
+    trend = sma(c, int(p["trend"]))
+    out = np.zeros(len(bars), dtype=bool)
+    for t in range(1, len(bars)):
+        prior_bear = c[t - 1] < o[t - 1]
+        this_bull = c[t] > o[t]
+        covers = o[t] <= c[t - 1] and c[t] >= o[t - 1]
+        larger = (c[t] - o[t]) > (o[t - 1] - c[t - 1])
+        if prior_bear and this_bull and covers and larger and np.isfinite(trend[t]) and c[t] > trend[t]:
+            out[t] = True
+    return out
+
+
+def _pierce(bars: DailyBars, p: dict) -> np.ndarray:
+    """Piercing line: open under the prior low, close through the prior body's midpoint.
+
+    The close stays below the prior open, so a gap-down engulfing is not this
+    bar. The long is that close, and only above the trend SMA.
+    """
+    o = bars.open
+    low = bars.low
+    c = bars.close
+    trend = sma(c, int(p["trend"]))
+    out = np.zeros(len(bars), dtype=bool)
+    for t in range(1, len(bars)):
+        if not (c[t - 1] < o[t - 1]):
+            continue
+        midpoint = (o[t - 1] + c[t - 1]) / 2.0
+        if (
+            o[t] < low[t - 1]
+            and c[t] > midpoint
+            and c[t] < o[t - 1]
+            and np.isfinite(trend[t])
+            and c[t] > trend[t]
+        ):
+            out[t] = True
+    return out
+
+
+def _soldiers(bars: DailyBars, p: dict) -> np.ndarray:
+    """Three white soldiers. Each opens inside the prior body and closes near its high.
+
+    The long is the third close, and only above the trend SMA. Near the high
+    means the upper shadow is no larger than the body.
+    """
+    o = bars.open
+    h = bars.high
+    c = bars.close
+    trend = sma(c, int(p["trend"]))
+    out = np.zeros(len(bars), dtype=bool)
+    for t in range(3, len(bars)):
+        good = True
+        for i in (t - 2, t - 1, t):
+            body_lo = min(o[i - 1], c[i - 1])
+            body_hi = max(o[i - 1], c[i - 1])
+            white = c[i] > o[i] and c[i] > c[i - 1]
+            inside = body_lo < o[i] < body_hi
+            near_high = (h[i] - c[i]) <= (c[i] - o[i])
+            if not (white and inside and near_high):
+                good = False
+                break
+        if good and np.isfinite(trend[t]) and c[t] > trend[t]:
+            out[t] = True
+    return out
+
+
+def _oops(bars: DailyBars, p: dict) -> np.ndarray:
+    """Low takes out the prior ``n``-day low and the close finishes back above it."""
+    floor = prior_min(bars.low, int(p["n"]))
+    with np.errstate(invalid="ignore"):
+        return np.isfinite(floor) & (bars.low < floor) & (bars.close > floor)
+
+
+def _vratio_up(bars: DailyBars, p: dict) -> np.ndarray:
+    """Variance ratio above 1 and the close above the trend SMA.
+
+    The horizon has to fit inside the return window. A window that does not
+    is flat, and it is not a grid point of this name.
+    """
+    q = int(p["q"])
+    window = int(p["win"])
+    if window <= q:
+        return np.zeros(len(bars), dtype=bool)
+    ratio = variance_ratio(bars.close, q, window)
+    trend = sma(bars.close, int(p["trend"]))
+    with np.errstate(invalid="ignore"):
+        trending = np.isfinite(ratio) & (ratio > 1.0)
+        return trending & np.isfinite(trend) & (bars.close > trend)
+
+
+def _vhf_up(bars: DailyBars, p: dict) -> np.ndarray:
+    """VHF above its 100-day median and the close above the trend SMA.
+
+    The median length is fixed, the same way lib.ulcer freezes its median.
+    """
+    value = vertical_horizontal_filter(bars.close, int(p["n"]))
+    med = rolling_median_skip_leading(value, 100)
+    trend = sma(bars.close, int(p["trend"]))
+    with np.errstate(invalid="ignore"):
+        directional = np.isfinite(value) & np.isfinite(med) & (value > med)
+        return directional & np.isfinite(trend) & (bars.close > trend)
+
+
+def _accel_up(bars: DailyBars, p: dict) -> np.ndarray:
+    """Awesome oscillator above its own average. The 5/34 lengths stay fixed."""
+    ao = awesome_oscillator(bars.high, bars.low, 5, 34)
+    line = sma_skip_leading(ao, int(p["smooth"]))
+    return _finite_gt(ao, line)
+
+
+def _gator(bars: DailyBars, p: dict) -> np.ndarray:
+    """Both alligator gaps wider than yesterday, and the lips above the jaw.
+
+    Teeth stay length 8, displaced 5. Lips are displaced 3 and the jaw 8.
+    The lines are shifted backward, so the gap on day t was known earlier.
+    """
+    lips = shift_previous(smma(bars.close, int(p["lips"])), 3)
+    teeth = shift_previous(smma(bars.close, 8), 5)
+    jaw = shift_previous(smma(bars.close, int(p["jaw"])), 8)
+    jaw_teeth = np.abs(jaw - teeth)
+    teeth_lips = np.abs(teeth - lips)
+    wider = _finite_gt(jaw_teeth, shift_previous(jaw_teeth, 1)) & _finite_gt(
+        teeth_lips, shift_previous(teeth_lips, 1),
+    )
+    return wider & _finite_gt(lips, jaw)
+
+
+def _camarilla(bars: DailyBars, p: dict) -> np.ndarray:
+    """Close above yesterday's Camarilla H3 and above the trend SMA.
+
+    H3 is prior close plus the prior range times 1.1/4. The 1.1 factor stays fixed.
+    """
+    span = shift_previous(bars.high, 1) - shift_previous(bars.low, 1)
+    h3 = shift_previous(bars.close, 1) + span * 1.1 / 4.0
+    trend = sma(bars.close, int(p["trend"]))
+    return _finite_gt(bars.close, h3) & _finite_gt(bars.close, trend)
+
+
+def _regline_up(bars: DailyBars, p: dict) -> np.ndarray:
+    """Long while the close is above the fitted value of the regression line."""
+    return _finite_gt(bars.close, linreg_value(bars.close, int(p["n"])))
+
+
+def _gk_calm(bars: DailyBars, p: dict) -> np.ndarray:
+    """Close above the trend SMA and Garman-Klass variance below its 100-day median.
+
+    The median length is fixed. One bar of the estimator can be negative;
+    the average is what is compared with the median.
+    """
+    value = garman_klass(bars.open, bars.high, bars.low, bars.close, int(p["n"]))
+    med = rolling_median_skip_leading(value, 100)
+    trend = sma(bars.close, int(p["trend"]))
+    with np.errstate(invalid="ignore"):
+        calm = np.isfinite(value) & np.isfinite(med) & (value < med)
+        return calm & np.isfinite(trend) & (bars.close > trend)
+
+
+def _harami(bars: DailyBars, p: dict) -> np.ndarray:
+    """Bullish harami: today's body sits inside the prior down body, above the trend SMA.
+
+    The long is that close. Highs and lows outside the bodies do not count.
+    """
+    o = bars.open
+    c = bars.close
+    trend = sma(c, int(p["trend"]))
+    out = np.zeros(len(bars), dtype=bool)
+    for t in range(1, len(bars)):
+        if not (c[t - 1] < o[t - 1]):
+            continue
+        body_hi = max(float(o[t]), float(c[t]))
+        body_lo = min(float(o[t]), float(c[t]))
+        if body_hi < o[t - 1] and body_lo > c[t - 1] and np.isfinite(trend[t]) and c[t] > trend[t]:
+            out[t] = True
+    return out
+
+
+def _expiry(bars: DailyBars, p: dict) -> np.ndarray:
+    """Long when tomorrow is one of the ``n`` UTC sessions ending on the third Friday.
+
+    Today's close decides tomorrow. The third Friday is day 15 through 21,
+    so a window of four sessions stays inside that month.
+    """
+    tomorrow = bars.ts + np.int64(DAY_MS)
+    dom = day_of_month(tomorrow)
+    third = third_friday_dom(tomorrow)
+    n = int(p["n"])
+    return (dom >= third - (n - 1)) & (dom <= third)
+
+
 def _defined_from(n: int, first: int) -> np.ndarray:
     out = np.zeros(int(n), dtype=bool)
     if 0 <= int(first) < int(n):
@@ -1651,6 +2031,64 @@ def signal_ready(strategy: LibraryStrategy, bars: DailyBars, params: dict) -> np
         return _defined_from(n, int(params["n"]))
     if key == "three_dn":
         return _defined_from(n, max(int(params["n"]), int(params["trend"]) - 1, int(params["exit_ma"]) - 1))
+    if key == "demarker":
+        # The one-day high/low comparison starts at index 1. n of them end at index n.
+        return _defined_from(n, int(params["n"]))
+    if key == "td_cd":
+        # The four-day setup comparison is fixed. The countdown reads the low two bars back.
+        return _defined_from(n, max(4, int(params["trend"]) - 1))
+    if key == "trix_sig":
+        # TRIX(15) is finite at index 43. The signal average needs ``signal`` of those values.
+        return _defined_from(n, 3 * (15 - 1) + int(params["signal"]))
+    if key == "stoch_slow":
+        # %K at k-1, two averages of length d, then the fixed 3-day signal line.
+        return _defined_from(n, int(params["k"]) - 1 + 2 * (int(params["d"]) - 1) + 2)
+    if key == "zlema":
+        lag = (int(params["n"]) - 1) // 2
+        return _defined_from(n, lag + int(params["n"]) - 1)
+    if key == "frama":
+        return _defined_from(n, int(params["n"]) - 1)
+    if key == "ssmooth":
+        return _defined_from(n, 2)
+    if key == "cyber":
+        # The book formula replaces the seed at currentbar 7, which is index 6.
+        return _defined_from(n, 6)
+    if key == "lfilter":
+        return _defined_from(n, 1)
+    if key == "alma":
+        return _defined_from(n, int(params["n"]) - 1)
+    if key == "tlbreak":
+        # The nth line can print by index n. The reversal that breaks it is the next bar.
+        return _defined_from(n, int(params["n"]) + 1)
+    if key in ("engulf", "pierce", "harami"):
+        return _defined_from(n, max(1, int(params["trend"]) - 1))
+    if key == "soldiers":
+        # Three soldiers, each opening inside the prior body, so the bar before them exists.
+        return _defined_from(n, max(3, int(params["trend"]) - 1))
+    if key == "oops":
+        return _defined_from(n, int(params["n"]))
+    if key == "vratio":
+        return _defined_from(n, max(int(params["win"]), int(params["trend"]) - 1))
+    if key == "vhf":
+        # VHF is finite at n. A 100-day median needs 99 further bars.
+        return _defined_from(n, max(int(params["n"]) + 99, int(params["trend"]) - 1))
+    if key == "accel":
+        # Awesome oscillator (5, 34) is finite at index 33. The average needs ``smooth`` of those.
+        return _defined_from(n, 33 + int(params["smooth"]) - 1)
+    if key == "gator":
+        lips = int(params["lips"]) - 1 + 3
+        teeth = 8 - 1 + 5
+        jaw = int(params["jaw"]) - 1 + 8
+        return _defined_from(n, max(lips, teeth, jaw) + 1)
+    if key == "camarilla":
+        return _defined_from(n, max(1, int(params["trend"]) - 1))
+    if key == "regline":
+        return _defined_from(n, int(params["n"]) - 1)
+    if key == "gk":
+        # The n-day mean is finite at n-1. A 100-day median needs 99 further bars.
+        return _defined_from(n, max(int(params["n"]) + 98, int(params["trend"]) - 1))
+    if key == "expiry":
+        return _defined_from(n, 0)
     raise ValueError(f"no warmup rule for {key}")
 
 
@@ -4966,6 +5404,748 @@ LIBRARY: tuple[LibraryStrategy, ...] = (
                 "Not lib.rsi2, which needs RSI(2) under a cutoff, and not lib.turtle_soup, "
                 "which needs a failed 20-day low. Two and four lower closes are the "
                 "neighbours, not extra keys. Next-open fills, BTC."
+            ),
+        ),
+    ),
+    # Batch 6 (2026-11-01). Appended after the batch-5 twenty-six. Claims walk
+    # this tuple in order, so these names are leased only once the names
+    # above are tested or on the book. Do not insert above ``three_dn``.
+    LibraryStrategy(
+        key="demarker",
+        title="DeMarker(14) above one half",
+        family="momentum",
+        evaluation="daily",
+        params=(Param("n", 14, (10, 20)),),
+        signal=_demarker_up,
+        citation=Citation(
+            authors="DeMark",
+            year=1994,
+            title="The New Science of Technical Analysis",
+            venue="Practitioner book (DeMarker indicator)",
+            peer_reviewed=False,
+            tested_rule=(
+                "DeMax is today's high minus yesterday's high when that difference "
+                "is positive. DeMin is yesterday's low minus today's low when that "
+                "difference is positive. DeMarker is the smoothed DeMax divided by "
+                "the sum of the smoothed DeMax and DeMin. Above 0.5 the highs are "
+                "extending more than the lows."
+            ),
+            implemented_rule="Long while DeMarker(14) is above 0.5.",
+            differences=(
+                "The comparisons are highs and lows against the prior bar. lib.rsi14 "
+                "is close-to-close. lib.rei compares closes with highs and lows two "
+                "and three bars back. A window with no extension is 0.5, which is not "
+                "long. Next-open fills, BTC."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="td_cd",
+        title="TD buy countdown completes above the 200-day SMA",
+        family="mean_reversion",
+        evaluation="daily",
+        params=(
+            Param("setup", 9, (8, 10), unit="bars"),
+            Param("count", 13, (12, 14), unit="bars"),
+            Param("trend", 200, (150, 250)),
+        ),
+        signal=_td_countdown,
+        citation=Citation(
+            authors="DeMark",
+            year=1997,
+            title="New Market Timing Techniques",
+            venue="Practitioner book (TD Sequential countdown)",
+            peer_reviewed=False,
+            tested_rule=(
+                "A buy setup is nine closes each less than the close four bars "
+                "earlier. The buy countdown then counts thirteen closes each at or "
+                "below the low two bars earlier. Bar 13 also needs its low at or "
+                "below the close of countdown bar 8. The completed countdown is the "
+                "buy."
+            ),
+            implemented_rule=(
+                "Long on the close that completes a 13-bar buy countdown after a "
+                "9-bar buy setup, and only when that close is above the 200-day SMA."
+            ),
+            differences=(
+                "lib.td_setup is the other direction: closes above the close four "
+                "days earlier, held while the streak lasts. This name is the "
+                "exhaustion countdown, and the long is the completion bar only. An "
+                "opposing setup of the same length cancels an unfinished count. A "
+                "new buy setup restarts it. The four-day and two-day gaps stay fixed. "
+                "Next-open fills, BTC."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="trix_sig",
+        title="TRIX(15) above its 9-day average",
+        family="momentum",
+        evaluation="daily",
+        params=(Param("signal", 9, (7, 12)),),
+        signal=_trix_signal,
+        citation=Citation(
+            authors="Hutson",
+            year=1983,
+            title="Good TRIX",
+            venue="Technical Analysis of Stocks & Commodities, 1983",
+            peer_reviewed=False,
+            tested_rule=(
+                "TRIX is the one-day percent change of a triple exponential average. "
+                "A signal line is a short average of TRIX. TRIX above that average "
+                "turns up before TRIX itself crosses zero."
+            ),
+            implemented_rule=(
+                "Long while TRIX(15) is above its 9-day SMA. The triple-EMA length "
+                "stays 15. The signal length is the only grid axis."
+            ),
+            differences=(
+                "lib.trix is long while TRIX is positive. Its length neighbours are "
+                "12 and 18, for that zero line. This name keeps 15 and reads the "
+                "signal average. Next-open fills, BTC."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="stoch_slow",
+        title="Slow stochastic %D above its 3-day average",
+        family="momentum",
+        evaluation="daily",
+        params=(
+            Param("k", 14, (10, 20)),
+            Param("d", 3, (2, 5)),
+        ),
+        signal=_stoch_slow,
+        citation=Citation(
+            authors="Lane",
+            year=1984,
+            title="Lane's Stochastics",
+            venue="Technical Analysis of Stocks & Commodities, May/June 1984",
+            peer_reviewed=False,
+            tested_rule=(
+                "Slow %K is a moving average of fast %K, and slow %D is a moving "
+                "average of slow %K. Lane's signal is slow %D against a further "
+                "short average of itself. The 14-period lookback and the 3-period "
+                "averages are the chart defaults."
+            ),
+            implemented_rule=(
+                "Long while SMA(d) of SMA(d) of fast %K(14) is above the 3-day SMA "
+                "of that slow %D. d is 3 at the center."
+            ),
+            differences=(
+                "lib.stoch is fast %K against one average. lib.stoch_pop is fast %K "
+                "crossing 80. The further 3-day average on the slow line stays fixed. "
+                "A zero-range window is fast %K 50, as in lib.stoch. Next-open fills, BTC."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="zlema",
+        title="Close above the zero-lag EMA(20)",
+        family="trend",
+        evaluation="daily",
+        params=(Param("n", 20, (14, 30)),),
+        signal=_zlema_up,
+        citation=Citation(
+            authors="Ehlers & Way",
+            year=2010,
+            title="Zero-Lag Data Smoothers",
+            venue="Technical Analysis of Stocks & Commodities",
+            peer_reviewed=False,
+            tested_rule=(
+                "A zero-lag EMA removes about (n - 1) / 2 bars of EMA lag by "
+                "feeding the average close plus the close-minus-lagged-close. Price "
+                "above that average is the trend reading."
+            ),
+            implemented_rule=(
+                "Long while the close is above ZLEMA(20). The lag is (n - 1) // 2."
+            ),
+            differences=(
+                "lib.dema is 2*EMA - EMA(EMA). lib.t3 is six EMAs and a volume factor. "
+                "Neither adds the close-minus-lagged-close before a single EMA. "
+                "Next-open fills, BTC."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="frama",
+        title="Close above the fractal adaptive moving average",
+        family="trend",
+        evaluation="daily",
+        params=(Param("n", 16, (10, 20)),),
+        signal=_frama_up,
+        citation=Citation(
+            authors="Ehlers",
+            year=2005,
+            title="FRAMA — Fractal Adaptive Moving Average",
+            venue="Technical Analysis of Stocks & Commodities",
+            peer_reviewed=False,
+            tested_rule=(
+                "The fractal dimension of the last window sets the EMA constant. "
+                "A straight trend has dimension near 1 and a fast constant. A noisy "
+                "window has a slower constant. The exp(-4.6 * (D - 1)) map is the "
+                "one in the article, clipped at 0.01 and 1."
+            ),
+            implemented_rule="Long while the close is above FRAMA(16).",
+            differences=(
+                "lib.kama uses Kaufman's efficiency ratio. lib.vidya uses the Chande "
+                "momentum oscillator. The dimension here is computed on closes. The "
+                "article's illustration uses the high-low range; the -4.6 map is "
+                "unchanged and is not a grid axis. Next-open fills, BTC."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="ssmooth",
+        title="Close above the two-pole super smoother",
+        family="trend",
+        evaluation="daily",
+        params=(Param("n", 10, (7, 14)),),
+        signal=_ssmooth_up,
+        citation=Citation(
+            authors="Ehlers",
+            year=2004,
+            title="Cybernetic Analysis for Stocks and Futures",
+            venue="Practitioner book (two-pole super smoother)",
+            peer_reviewed=False,
+            tested_rule=(
+                "The two-pole super smoother is a Butterworth-style filter. The "
+                "coefficients are exp(-sqrt(2) pi / n) and the cosine of the same "
+                "angle. It is a price average, not an oscillator."
+            ),
+            implemented_rule="Long while the close is above the super smoother of length 10.",
+            differences=(
+                "An ordinary EMA uses 2 / (n + 1) and one state. This filter uses "
+                "two states and the two-pole coefficients. The first two bars only "
+                "seed the recursion. Next-open fills, BTC."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="cyber",
+        title="Cyber cycle above its one-bar trigger",
+        family="momentum",
+        evaluation="daily",
+        params=(Param("alpha", 7, (5, 10), unit="hundredths"),),
+        signal=_cyber_up,
+        citation=Citation(
+            authors="Ehlers",
+            year=2004,
+            title="Cybernetic Analysis for Stocks and Futures",
+            venue="Practitioner book (cyber cycle)",
+            peer_reviewed=False,
+            tested_rule=(
+                "The cyber cycle is a high-pass of smoothed median price. The "
+                "trigger is the cycle's previous value. Cycle above trigger is the "
+                "long. The book uses alpha 0.07."
+            ),
+            implemented_rule=(
+                "Long while the cyber cycle of (high + low) / 2 is above its "
+                "previous value. Alpha 0.07 is the center. The filter replaces the "
+                "seed at the seventh bar."
+            ),
+            differences=(
+                "lib.fisher is a transformed stochastic. lib.laguerre is the "
+                "up-move share of four Laguerre poles. The seed second-difference "
+                "is not traded: the signal starts when the full filter does. "
+                "Next-open fills, BTC."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="lfilter",
+        title="Close above the Laguerre filter",
+        family="trend",
+        evaluation="daily",
+        params=(Param("gamma", 50, (40, 60), unit="hundredths"),),
+        signal=_lfilter_up,
+        citation=Citation(
+            authors="Ehlers",
+            year=2004,
+            title="Cybernetic Analysis for Stocks and Futures",
+            venue="Practitioner book (Laguerre filter)",
+            peer_reviewed=False,
+            tested_rule=(
+                "Four Laguerre poles at gamma 0.5, combined as "
+                "(L0 + 2 L1 + 2 L2 + L3) / 6. That is a moving average. Price above "
+                "it is the trend reading. The Laguerre RSI uses the same poles and "
+                "then the share of the up-moves."
+            ),
+            implemented_rule=(
+                "Long while the close is above the Laguerre filter at gamma 0.50."
+            ),
+            differences=(
+                "lib.laguerre is the RSI of these poles, long above 0.5. Same gamma "
+                "at the center, different output. Gamma is stored in hundredths. "
+                "Next-open fills, BTC."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="alma",
+        title="Close above ALMA(9, 0.85, 6)",
+        family="trend",
+        evaluation="daily",
+        params=(
+            Param("n", 9, (6, 12)),
+            Param("offset", 85, (75, 95), unit="hundredths"),
+        ),
+        signal=_alma_up,
+        citation=Citation(
+            authors="Legoux & Kouzis-Loukas",
+            year=2009,
+            title="Arnaud Legoux Moving Average",
+            venue="Practitioner; the 2009 ALMA note",
+            peer_reviewed=False,
+            tested_rule=(
+                "ALMA is a Gaussian-weighted average. The offset places the peak "
+                "of the window and sigma sets the width. The published short "
+                "setting is window 9, offset 0.85, sigma 6. Price above the average "
+                "is the trend reading."
+            ),
+            implemented_rule=(
+                "Long while the close is above ALMA(9) with offset 0.85 and sigma 6."
+            ),
+            differences=(
+                "lib.hma is a weighted combination of WMAs, and it is read from the "
+                "slope of the average rather than from price crossing it. Sigma 6 "
+                "stays fixed. Offset is stored in hundredths. Next-open fills, BTC."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="tlbreak",
+        title="Three-line break turns white",
+        family="breakout",
+        evaluation="daily",
+        params=(Param("n", 3, (2, 4), unit="lines"),),
+        signal=_tlbreak,
+        citation=Citation(
+            authors="Nison",
+            year=1994,
+            title="Beyond Candlesticks",
+            venue="Practitioner book (three-line break)",
+            peer_reviewed=False,
+            tested_rule=(
+                "A three-line break chart draws a new line only when the close "
+                "breaks the prior line, or, for a reversal, the extreme of the "
+                "prior three lines. A new white line through that extreme is the "
+                "bullish turn. The chart is built from closes, in order."
+            ),
+            implemented_rule=(
+                "Long on the close that prints a white reversal through the high "
+                "of the prior three lines. Flat on a black reversal through the "
+                "low of the prior three. Continuations do not enter."
+            ),
+            differences=(
+                "The 1991 candlestick book is the candle patterns. The line chart "
+                "is this 1994 method. lib.outside is a high-and-low engulfing bar "
+                "and a later break of that high. Two lines and four lines are the "
+                "neighbours. Next-open fills, BTC."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="engulf",
+        title="Bullish engulfing above the 200-day SMA",
+        family="mean_reversion",
+        evaluation="daily",
+        params=(Param("trend", 200, (150, 250)),),
+        signal=_engulf,
+        citation=Citation(
+            authors="Nison",
+            year=1991,
+            title="Japanese Candlestick Charting Techniques",
+            venue="Practitioner book (bullish engulfing)",
+            peer_reviewed=False,
+            tested_rule=(
+                "A bullish engulfing is a white body that covers the prior black "
+                "body. Shadows are not part of the test. It is a one-bar reversal "
+                "pattern after a down candle."
+            ),
+            implemented_rule=(
+                "Long on a close whose body engulfs the prior down body, and only "
+                "when that close is above the 200-day SMA."
+            ),
+            differences=(
+                "lib.outside waits for a later close through the high of a bar that "
+                "took out both the prior high and the prior low. lib.bop is a "
+                "smoothed (close - open) / range, not a two-candle body test. The "
+                "white body has to be strictly larger. The long is that close only. "
+                "Next-open fills, BTC."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="pierce",
+        title="Piercing line above the 200-day SMA",
+        family="mean_reversion",
+        evaluation="daily",
+        params=(Param("trend", 200, (150, 250)),),
+        signal=_pierce,
+        citation=Citation(
+            authors="Nison",
+            year=1991,
+            title="Japanese Candlestick Charting Techniques",
+            venue="Practitioner book (piercing pattern)",
+            peer_reviewed=False,
+            tested_rule=(
+                "A piercing line opens below the prior low and closes above the "
+                "midpoint of the prior black body, without covering that whole body."
+            ),
+            implemented_rule=(
+                "Long on that close, and only when it is also above the 200-day SMA."
+            ),
+            differences=(
+                "A close that also clears the prior open is lib.engulf, not this "
+                "pattern. The open has to be below the prior low, which the "
+                "engulfing rule does not require. The long is that close only. "
+                "Next-open fills, BTC."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="soldiers",
+        title="Three white soldiers above the 200-day SMA",
+        family="trend",
+        evaluation="daily",
+        params=(Param("trend", 200, (150, 250)),),
+        signal=_soldiers,
+        citation=Citation(
+            authors="Nison",
+            year=1991,
+            title="Japanese Candlestick Charting Techniques",
+            venue="Practitioner book (three white soldiers)",
+            peer_reviewed=False,
+            tested_rule=(
+                "Three white soldiers are three rising white bodies. Each opens "
+                "inside the prior body and closes near its own high."
+            ),
+            implemented_rule=(
+                "Long on the third close when each of the three opens inside the "
+                "prior body, each closes up, each upper shadow is no larger than "
+                "its body, and the close is above the 200-day SMA."
+            ),
+            differences=(
+                "lib.three_dn buys a run of lower closes. The upper-shadow test "
+                "stays fixed. The first soldier also has to open inside the body "
+                "before the three. The long is the third close only. Next-open "
+                "fills, BTC."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="oops",
+        title="Williams oops: failed break of yesterday's low",
+        family="mean_reversion",
+        evaluation="daily",
+        params=(Param("n", 1, (2, 3)),),
+        signal=_oops,
+        citation=Citation(
+            authors="Williams",
+            year=1999,
+            title="Long-Term Secrets to Short-Term Trading",
+            venue="Practitioner book (oops reversal)",
+            peer_reviewed=False,
+            tested_rule=(
+                "The oops pattern is a break of yesterday's low that fails. Price "
+                "trades back through that low and traps the breakdown. The book "
+                "enters on the intraday cross after a gap open."
+            ),
+            implemented_rule=(
+                "Long on a close that is back above the prior n-day low after the "
+                "low of the day took that level out. n is 1 at the center, so the "
+                "level is yesterday's low."
+            ),
+            differences=(
+                "On a daily bar the path inside the session is not on the tape. "
+                "The observable form is the low through the prior low and the close "
+                "back above it. lib.turtle_soup needs a 20-day low to fail. "
+                "lib.outside also takes out the prior high and then waits for a "
+                "later break. Next-open fills, BTC."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="vratio",
+        title="Variance ratio above 1 in an uptrend",
+        family="trend",
+        evaluation="daily",
+        params=(
+            Param("q", 16, (8, 32), unit="days"),
+            Param("win", 128, (96, 192), unit="days"),
+            Param("trend", 200, (150, 250)),
+        ),
+        signal=_vratio_up,
+        citation=Citation(
+            authors="Lo & MacKinlay",
+            year=1988,
+            title="Stock Market Prices Do Not Follow Random Walks: Evidence from a Simple Specification Test",
+            venue="The Review of Financial Studies 1(1), 41-66",
+            peer_reviewed=True,
+            link="https://doi.org/10.1093/rfs/1.1.41",
+            tested_rule=(
+                "US stocks, 1962-1985. The variance ratio of overlapping q-period "
+                "returns to q times the one-period variance is above 1 when returns "
+                "are positively autocorrelated. They test the random-walk hypothesis. "
+                "They do not publish a one-asset timing rule."
+            ),
+            implemented_rule=(
+                "Long while the variance ratio of daily log returns at horizon 16, "
+                "measured on the last 128 one-day returns, is above 1 and the close "
+                "is above the 200-day SMA."
+            ),
+            differences=(
+                "Population variances, no finite-sample bias correction. The horizon "
+                "fits inside the window. lib.tsmom30d is the sign of one return. "
+                "lib.linreg is the sign of a fitted slope. One asset, long or flat, "
+                "next-open fills, BTC, fees."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="vhf",
+        title="Vertical horizontal filter above its median",
+        family="trend",
+        evaluation="daily",
+        params=(
+            Param("n", 28, (21, 35)),
+            Param("trend", 200, (150, 250)),
+        ),
+        signal=_vhf_up,
+        citation=Citation(
+            authors="White",
+            year=1991,
+            title="The Vertical Horizontal Filter",
+            venue="Technical Analysis of Stocks & Commodities",
+            peer_reviewed=False,
+            tested_rule=(
+                "VHF divides the range of closes in the window by the sum of the "
+                "absolute close-to-close changes. A high reading is a directional "
+                "path. A low reading is chop. 28 is the published length."
+            ),
+            implemented_rule=(
+                "Long while VHF(28) is above its own 100-day median and the close "
+                "is above the 200-day SMA."
+            ),
+            differences=(
+                "The 100-day median is fixed, the same way lib.ulcer freezes its "
+                "median. lib.chop is a log true-range ratio and is long when that "
+                "ratio is low. lib.adx14 is Wilder's directional index. A window "
+                "with no movement is undefined, not a high reading. Next-open fills, BTC."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="accel",
+        title="Accelerator oscillator above zero",
+        family="momentum",
+        evaluation="daily",
+        params=(Param("smooth", 5, (3, 8)),),
+        signal=_accel_up,
+        citation=Citation(
+            authors="Williams",
+            year=1995,
+            title="Trading Chaos",
+            venue="Practitioner book (accelerator oscillator)",
+            peer_reviewed=False,
+            tested_rule=(
+                "The accelerator is the awesome oscillator minus a 5-period average "
+                "of itself. Above zero the oscillator is above that average, which "
+                "Williams reads as acceleration."
+            ),
+            implemented_rule=(
+                "Long while the awesome oscillator (5, 34) is above its own "
+                "5-period SMA. The 5 and 34 stay fixed."
+            ),
+            differences=(
+                "lib.awesome is the zero line of the oscillator itself. The "
+                "smoothing length is the only grid axis. Next-open fills, BTC."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="gator",
+        title="Gator expanding with lips above the jaw",
+        family="trend",
+        evaluation="daily",
+        params=(
+            Param("lips", 5, (3, 7)),
+            Param("jaw", 13, (10, 16)),
+        ),
+        signal=_gator,
+        citation=Citation(
+            authors="Williams",
+            year=1995,
+            title="Trading Chaos",
+            venue="Practitioner book (gator oscillator)",
+            peer_reviewed=False,
+            tested_rule=(
+                "The gator plots the absolute jaw-to-teeth gap and the absolute "
+                "teeth-to-lips gap. Both wider than the day before is the expanding "
+                "phase. The alligator lines are the 5, 8, and 13 smoothed averages "
+                "with their forward shifts read backward, so only older bars are used."
+            ),
+            implemented_rule=(
+                "Long while both absolute gaps are larger than yesterday and the "
+                "lips are above the jaw. Teeth stay length 8, displaced 5."
+            ),
+            differences=(
+                "lib.alligator is lips above teeth above jaw, with no expansion "
+                "test. The displacements stay fixed. Next-open fills, BTC."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="camarilla",
+        title="Close above yesterday's Camarilla H3",
+        family="trend",
+        evaluation="daily",
+        params=(Param("trend", 200, (150, 250)),),
+        signal=_camarilla,
+        citation=Citation(
+            authors="Stott",
+            year=1989,
+            title="Camarilla pivot equation",
+            venue="Practitioner; Nick Stott's Camarilla levels",
+            peer_reviewed=False,
+            tested_rule=(
+                "Camarilla H3 of a session is its close plus its range times 1.1/4. "
+                "A close through H3 is the long trigger in the equation's upper band."
+            ),
+            implemented_rule=(
+                "Long while the close is above yesterday's H3 and above the 200-day SMA. "
+                "The 1.1 factor stays fixed."
+            ),
+            differences=(
+                "lib.floor_pivot is (high + low + close) / 3 of the prior session. "
+                "H3 is a different level of a different equation. The level is "
+                "yesterday's, because today's own H3 is always at or above today's "
+                "close. Next-open fills, BTC."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="regline",
+        title="Close above the 20-day regression value",
+        family="trend",
+        evaluation="daily",
+        params=(Param("n", 20, (14, 30)),),
+        signal=_regline_up,
+        citation=Citation(
+            authors="Widner",
+            year=1995,
+            title="Automated Support and Resistance",
+            venue="Technical Analysis of Stocks & Commodities (projection bands)",
+            peer_reviewed=False,
+            tested_rule=(
+                "A linear-regression value is the fitted point of the least-squares "
+                "line on the current bar. Price can close above that point while the "
+                "line's slope is still negative. Widner's bands are built around this value."
+            ),
+            implemented_rule=(
+                "Long while the close is above the fitted value of the last 20 closes "
+                "on the current bar."
+            ),
+            differences=(
+                "lib.linreg is the sign of the slope of the same line, at the same "
+                "center and the same neighbours. The fitted value is mean + slope * "
+                "(n - 1) / 2. The two signs are not the same test. Next-open fills, BTC."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="gk",
+        title="Quiet Garman-Klass variance above the 200-day SMA",
+        family="trend",
+        evaluation="daily",
+        params=(
+            Param("n", 14, (10, 20)),
+            Param("trend", 200, (150, 250)),
+        ),
+        signal=_gk_calm,
+        citation=Citation(
+            authors="Garman & Klass",
+            year=1980,
+            title="On the Estimation of Security Price Volatilities from Historical Data",
+            venue="Journal of Business 53(1), 67-78",
+            peer_reviewed=True,
+            link="https://doi.org/10.1086/296072",
+            tested_rule=(
+                "The Garman-Klass estimator uses the open, high, low, and close. "
+                "One bar is 0.5 * ln(H/L)^2 minus (2 ln 2 - 1) * ln(C/O)^2. They "
+                "estimate variance. They do not publish a timing rule."
+            ),
+            implemented_rule=(
+                "Long while the close is above the 200-day SMA and the 14-day mean "
+                "of the Garman-Klass estimator is below its own 100-day median."
+            ),
+            differences=(
+                "The 100-day median is fixed. lib.vol_trend is close-to-close "
+                "volatility against a 12-month sign. lib.ulcer is drawdown from the "
+                "recent high. The Garman-Klass average can be negative, and a "
+                "negative reading can still sit below its median. Next-open fills, "
+                "BTC, fees."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="harami",
+        title="Bullish harami above the 200-day SMA",
+        family="mean_reversion",
+        evaluation="daily",
+        params=(Param("trend", 200, (150, 250)),),
+        signal=_harami,
+        citation=Citation(
+            authors="Nison",
+            year=1991,
+            title="Japanese Candlestick Charting Techniques",
+            venue="Practitioner book (bullish harami)",
+            peer_reviewed=False,
+            tested_rule=(
+                "A bullish harami is a small real body inside the prior long black "
+                "body, after that down close. The high and the low are not the test."
+            ),
+            implemented_rule=(
+                "Long on a close whose body sits strictly inside the prior down body, "
+                "and only when that close is above the 200-day SMA."
+            ),
+            differences=(
+                "lib.inside_day uses the full high and low and waits for a later "
+                "break of that high. This name trades the harami close itself and "
+                "ignores the wicks. Next-open fills, BTC."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="expiry",
+        title="Long the three sessions into the third Friday",
+        family="seasonality",
+        evaluation="daily",
+        params=(Param("n", 3, (2, 4), unit="days"),),
+        signal=_expiry,
+        citation=Citation(
+            authors="Stoll & Whaley",
+            year=1987,
+            title="Program Trading and Expiration-Day Effects",
+            venue="Journal of Finance 42(1), 127-155",
+            peer_reviewed=True,
+            link="https://doi.org/10.1111/j.1540-6261.1987.tb02554.x",
+            tested_rule=(
+                "US stocks and futures, 1982-1986. Volume and price effects cluster "
+                "on expiration days, the third Friday. They measure the day. They "
+                "do not publish an all-in timing backtest."
+            ),
+            implemented_rule=(
+                "Long for the three UTC sessions ending on the third Friday of the "
+                "month. The Friday close turns the signal off. Two sessions and four "
+                "sessions are the neighbours."
+            ),
+            differences=(
+                "Twelve turns a year, so this is not a one-trade-a-year calendar. "
+                "lib.tom is the month-end window. lib.first_half is calendar days "
+                "1 through 15. Tomorrow's date is known at today's close. Cash earns "
+                "nothing. Next-open fills, BTC, fees."
             ),
         ),
     ),

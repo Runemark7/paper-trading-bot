@@ -1682,3 +1682,313 @@ def ichimoku_spans(
         cloud_a = span_a
         cloud_b = span_b
     return cloud_a, cloud_b
+
+
+def third_friday_dom(ts: np.ndarray) -> np.ndarray:
+    """Day-of-month of the third Friday in each timestamp's UTC month.
+
+    The third Friday always falls on day 15 through 21. Friday is weekday 4
+    (Monday is 0), matching :func:`weekday_utc`.
+    """
+    dom = day_of_month(ts).astype(np.int64)
+    dow = weekday_utc(ts).astype(np.int64)
+    dow1 = np.mod(dow - (dom - 1), 7).astype(np.int64)
+    first_fri = 1 + np.mod(4 - dow1, 7).astype(np.int64)
+    return first_fri + 14
+
+
+def demarker(high: np.ndarray, low: np.ndarray, n: int) -> np.ndarray:
+    """DeMark DeMarker. SMA of DeMax over SMA of DeMax plus DeMin.
+
+    DeMax is the part of today's high above yesterday's high. DeMin is the
+    part of yesterday's low above today's low. Finite once ``n`` of those
+    one-day comparisons exist, at index ``n``. A window with no extension
+    either way is 0.5.
+    """
+    high = np.asarray(high, dtype=np.float64)
+    low = np.asarray(low, dtype=np.float64)
+    demax = _nan(high.shape[0])
+    demin = _nan(high.shape[0])
+    if high.shape[0] > 1:
+        up = high[1:] - high[:-1]
+        down = low[:-1] - low[1:]
+        demax[1:] = np.where(up > 0.0, up, 0.0)
+        demin[1:] = np.where(down > 0.0, down, 0.0)
+    num = sma_skip_leading(demax, n)
+    den = sma_skip_leading(demin, n)
+    out = _nan(high.shape[0])
+    total = num + den
+    with np.errstate(invalid="ignore"):
+        ok = np.isfinite(total) & (total > 0.0)
+        flat = np.isfinite(total) & (total == 0.0)
+        out[ok] = num[ok] / total[ok]
+        out[flat] = 0.5
+    return out
+
+
+def zero_lag_ema(close: np.ndarray, n: int) -> np.ndarray:
+    """Ehlers zero-lag EMA. The lag is ``(n - 1) // 2`` bars.
+
+    The EMA input is ``close + (close - close[lag])``. Finite at
+    ``lag + n - 1``, where the EMA of that adjusted series seeds.
+    """
+    close = np.asarray(close, dtype=np.float64)
+    n = int(n)
+    if n <= 0:
+        return _nan(close.shape[0])
+    lag = (n - 1) // 2
+    adjusted = _nan(close.shape[0])
+    if lag <= 0:
+        adjusted = close.copy()
+    elif close.shape[0] > lag:
+        adjusted[lag:] = 2.0 * close[lag:] - close[:-lag]
+    return ema(adjusted, n)
+
+
+def frama(close: np.ndarray, n: int) -> np.ndarray:
+    """Ehlers fractal adaptive moving average of the close.
+
+    The window is split in half. The dimension is
+    ``(log(N1 + N2) - log(N3)) / log(2)`` with each range divided by its
+    length. ``alpha = exp(-4.6 * (D - 1))``, clipped to 0.01..1. A half
+    with no range keeps the previous alpha. Seeded with the close at
+    index ``n - 1``.
+    """
+    close = np.asarray(close, dtype=np.float64)
+    out = _nan(close.shape[0])
+    n = int(n)
+    half = n // 2
+    if half < 1 or close.shape[0] < n:
+        return out
+
+    def dimension(t: int) -> float:
+        recent = close[t - half + 1 : t + 1]
+        older = close[t - n + 1 : t - half + 1]
+        full = close[t - n + 1 : t + 1]
+        n1 = (float(np.max(recent)) - float(np.min(recent))) / half
+        n2 = (float(np.max(older)) - float(np.min(older))) / max(older.shape[0], 1)
+        n3 = (float(np.max(full)) - float(np.min(full))) / n
+        if n1 > 0.0 and n2 > 0.0 and n3 > 0.0:
+            return float((np.log(n1 + n2) - np.log(n3)) / np.log(2.0))
+        return float("nan")
+
+    def alpha_of(dim: float, previous: float) -> float:
+        if not np.isfinite(dim):
+            return previous
+        return float(np.clip(np.exp(-4.6 * (dim - 1.0)), 0.01, 1.0))
+
+    alpha = alpha_of(dimension(n - 1), 1.0)
+    value = float(close[n - 1])
+    out[n - 1] = value
+    for t in range(n, close.shape[0]):
+        alpha = alpha_of(dimension(t), alpha)
+        value = alpha * float(close[t]) + (1.0 - alpha) * value
+        out[t] = value
+    return out
+
+
+def super_smoother(close: np.ndarray, n: int) -> np.ndarray:
+    """Ehlers two-pole super smoother. Finite from index 2.
+
+    The first two bars seed the recursion with the price and are not
+    themselves filter output. Coefficients use ``sqrt(2) * pi / n``.
+    """
+    close = np.asarray(close, dtype=np.float64)
+    out = _nan(close.shape[0])
+    n = int(n)
+    if n < 1 or close.shape[0] < 3 or not bool(np.all(np.isfinite(close))):
+        return out
+    a1 = float(np.exp(-np.sqrt(2.0) * np.pi / n))
+    b1 = float(2.0 * a1 * np.cos(np.sqrt(2.0) * np.pi / n))
+    c2 = b1
+    c3 = -a1 * a1
+    c1 = 1.0 - c2 - c3
+    prev2 = float(close[0])
+    prev1 = float(close[1])
+    for t in range(2, close.shape[0]):
+        value = c1 * (float(close[t]) + float(close[t - 1])) / 2.0 + c2 * prev1 + c3 * prev2
+        out[t] = value
+        prev2 = prev1
+        prev1 = value
+    return out
+
+
+def cyber_cycle(price: np.ndarray, alpha: float) -> np.ndarray:
+    """Ehlers cyber cycle. The trigger is the previous value, not returned here.
+
+    For the first six bars (indexes 2..5) the cycle is the four-bar
+    second difference he uses before the filter is full. From index 6 it
+    is the smoothed high-pass. ``alpha`` is the book constant (0.07).
+    """
+    price = np.asarray(price, dtype=np.float64)
+    out = _nan(price.shape[0])
+    if price.shape[0] < 3 or not bool(np.all(np.isfinite(price))):
+        return out
+    a = float(alpha)
+    lead = (1.0 - 0.5 * a) ** 2
+    follow = 2.0 * (1.0 - a)
+    decay = (1.0 - a) ** 2
+    smooth = _nan(price.shape[0])
+    for t in range(price.shape[0]):
+        if t >= 3:
+            smooth[t] = (
+                float(price[t]) + 2.0 * float(price[t - 1]) + 2.0 * float(price[t - 2]) + float(price[t - 3])
+            ) / 6.0
+        if t < 2:
+            continue
+        if t < 6:
+            out[t] = (float(price[t]) - 2.0 * float(price[t - 1]) + float(price[t - 2])) / 4.0
+        else:
+            out[t] = (
+                lead * (float(smooth[t]) - 2.0 * float(smooth[t - 1]) + float(smooth[t - 2]))
+                + follow * float(out[t - 1])
+                - decay * float(out[t - 2])
+            )
+    return out
+
+
+def laguerre_filter(close: np.ndarray, gamma: float) -> np.ndarray:
+    """Ehlers four-pole Laguerre moving average. Finite from index 1.
+
+    Same poles as :func:`laguerre_rsi`. The output is
+    ``(L0 + 2 L1 + 2 L2 + L3) / 6``, not the up-move share of those poles.
+    """
+    close = np.asarray(close, dtype=np.float64)
+    out = _nan(close.shape[0])
+    if close.shape[0] == 0 or not np.isfinite(close[0]):
+        return out
+    g = float(gamma)
+    l0 = l1 = l2 = l3 = float(close[0])
+    for i in range(1, close.shape[0]):
+        price = float(close[i])
+        prev0, prev1, prev2 = l0, l1, l2
+        l0 = (1.0 - g) * price + g * l0
+        l1 = -g * l0 + prev0 + g * l1
+        l2 = -g * l1 + prev1 + g * l2
+        l3 = -g * l2 + prev2 + g * l3
+        out[i] = (l0 + 2.0 * l1 + 2.0 * l2 + l3) / 6.0
+    return out
+
+
+def alma(close: np.ndarray, n: int, offset: float, sigma: float) -> np.ndarray:
+    """Arnaud Legoux moving average. Finite at index ``n - 1``.
+
+    ``m = offset * (n - 1)`` and ``s = n / sigma``. Weights are Gaussian
+    in the window, index 0 the oldest bar. Offset 0.85 puts the peak near
+    the newest bar. Sigma stays the published 6 at the call site.
+    """
+    close = np.asarray(close, dtype=np.float64)
+    out = _nan(close.shape[0])
+    n = int(n)
+    if n <= 0 or sigma == 0.0 or close.shape[0] < n:
+        return out
+    m = float(offset) * (n - 1)
+    s = n / float(sigma)
+    i = np.arange(n, dtype=np.float64)
+    weights = np.exp(-((i - m) ** 2) / (2.0 * s * s))
+    scale = float(weights.sum())
+    if scale == 0.0:
+        return out
+    out[n - 1 :] = sliding_window_view(close, n) @ weights / scale
+    return out
+
+
+def linreg_value(close: np.ndarray, n: int) -> np.ndarray:
+    """Fitted value of the least-squares line on the current bar.
+
+    The line is the same one as :func:`linreg_slope`. At the newest bar,
+    ``mean + slope * (n - 1) / 2``. Finite at index ``n - 1``. The close
+    can sit above this value while the slope is negative.
+    """
+    close = np.asarray(close, dtype=np.float64)
+    n = int(n)
+    out = _nan(close.shape[0])
+    if n <= 1:
+        return out
+    slope = linreg_slope(close, n)
+    mean = sma(close, n)
+    shift = (n - 1) / 2.0
+    ok = np.isfinite(slope) & np.isfinite(mean)
+    out[ok] = mean[ok] + slope[ok] * shift
+    return out
+
+
+def variance_ratio(close: np.ndarray, q: int, window: int) -> np.ndarray:
+    """Lo-MacKinlay variance ratio of overlapping log returns. Finite at ``window``.
+
+    ``window`` is the number of one-day log returns. The numerator is the
+    population variance of the overlapping ``q``-day sums that lie inside
+    that window. The denominator is ``q`` times the population variance of
+    those one-day returns. A zero one-day variance is NaN, not a ratio of 1.
+    """
+    close = np.asarray(close, dtype=np.float64)
+    out = _nan(close.shape[0])
+    q = int(q)
+    window = int(window)
+    if q < 2 or window <= q or close.shape[0] <= window:
+        return out
+    ret = np.full(close.shape[0], np.nan, dtype=np.float64)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        valid = (close[1:] > 0.0) & (close[:-1] > 0.0)
+        logged = np.log(close[1:] / close[:-1])
+    ret[1:] = np.where(valid, logged, np.nan)
+    returns = ret[1:]
+    if returns.shape[0] < window or not bool(np.all(np.isfinite(returns))):
+        return out
+    samples = sliding_window_view(returns, window)
+    cumulative = np.cumsum(samples, axis=1)
+    lead = cumulative[:, q - 1 :]
+    tail = np.concatenate(
+        [np.zeros((samples.shape[0], 1), dtype=np.float64), cumulative[:, : samples.shape[1] - q]],
+        axis=1,
+    )
+    summed = lead - tail
+    var1 = np.var(samples, axis=1)
+    varq = np.var(summed, axis=1)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        ok = (var1 > 0.0) & np.isfinite(varq)
+        ratios = np.full(samples.shape[0], np.nan, dtype=np.float64)
+        ratios[ok] = varq[ok] / (q * var1[ok])
+    out[window : window + ratios.shape[0]] = ratios
+    return out
+
+
+def vertical_horizontal_filter(close: np.ndarray, n: int) -> np.ndarray:
+    """Adam White VHF. Range of the last ``n`` closes over the sum of ``n`` absolute changes.
+
+    Finite at index ``n``. A window with no close-to-close movement is NaN.
+    A high reading is a directional path. A low reading is a choppy one.
+    """
+    close = np.asarray(close, dtype=np.float64)
+    n = int(n)
+    out = _nan(close.shape[0])
+    if n <= 0:
+        return out
+    span = rolling_max(close, n) - rolling_min(close, n)
+    change = _nan(close.shape[0])
+    if close.shape[0] > 1:
+        change[1:] = np.abs(np.diff(close))
+    denom = sum_skip_leading(change, n)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        ok = np.isfinite(span) & np.isfinite(denom) & (denom > 0.0)
+        out[ok] = span[ok] / denom[ok]
+    return out
+
+
+def garman_klass(open_: np.ndarray, high: np.ndarray, low: np.ndarray, close: np.ndarray, n: int) -> np.ndarray:
+    """Mean of the last ``n`` Garman-Klass bar variances. Finite at index ``n - 1``.
+
+    One bar is ``0.5 * ln(H/L)^2 - (2 ln 2 - 1) * ln(C/O)^2``. The average
+    can be negative. A non-positive price leaves that bar undefined.
+    """
+    open_ = np.asarray(open_, dtype=np.float64)
+    high = np.asarray(high, dtype=np.float64)
+    low = np.asarray(low, dtype=np.float64)
+    close = np.asarray(close, dtype=np.float64)
+    raw = _nan(close.shape[0])
+    with np.errstate(divide="ignore", invalid="ignore"):
+        ok = (high > 0.0) & (low > 0.0) & (open_ > 0.0) & (close > 0.0) & (high >= low)
+        hl = np.log(high[ok] / low[ok])
+        co = np.log(close[ok] / open_[ok])
+        raw[ok] = 0.5 * hl * hl - (2.0 * np.log(2.0) - 1.0) * co * co
+    return sma_skip_leading(raw, n)
