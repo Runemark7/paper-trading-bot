@@ -18,6 +18,13 @@ skipped, on purpose:
 - The tower bottom. A long black candle, two smaller bodies, and a long
   white close through the black midpoint is another long-black then
   long-white reversal next to `lib.morning` and `lib.engulf`.
+- Durbin-Watson on the residuals of the price around a short trend. On
+  this tape the statistic stays below 2 (median about 0.81 since
+  2018-12-01), so the rule is the close above the 200-day SMA. It agreed
+  with `lib.sma200` on 99.2% of scored days.
+- The overnight return sum. A 24-hour session has no overnight gap: the
+  daily open equals the prior close on about 40% of days, and the mean
+  gap is about one basis point. That series is bid-ask noise.
 - Donchian, turtle, Bollinger and its bandwidth, percent b, and the squeeze,
   Keltner, the STARC band, the SMA band, MACD and its histogram, the impulse
   system, RSI and its signal line and its failure swing, the slow
@@ -55,9 +62,8 @@ skipped, on purpose:
   cross, the three-line break, kagi, renko, the point-and-figure double top,
   time-series momentum, the variance ratio, lag-1 autocorrelation, the lag-2
   partial autocorrelation, the run count, the turning-point count, the
-  intermediate window, the regression slope, r-squared, the Durbin-Watson
-  statistic of the regression residual, the Spearman rank correlation, the
-  Theil-Sen slope, the regression value, the standard-error band, the
+  intermediate window, the regression slope, r-squared, the Spearman rank
+  correlation, the Theil-Sen slope, the regression value, the standard-error band, the
   percentile channel, the Donchian midpoint, the Fibonacci hold, Woodie's
   pivot, the floor pivot, the DeMark pivot, Camarilla, Garman-Klass,
   Rogers-Satchell, Yang-Zhang, Parkinson and Parkinson against the
@@ -67,7 +73,8 @@ skipped, on purpose:
   skewness, open-to-close skewness, realized kurtosis, the rescaled-range
   Hurst exponent, the MAX filter, the window maximum drawdown, Chaikin
   volatility, the Schaff cross and the Schaff midline, the relative vigor
-  index and its zero line, the overnight return sum, the same-calendar-month
+  index and its zero line, the leverage correlation, the close channel,
+  the same-calendar-month
   sign, the first half of the month, expiration week, the weekend, Monday,
   the turn of the month, and the Halloween window. Those are already seated
   or tested names. Batch 12 did not add a neighbour of any of them as a new
@@ -102,6 +109,8 @@ These need a data or engine change this batch did not make.
 | ZigZag / repainting swings | Chart practice | A swing that is rewritten after later bars is look-ahead. Do not add it. |
 | On-neck line | Nison, *Japanese Candlestick Charting Techniques* (1991) | The 5 percent equal-band of the prior black low never prints on this tape. Zero round-trips. |
 | One-sided CUSUM | Page, "Continuous Inspection Schemes", *Biometrika* (1954) | `S = max(0, S + r - k)` with the prior-mean allowance stays above zero on this tape. The center does not complete three signal round-trips. |
+| Durbin-Watson of the price residual | Durbin and Watson, *Biometrika* (1950) | Below 2 on 99% of days since 2018-12-01. The rule is the close above the 200-day SMA (99.2% agreement with `lib.sma200`). |
+| Overnight return sum | Lou, Polk, and Skouras, *Journal of Financial Economics* (2019) | The daily open is the prior close on this 24-hour tape. The gap is bid-ask noise. |
 
 ## Ready for a later batch
 
@@ -112,26 +121,24 @@ is a parameter neighbour of a name already registered.
 
 1. **Tower bottom.** Nison, *Japanese Candlestick Charting Techniques* (1991). A long black candle, two smaller bodies, then a long white close through the black candle's midpoint, above the 200-day SMA. The long-body test is the one `lib.belt` already uses. Not `lib.morning` and not `lib.engulf`. The long is the white close.
 2. **Sign entropy, quiet.** Shannon, "A Mathematical Theory of Communication", *Bell System Technical Journal* (1948). The binary entropy of up-closes versus down-closes over the last 20 closes, long while it is below its 100-day median and the close is above the close 20 days ago. A tie is a down step. The median length stays 100. Not `lib.turns` and not `lib.runs`.
-3. **Leverage correlation.** Christie, "The stochastic behavior of common stock variances: Value, leverage and interest rate effects", *Journal of Financial Economics* (1982). The correlation of the log return with the previous squared log return, over 20 days, long while it is negative and the close is above the 200-day SMA. The zero stays fixed. Not `lib.ac1`.
-4. **Absolute-return autocorrelation.** Ding, Granger, and Engle, "A long memory property of stock market returns and a new model", *Journal of Empirical Finance* (1993). The lag-1 autocorrelation of absolute log returns over 20 days, long while it is above its 100-day median and the close is above the 200-day SMA. The median length stays 100. Not `lib.ac1` and not `lib.volr`.
-5. **Hodges-Lehmann location.** Hodges and Lehmann, "Estimates of Location Based on Rank Tests", *Annals of Mathematical Statistics* (1963). The median of the pairwise averages of the last 20 log returns, long while it is positive. The zero stays fixed. Not `lib.tsmom30d`, which is the sign of the total return.
-6. **Interquartile range, quiet.** Tukey, *Exploratory Data Analysis* (1977). The interquartile range of the last 20 log returns, long while it is below its 100-day median and the close is above the 200-day SMA. The median length stays 100. Not `lib.hampel`.
-7. **Donchian width, quiet.** Donchian; the width is the prior high minus the prior low. Long while that 20-day width is below its 100-day median and the close is above the midpoint of the same prior range. Today is outside the window. The median length stays 100. Not `lib.dmid` and not `lib.qdon`.
-8. **Two inside days.** Crabel, *Day Trading with Short Term Price Patterns and Opening Range Breakout* (1990). Two consecutive inside bars, then a later close above the second bar's high, above the 200-day SMA. A close through the second bar's low drops the setup. The long is that break close. Not `lib.inside_day`.
-9. **Gap and go.** Crabel, same book. The open is above yesterday's high and the close is above the open, above the 200-day SMA. The long is that close. Not `lib.onight` and not `lib.wide`.
-10. **Overnight variance gap, quiet.** Yang and Zhang, "Drift-Independent Volatility Estimation Based on High, Low, Open, and Close Prices", *Journal of Business* (2000). The 20-day Yang-Zhang variance minus the 20-day close-to-close variance, long while that difference is below its 100-day median and the close is above the 200-day SMA. The median length stays 100. Not `lib.yz` and not `lib.onight`.
-11. **Rogers-Satchell below Parkinson.** Rogers and Satchell, "Estimating Variance from High, Low and Closing Prices", *Annals of Applied Probability* (1991), against Parkinson, *Journal of Business* (1980). Long while the 20-day Rogers-Satchell variance is below the 20-day Parkinson variance and the close is above the 200-day SMA. Not `lib.parkcc` and not `lib.rsvol`.
-12. **Volatility of volatility, quiet.** Engle, "Autoregressive Conditional Heteroscedasticity with Estimates of the Variance of United Kingdom Inflation", *Econometrica* (1982). The standard deviation of the last 20 daily Parkinson terms, long while it is below its 100-day median and the close is above the 200-day SMA. The median length stays 100. Not `lib.park`.
-13. **Intraday drift.** Lou, Polk, and Skouras, "A tug of war: Overnight versus intraday expected returns", *Journal of Financial Economics* (2019). Long while the sum of the last 20 open-to-close log returns is positive. Today's open and close are both known at the close. Not `lib.onight`.
-14. **Close channel.** Donchian's channel applied to closes rather than highs. Long while the close is above the highest close of the prior 20 days. Today is outside the window. Not `lib.donchian20` and not `lib.dmid`.
-15. **Prior week's midpoint.** Rhea, *The Dow Theory* (1932). Long while the close is above the midpoint of the prior completed Monday-Sunday week and above the 200-day SMA. A week that has not ended is not the reference. Not `lib.wkhigh` and not `lib.dmid`.
-16. **NR4 break.** Crabel, same book as the two inside days. A bar whose high-low range is the narrowest of the last four, then a later close above that bar's high, above the 200-day SMA. A close through that bar's low drops the setup. The long is the break close. Not `lib.nr7`.
-17. **Median runs.** Swed and Eisenhart, "Tables for Testing Randomness of Grouping in a Sequence of Alternatives", *Annals of Mathematical Statistics* (1943). Runs of closes above and below the median of the last 20 closes. Long while that count is below 10 and the close is above the median. The 10 stays fixed. Not `lib.runs`, which counts up and down steps.
-18. **CUSUM of squares, reset.** Brown, Durbin, and Evans, "Techniques for Testing the Constancy of Regression Relationships over Time", *Journal of the Royal Statistical Society* (1975). The cumulative sum of squared demeaned log returns, reset to zero on the day it exceeds the mean of the prior 50 squared shocks. Long while it is at or below that mean and the close is above the 200-day SMA. The reset is what the level CUSUM lacked. The 50 stays fixed.
-19. **Prior month's high.** A completed UTC month. Long while the close is above the high of the prior completed month and above the 200-day SMA. The month that is still in progress is not the reference. Not `lib.faber10m` and not a one-trade-a-year calendar: the long lasts as long as the close holds that high.
-20. **Session semi-variance, quiet.** Markowitz, *Portfolio Selection* (1959), applied to the open-to-close log return. The root mean square of the negative session returns over 20 days, long while it is below its 100-day median and the close is above the 200-day SMA. The median length stays 100. Not `lib.svar` and not `lib.ocskew`.
-21. **Lower-shadow imbalance.** Nison's shadows, counted as a ratio rather than a single hammer. The average over 10 days of (lower shadow - upper shadow) / range, long while it is positive and the close is above the 200-day SMA. A zero range contributes 0. The zero stays fixed. Not `lib.hammer` and not `lib.uhalf`.
-22. **Failed prior-low break.** Crabel's reversal, apart from the hook. The low takes out the low of the prior two bars and the close finishes above yesterday's close, above the 200-day SMA. The long is that close. Not `lib.hook` and not `lib.oops`.
+3. **Absolute-return autocorrelation.** Ding, Granger, and Engle, "A long memory property of stock market returns and a new model", *Journal of Empirical Finance* (1993). The lag-1 autocorrelation of absolute log returns over 20 days, long while it is above its 100-day median and the close is above the 200-day SMA. The median length stays 100. Not `lib.ac1` and not `lib.volr`.
+4. **Hodges-Lehmann location.** Hodges and Lehmann, "Estimates of Location Based on Rank Tests", *Annals of Mathematical Statistics* (1963). The median of the pairwise averages of the last 20 log returns, long while it is positive. The zero stays fixed. Not `lib.tsmom30d`, which is the sign of the total return.
+5. **Interquartile range, quiet.** Tukey, *Exploratory Data Analysis* (1977). The interquartile range of the last 20 log returns, long while it is below its 100-day median and the close is above the 200-day SMA. The median length stays 100. Not `lib.hampel`.
+6. **Donchian width, quiet.** Donchian; the width is the prior high minus the prior low. Long while that 20-day width is below its 100-day median and the close is above the midpoint of the same prior range. Today is outside the window. The median length stays 100. Not `lib.dmid` and not `lib.qdon`.
+7. **Two inside days.** Crabel, *Day Trading with Short Term Price Patterns and Opening Range Breakout* (1990). Two consecutive inside bars, then a later close above the second bar's high, above the 200-day SMA. A close through the second bar's low drops the setup. The long is that break close. Not `lib.inside_day`.
+8. **Gap and go.** Crabel, same book. The open is above yesterday's high and the close is above the open, above the 200-day SMA. The long is that close. Not `lib.wide`. The open has to clear yesterday's high, so a one-basis-point open gap is not enough.
+9. **Overnight variance gap, quiet.** Yang and Zhang, "Drift-Independent Volatility Estimation Based on High, Low, Open, and Close Prices", *Journal of Business* (2000). The 20-day Yang-Zhang variance minus the 20-day close-to-close variance, long while that difference is below its 100-day median and the close is above the 200-day SMA. The median length stays 100. Not `lib.yz`.
+10. **Rogers-Satchell below Parkinson.** Rogers and Satchell, "Estimating Variance from High, Low and Closing Prices", *Annals of Applied Probability* (1991), against Parkinson, *Journal of Business* (1980). Long while the 20-day Rogers-Satchell variance is below the 20-day Parkinson variance and the close is above the 200-day SMA. Not `lib.parkcc` and not `lib.rsvol`.
+11. **Volatility of volatility, quiet.** Engle, "Autoregressive Conditional Heteroscedasticity with Estimates of the Variance of United Kingdom Inflation", *Econometrica* (1982). The standard deviation of the last 20 daily Parkinson terms, long while it is below its 100-day median and the close is above the 200-day SMA. The median length stays 100. Not `lib.park`.
+12. **Intraday drift.** Lou, Polk, and Skouras, "A tug of war: Overnight versus intraday expected returns", *Journal of Financial Economics* (2019). Long while the sum of the last 20 open-to-close log returns is positive. Today's open and close are both known at the close. This is the session move, not the open gap.
+13. **Prior week's midpoint.** Rhea, *The Dow Theory* (1932). Long while the close is above the midpoint of the prior completed Monday-Sunday week and above the 200-day SMA. A week that has not ended is not the reference. Not `lib.wkhigh` and not `lib.dmid`.
+14. **NR4 break.** Crabel, same book as the two inside days. A bar whose high-low range is the narrowest of the last four, then a later close above that bar's high, above the 200-day SMA. A close through that bar's low drops the setup. The long is the break close. Not `lib.nr7`.
+15. **Median runs.** Swed and Eisenhart, "Tables for Testing Randomness of Grouping in a Sequence of Alternatives", *Annals of Mathematical Statistics* (1943). Runs of closes above and below the median of the last 20 closes. Long while that count is below 10 and the close is above the median. The 10 stays fixed. Not `lib.runs`, which counts up and down steps.
+16. **CUSUM of squares, reset.** Brown, Durbin, and Evans, "Techniques for Testing the Constancy of Regression Relationships over Time", *Journal of the Royal Statistical Society* (1975). The cumulative sum of squared demeaned log returns, reset to zero on the day it exceeds the mean of the prior 50 squared shocks. Long while it is at or below that mean and the close is above the 200-day SMA. The reset is what the level CUSUM lacked. The 50 stays fixed.
+17. **Prior month's high.** A completed UTC month. Long while the close is above the high of the prior completed month and above the 200-day SMA. The month that is still in progress is not the reference. Not `lib.faber10m` and not a one-trade-a-year calendar: the long lasts as long as the close holds that high.
+18. **Session semi-variance, quiet.** Markowitz, *Portfolio Selection* (1959), applied to the open-to-close log return. The root mean square of the negative session returns over 20 days, long while it is below its 100-day median and the close is above the 200-day SMA. The median length stays 100. Not `lib.svar` and not `lib.ocskew`.
+19. **Lower-shadow imbalance.** Nison's shadows, counted as a ratio rather than a single hammer. The average over 10 days of (lower shadow - upper shadow) / range, long while it is positive and the close is above the 200-day SMA. A zero range contributes 0. The zero stays fixed. Not `lib.hammer` and not `lib.uhalf`.
+20. **Failed prior-low break.** Crabel's reversal, apart from the hook. The low takes out the low of the prior two bars and the close finishes above yesterday's close, above the 200-day SMA. The long is that close. Not `lib.hook` and not `lib.oops`.
 
-Twenty-two of these can be coded on the current OHLC bars. None of them
+Twenty of these can be coded on the current OHLC bars. None of them
 is a one-trade-a-year calendar.

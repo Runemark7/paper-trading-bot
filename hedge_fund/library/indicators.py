@@ -2903,26 +2903,34 @@ def semivariance_share(close: np.ndarray, n: int) -> np.ndarray:
 def hurst_rs(close: np.ndarray, n: int) -> np.ndarray:
     """Rescaled-range Hurst exponent of the last ``n`` log returns.
 
-    Finite at index ``n``. ``R`` is the range of the cumulative demeaned
-    returns and ``S`` is their population standard deviation.
-    ``H = log(R/S) / log(n)``. A window with no variation is 0.5, which is
-    not a reading above one half.
+    Finite at index ``n`` when those returns exist. ``R`` is the range of
+    the cumulative demeaned returns and ``S`` is their population standard
+    deviation. ``H = log(R/S) / log(n)``. A window with no variation is 0.5,
+    which is not a reading above one half. A non-positive close leaves only
+    the windows that use that bar undefined. Later windows are computed.
     """
     close = np.asarray(close, dtype=np.float64)
     out = _nan(close.shape[0])
     n = int(n)
-    rets = _log_returns(close)
-    if n < 2 or close.shape[0] <= n or not bool(np.all(np.isfinite(rets[1:]))):
+    m = int(close.shape[0])
+    if n < 2 or m <= n:
         return out
+    rets = _nan(m)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        ok = (close[1:] > 0.0) & (close[:-1] > 0.0)
+        rets[1:][ok] = np.log(close[1:][ok] / close[:-1][ok])
     windows = sliding_window_view(rets[1:], n)
-    dev = windows - windows.mean(axis=1)[:, None]
+    finite = np.isfinite(windows).all(axis=1)
+    safe = np.where(finite[:, None], windows, 0.0)
+    dev = safe - safe.mean(axis=1)[:, None]
     cum = np.cumsum(dev, axis=1)
     span = cum.max(axis=1) - cum.min(axis=1)
-    scale = windows.std(axis=1, ddof=0)
-    hurst = np.full(span.shape[0], 0.5, dtype=np.float64)
-    # A window whose returns differ only by float noise is not persistence.
-    ok = (scale > 1e-8) & (span > 0.0)
-    hurst[ok] = np.log(span[ok] / scale[ok]) / np.log(float(n))
+    scale = safe.std(axis=1, ddof=0)
+    hurst = np.full(span.shape[0], np.nan, dtype=np.float64)
+    quiet = finite & ~((scale > 1e-8) & (span > 0.0))
+    usable = finite & (scale > 1e-8) & (span > 0.0)
+    hurst[quiet] = 0.5
+    hurst[usable] = np.log(span[usable] / scale[usable]) / np.log(float(n))
     out[n : n + hurst.shape[0]] = hurst
     return out
 
@@ -3101,23 +3109,39 @@ def turning_point_count(close: np.ndarray, n: int) -> np.ndarray:
     return out
 
 
-def overnight_sum(open_: np.ndarray, close: np.ndarray, n: int) -> np.ndarray:
-    """Sum of the last ``n`` close-to-open log returns. Finite at index ``n``.
+def leverage_corr(close: np.ndarray, n: int) -> np.ndarray:
+    """Correlation of the log return with the previous squared log return.
 
-    Today's open is known at today's close. Index 0 has no prior close. A
-    non-positive price leaves the series undefined.
+    Finite at index ``n + 1``. The window is ``n`` pairs ``(r_t, r_{t-1}^2)``.
+    A leg with no variation is 0, which is not a negative reading. A
+    non-positive close leaves only the pairs that use that bar undefined.
     """
-    open_ = np.asarray(open_, dtype=np.float64)
     close = np.asarray(close, dtype=np.float64)
     out = _nan(close.shape[0])
     n = int(n)
     m = int(close.shape[0])
-    if n < 1 or m <= n:
+    if n < 3 or m <= n + 1:
         return out
-    if not bool(np.all(open_[1:] > 0.0)) or not bool(np.all(close[:-1] > 0.0)):
-        return out
-    raw = np.log(open_[1:] / close[:-1])
-    out[n:] = sliding_window_view(raw, n).sum(axis=1)
+    rets = _nan(m)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        ok = (close[1:] > 0.0) & (close[:-1] > 0.0)
+        rets[1:][ok] = np.log(close[1:][ok] / close[:-1][ok])
+    left = rets[2:]
+    right = rets[1:-1] ** 2
+    left_w = sliding_window_view(left, n)
+    right_w = sliding_window_view(right, n)
+    finite = np.isfinite(left_w).all(axis=1) & np.isfinite(right_w).all(axis=1)
+    safe_l = np.where(finite[:, None], left_w, 0.0)
+    safe_r = np.where(finite[:, None], right_w, 0.0)
+    left_dev = safe_l - safe_l.mean(axis=1)[:, None]
+    right_dev = safe_r - safe_r.mean(axis=1)[:, None]
+    num = np.sum(left_dev * right_dev, axis=1)
+    den = np.sqrt(np.sum(left_dev * left_dev, axis=1) * np.sum(right_dev * right_dev, axis=1))
+    rho = np.full(num.shape[0], np.nan, dtype=np.float64)
+    usable = finite & (den > 1e-18)
+    rho[finite & ~usable] = 0.0
+    rho[usable] = num[usable] / den[usable]
+    out[n + 1 : n + 1 + rho.shape[0]] = rho
     return out
 
 
@@ -3181,36 +3205,6 @@ def close_to_close_variance(close: np.ndarray, n: int) -> np.ndarray:
         return out
     windows = sliding_window_view(rets[1:], n)
     out[n:] = windows.var(axis=1, ddof=0)
-    return out
-
-
-def durbin_watson(close: np.ndarray, n: int) -> np.ndarray:
-    """Durbin-Watson statistic of the last ``n`` regression residuals.
-
-    Finite at index ``n - 1``. The regression is the close on a straight
-    time index inside the window. ``sum(diff(e)^2) / sum(e^2)``. A perfect
-    line is 2, which is not below 2.
-    """
-    close = np.asarray(close, dtype=np.float64)
-    out = _nan(close.shape[0])
-    n = int(n)
-    if n < 3 or close.shape[0] < n:
-        return out
-    x = np.arange(n, dtype=np.float64)
-    x_mean = float(x.mean())
-    x_dev = x - x_mean
-    ssx = float(np.dot(x_dev, x_dev))
-    windows = sliding_window_view(close, n)
-    y_mean = windows.mean(axis=1)
-    slope = ((windows - y_mean[:, None]) @ x_dev) / ssx
-    intercept = y_mean - slope * x_mean
-    resid = windows - (intercept[:, None] + slope[:, None] * x)
-    sse = np.sum(resid * resid, axis=1)
-    num = np.sum(np.diff(resid, axis=1) ** 2, axis=1)
-    stat = np.full(sse.shape[0], 2.0, dtype=np.float64)
-    ok = sse > 1e-18
-    stat[ok] = num[ok] / sse[ok]
-    out[n - 1 :] = stat
     return out
 
 

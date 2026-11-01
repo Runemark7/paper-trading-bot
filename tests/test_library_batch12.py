@@ -21,13 +21,13 @@ from hedge_fund.library.indicators import (
     bollinger_percent_b,
     close_to_close_variance,
     corwin_schultz,
-    durbin_watson,
     hampel_mad,
     hurst_rs,
+    leverage_corr,
     open_close_skewness,
-    overnight_sum,
     parkinson,
     partial_autocorr_lag2,
+    prior_max,
     realized_vol,
     roll_spread,
     rolling_median_skip_leading,
@@ -47,8 +47,8 @@ BATCH11_END = 231
 NEW = (
     "hampel", "svar", "hurst", "volr", "starc",
     "pctb", "cspread", "roll", "pacf", "turns",
-    "onight", "ablock", "uhalf", "trimb", "parkcc",
-    "wide", "highs3", "dw", "ocskew", "mdd",
+    "lev", "ablock", "uhalf", "trimb", "parkcc",
+    "wide", "highs3", "cchan", "ocskew", "mdd",
 )
 CENTERS = {
     "hampel": {"n": 20, "trend": 200},
@@ -61,14 +61,14 @@ CENTERS = {
     "roll": {"n": 20, "trend": 200},
     "pacf": {"n": 30},
     "turns": {"n": 20},
-    "onight": {"n": 20},
+    "lev": {"n": 20, "trend": 200},
     "ablock": {"trend": 200},
     "uhalf": {"n": 10},
     "trimb": {"n": 20, "trend": 200},
     "parkcc": {"n": 20, "trend": 200},
     "wide": {"n": 10, "trend": 200},
     "highs3": {"trend": 200},
-    "dw": {"n": 20, "trend": 200},
+    "cchan": {"n": 20},
     "ocskew": {"n": 20, "trend": 200},
     "mdd": {"n": 20, "trend": 200},
 }
@@ -88,8 +88,10 @@ def _ready_index(key: str, params: dict, bars: DailyBars | None = None) -> int:
         return n
     if key == "pctb":
         return n - 1
-    if key in ("pacf", "onight", "turns"):
+    if key in ("pacf", "turns", "cchan"):
         return n
+    if key == "lev":
+        return max(n + 1, trend - 1)
     if key == "ablock":
         return max(2, trend - 1)
     if key == "uhalf":
@@ -98,7 +100,7 @@ def _ready_index(key: str, params: dict, bars: DailyBars | None = None) -> int:
         return max(n, trend - 1)
     if key == "highs3":
         return max(2, trend - 1)
-    if key in ("dw", "ocskew"):
+    if key == "ocskew":
         return max(n - 1, trend - 1)
     if key == "mdd":
         return max(n + 98, trend - 1)
@@ -168,7 +170,7 @@ class CatalogOrderTests(unittest.TestCase):
     def test_skipped_near_copies_are_not_keys(self):
         keys = {s.key for s in LIBRARY}
         for skipped in (
-            "cusum", "tower", "onneck", "on_neck",
+            "cusum", "tower", "dw", "onight", "onneck", "on_neck",
             "coppock", "obv", "cmf", "vwap", "sma200w",
         ):
             self.assertNotIn(skipped, keys)
@@ -363,17 +365,44 @@ class OnOffTests(unittest.TestCase):
         self.assertGreaterEqual(float(turning_point_count(chop, 20)[20]), 12.0)
         self.assertFalse(bool(strategy_by_key("turns").signal(make_bars(chop, chop), {"n": 20})[20]))
 
-    def test_overnight_sum_uses_the_open_and_not_the_close(self):
-        close = np.full(25, 100.0)
-        open_ = np.full(25, 100.0)
-        open_[1:] = 101.0
-        value = overnight_sum(open_, close, 20)
-        self.assertAlmostEqual(float(value[20]), 20.0 * np.log(1.01), places=8)
-        self.assertTrue(np.isnan(value[19]))
-        bars = make_bars(open_, close, highs=np.maximum(open_, close) + 1.0, lows=np.minimum(open_, close) - 1.0)
-        self.assertTrue(bool(strategy_by_key("onight").signal(bars, {"n": 20})[20]))
-        flat = make_bars(close, close)
-        self.assertFalse(bool(strategy_by_key("onight").signal(flat, {"n": 20})[20]))
+    def test_leverage_correlation_is_return_against_lagged_square(self):
+        # A large positive return follows a quiet bar, so r_t and r_{t-1}^2
+        # move in opposite directions.
+        rets = np.resize(np.array([0.2, -0.01]), 40)
+        close = 100.0 * np.exp(np.cumsum(rets))
+        value = leverage_corr(close, 20)
+        self.assertTrue(np.isnan(value[20]))
+        self.assertLess(float(value[21]), 0.0)
+        bars = make_bars(close, close)
+        trend = sma(close, 5)
+        with np.errstate(invalid="ignore"):
+            expected = np.isfinite(value) & (value < 0.0) & np.isfinite(trend) & (close > trend)
+        np.testing.assert_array_equal(
+            strategy_by_key("lev").signal(bars, {"n": 20, "trend": 5}),
+            expected,
+        )
+        bad = close.copy()
+        bad[25] = 0.0
+        broken = leverage_corr(bad, 8)
+        self.assertTrue(np.isfinite(broken[21]))
+        self.assertTrue(np.isnan(broken[25]))
+        # Pairs that use the zero close are t=25, 26 and 27. An 8-pair
+        # window is clean again once it starts at pair 28, which ends at 35.
+        self.assertTrue(np.isnan(broken[27]))
+        self.assertTrue(np.isfinite(broken[35]))
+
+    def test_hurst_keeps_windows_that_miss_a_bad_bar(self):
+        rng = np.random.default_rng(3)
+        close = 100.0 * np.exp(np.cumsum(rng.normal(0.001, 0.02, 80)))
+        good = hurst_rs(close, 16)
+        self.assertTrue(np.isfinite(good[20]))
+        bad = close.copy()
+        bad[30] = 0.0
+        value = hurst_rs(bad, 16)
+        np.testing.assert_allclose(value[:30], good[:30])
+        self.assertTrue(np.isnan(value[30]))
+        self.assertTrue(np.isnan(value[46]))
+        self.assertTrue(np.isfinite(value[47]))
 
     def test_advance_block_needs_longer_upper_shadows(self):
         # Three white candles, rising closes, and upper shadows 0.1, 0.3, 0.6.
@@ -466,22 +495,23 @@ class OnOffTests(unittest.TestCase):
         self.assertTrue(bool(signal[4]))
         self.assertFalse(bool(strategy_by_key("lows3").signal(bars, {"trend": 2})[4]))
 
-    def test_durbin_watson_of_a_line_is_not_below_two(self):
-        close = 100.0 + np.arange(30, dtype=np.float64)
-        stat = durbin_watson(close, 20)
-        self.assertTrue(np.isnan(stat[18]))
-        self.assertAlmostEqual(float(stat[19]), 2.0, places=6)
-        curved = close + np.sin(np.linspace(0.0, 8.0, 30))
-        sticky = durbin_watson(curved, 20)
-        self.assertLess(float(sticky[-1]), 2.0)
-        bars = make_bars(curved, curved)
-        trend = sma(curved, 10)
-        with np.errstate(invalid="ignore"):
-            expected = np.isfinite(sticky) & (sticky < 2.0) & np.isfinite(trend) & (curved > trend)
-        np.testing.assert_array_equal(
-            strategy_by_key("dw").signal(bars, {"n": 20, "trend": 10}),
-            expected,
-        )
+    def test_close_channel_excludes_today(self):
+        close = np.arange(1, 30, dtype=np.float64)
+        level = prior_max(close, 5)
+        self.assertTrue(np.isnan(level[4]))
+        self.assertAlmostEqual(float(level[5]), 5.0, places=8)
+        bars = make_bars(close, close)
+        signal = strategy_by_key("cchan").signal(bars, {"n": 5})
+        self.assertFalse(bool(signal[4]))
+        self.assertTrue(bool(signal[5]))
+        close[12] = 3.0
+        inside = make_bars(close, close)
+        self.assertFalse(bool(strategy_by_key("cchan").signal(inside, {"n": 5})[12]))
+        walk = random_walk(80, seed=3)
+        self.assertFalse(np.array_equal(
+            strategy_by_key("cchan").signal(walk, {"n": 20}),
+            strategy_by_key("donchian20").signal(walk, {"n": 20}),
+        ))
 
     def test_open_to_close_skew_ignores_the_gap(self):
         open_ = np.full(25, 100.0)
@@ -525,14 +555,14 @@ class OnOffTests(unittest.TestCase):
             ("roll", "ac1"),
             ("pacf", "ac1"),
             ("turns", "runs"),
-            ("onight", "tsmom30d"),
+            ("lev", "ac1"),
             ("ablock", "soldiers"),
             ("uhalf", "clv"),
             ("trimb", "qdon"),
             ("parkcc", "park"),
             ("wide", "nr7"),
             ("highs3", "lows3"),
-            ("dw", "rsquared"),
+            ("cchan", "donchian20"),
             ("ocskew", "skew"),
             ("mdd", "ulcer"),
         )
@@ -566,3 +596,20 @@ class TapeTradeTests(unittest.TestCase):
                 start=data.score_index, end=len(bars), stop_frac=strategy.stop_frac,
             )
             self.assertGreaterEqual(len(result.trades), 3, key)
+
+    def test_new_signals_are_not_the_trend_filter(self):
+        """A rule that matches close-above-SMA on 95% of scored days is that filter."""
+        bars, data = self._bars()
+        for key in NEW:
+            strategy = strategy_by_key(key)
+            signal = strategy.signal(bars, strategy.center)
+            trend_n = int(strategy.center.get("trend", 200))
+            trend = sma(bars.close, trend_n)
+            scored = slice(data.score_index, None)
+            finite = np.isfinite(trend[scored])
+            above = bars.close[scored][finite] > trend[scored][finite]
+            agree = float(np.mean(signal[scored][finite] == above))
+            self.assertLess(
+                agree, 0.95,
+                f"{key} agrees with close>SMA({trend_n}) on {agree:.1%} of scored days",
+            )

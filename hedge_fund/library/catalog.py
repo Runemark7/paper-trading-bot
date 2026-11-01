@@ -158,11 +158,10 @@ from hedge_fund.library.indicators import (
     roll_spread,
     partial_autocorr_lag2,
     turning_point_count,
-    overnight_sum,
+    leverage_corr,
     upper_half_count,
     true_range_imbalance,
     close_to_close_variance,
-    durbin_watson,
     open_close_skewness,
     window_max_drawdown,
 )
@@ -3580,11 +3579,13 @@ def _fewer_turns(bars: DailyBars, p: dict) -> np.ndarray:
         return quiet & np.isfinite(earlier) & (bars.close > earlier)
 
 
-def _overnight_up(bars: DailyBars, p: dict) -> np.ndarray:
-    """Long while the sum of the last ``n`` close-to-open log returns is positive."""
-    value = overnight_sum(bars.open, bars.close, int(p["n"]))
+def _leverage_up(bars: DailyBars, p: dict) -> np.ndarray:
+    """Negative leverage correlation and the close above the trend SMA. The zero stays fixed."""
+    value = leverage_corr(bars.close, int(p["n"]))
+    trend = sma(bars.close, int(p["trend"]))
     with np.errstate(invalid="ignore"):
-        return np.isfinite(value) & (value > 0.0)
+        negative = np.isfinite(value) & (value < 0.0)
+        return negative & np.isfinite(trend) & (bars.close > trend)
 
 
 def _advance_block(bars: DailyBars, p: dict) -> np.ndarray:
@@ -3666,13 +3667,13 @@ def _three_highs(bars: DailyBars, p: dict) -> np.ndarray:
     return out
 
 
-def _dw_quiet(bars: DailyBars, p: dict) -> np.ndarray:
-    """Durbin-Watson below 2 and the close above the trend SMA. The 2 stays fixed."""
-    value = durbin_watson(bars.close, int(p["n"]))
-    trend = sma(bars.close, int(p["trend"]))
-    with np.errstate(invalid="ignore"):
-        sticky = np.isfinite(value) & (value < 2.0)
-        return sticky & np.isfinite(trend) & (bars.close > trend)
+def _close_channel(bars: DailyBars, p: dict) -> np.ndarray:
+    """Long while the close is above the highest close of the prior ``n`` days.
+
+    Today is outside the window.
+    """
+    level = prior_max(bars.close, int(p["n"]))
+    return _finite_gt(bars.close, level)
 
 
 def _ocskew_quiet(bars: DailyBars, p: dict) -> np.ndarray:
@@ -4308,11 +4309,13 @@ def signal_ready(strategy: LibraryStrategy, bars: DailyBars, params: dict) -> np
         return _defined_from(n, int(params["n"]))
     if key == "pctb":
         return _defined_from(n, int(params["n"]) - 1)
-    if key in ("pacf", "onight"):
+    if key in ("pacf", "turns", "cchan"):
+        # ``cchan`` excludes today, so the prior close window is finite at n.
+        # ``pacf`` and ``turns`` are finite at n as well.
         return _defined_from(n, int(params["n"]))
-    if key == "turns":
-        # The window of n closes exists at n - 1. The close n days ago starts at n.
-        return _defined_from(n, int(params["n"]))
+    if key == "lev":
+        # n pairs of (r_t, r_{t-1}^2) end at index n + 1.
+        return _defined_from(n, max(int(params["n"]) + 1, int(params["trend"]) - 1))
     if key == "ablock":
         return _defined_from(n, max(2, int(params["trend"]) - 1))
     if key == "uhalf":
@@ -4321,7 +4324,7 @@ def signal_ready(strategy: LibraryStrategy, bars: DailyBars, params: dict) -> np
         return _defined_from(n, max(int(params["n"]), int(params["trend"]) - 1))
     if key == "highs3":
         return _defined_from(n, max(2, int(params["trend"]) - 1))
-    if key in ("dw", "ocskew"):
+    if key == "ocskew":
         # The n-bar window is finite at n - 1.
         return _defined_from(n, max(int(params["n"]) - 1, int(params["trend"]) - 1))
     if key == "mdd":
@@ -11556,9 +11559,11 @@ LIBRARY: tuple[LibraryStrategy, ...] = (
     # Batch 12 (2026-11-01). Appended after the batch-11 twenty. Claims
     # walk this tuple in order, so these names are leased only once the
     # names above are tested or on the book. Do not insert above ``bbw``.
-    # Not keys: the one-sided CUSUM, which stays above zero on this tape,
-    # and the tower bottom, which is another long-black then long-white
-    # reversal next to lib.morning and lib.engulf.
+    # Not keys: the one-sided CUSUM, which stays above zero on this tape;
+    # the tower bottom, which repeats the long-black then long-white
+    # reversal; Durbin-Watson on the price residuals, which is the close
+    # above the 200-day SMA; and the overnight sum, which is the prior
+    # close on a 24-hour tape.
     LibraryStrategy(
         key="hampel",
         title="Hampel MAD below its median, above the 200-day SMA",
@@ -11927,36 +11932,40 @@ LIBRARY: tuple[LibraryStrategy, ...] = (
         ),
     ),
     LibraryStrategy(
-        key="onight",
-        title="Positive sum of the last 20 overnight log returns",
-        family="momentum",
+        key="lev",
+        title="Negative leverage correlation above the 200-day SMA",
+        family="mean_reversion",
         evaluation="daily",
-        params=(Param("n", 20, (15, 30)),),
-        signal=_overnight_up,
+        params=(
+            Param("n", 20, (15, 30)),
+            Param("trend", 200, (150, 250)),
+        ),
+        signal=_leverage_up,
         citation=Citation(
-            authors="Lou, Polk & Skouras",
-            year=2019,
-            title="A tug of war: Overnight versus intraday expected returns",
-            venue="Journal of Financial Economics 134(1), 192-213",
+            authors="Christie",
+            year=1982,
+            title="The stochastic behavior of common stock variances: Value, leverage and interest rate effects",
+            venue="Journal of Financial Economics 10(4), 407-432",
             peer_reviewed=True,
-            link="https://doi.org/10.1016/j.jfineco.2019.03.011",
+            link="https://doi.org/10.1016/0304-405X(82)90018-6",
             tested_rule=(
-                "Close-to-close returns split into the overnight piece, prior "
-                "close to the open, and the intraday piece, open to the close. "
-                "Stocks with high recent overnight returns keep earning "
-                "overnight, and the intraday piece offsets it. The sort is "
-                "cross-sectional."
+                "Equity variance rises when the stock price falls. Christie "
+                "relates that to leverage: a lower price raises the debt-equity "
+                "ratio and the volatility of the equity. The evidence is the "
+                "negative relation between returns and subsequent variance. He "
+                "did not publish a timing switch."
             ),
             implemented_rule=(
-                "Long while the sum of the last 20 close-to-open log returns "
-                "is positive. Today's open is known before today's close. The "
-                "first bar has no prior close."
+                "Long while the correlation of the daily log return with the "
+                "previous day's squared log return, over 20 pairs, is negative "
+                "and the close is above the 200-day SMA. The zero stays fixed. "
+                "A leg with no variation is 0, which is not long."
             ),
             differences=(
-                "One asset, so the sign of the overnight sum replaces the "
-                "cross-sectional decile. lib.tsmom30d is the close-to-close "
-                "return over a fixed window. There is no intraday short leg. "
-                "Next-open fills, BTC."
+                "lib.ac1 is the lag-1 correlation of the signed log returns, "
+                "not the correlation of the return with the previous squared "
+                "return. One asset, so there is no cross-section of variances. "
+                "The 200-day SMA is not in the paper. Next-open fills, BTC."
             ),
         ),
     ),
@@ -12172,40 +12181,34 @@ LIBRARY: tuple[LibraryStrategy, ...] = (
         ),
     ),
     LibraryStrategy(
-        key="dw",
-        title="Durbin-Watson of the regression residual below 2, above the 200-day SMA",
-        family="trend",
+        key="cchan",
+        title="Close above the highest close of the prior 20 days",
+        family="breakout",
         evaluation="daily",
-        params=(
-            Param("n", 20, (15, 30)),
-            Param("trend", 200, (150, 250)),
-        ),
-        signal=_dw_quiet,
+        params=(Param("n", 20, (14, 30)),),
+        signal=_close_channel,
         citation=Citation(
-            authors="Durbin & Watson",
-            year=1950,
-            title="Testing for Serial Correlation in Least Squares Regression. I",
-            venue="Biometrika 37(3-4), 409-428",
-            peer_reviewed=True,
-            link="https://doi.org/10.1093/biomet/37.3-4.409",
+            authors="Donchian",
+            year=0,
+            title="4-week rule (the prior highest close)",
+            venue="Practitioner commodity channel; restated in Faith, Way of the Turtle (2007)",
+            peer_reviewed=False,
             tested_rule=(
-                "The statistic is the sum of squared differences of successive "
-                "least-squares residuals divided by the residual sum of squares. "
-                "A value below 2 is positive serial correlation of the "
-                "residuals. They derived the bounds for the test. They did not "
-                "trade the statistic."
+                "Donchian's channel is the highest high and the lowest low of "
+                "the prior window. The published trade buys a break of the "
+                "high. The highest close of that same prior window is the "
+                "close channel: a close above it is holding a new closing high."
             ),
             implemented_rule=(
-                "Long while the Durbin-Watson statistic of the last 20 closes, "
-                "regressed on a straight time index, is below 2 and the close "
-                "is above the 200-day SMA. The 2 stays fixed. A perfect line "
-                "is 2, which is not long."
+                "Long while the close is above the highest close of the prior "
+                "20 days. Today is outside the window. There is no trend average."
             ),
             differences=(
-                "lib.ac1 is the lag-1 correlation of log returns, not of the "
-                "residuals from a fitted line. lib.rsquared asks how much of "
-                "the same window the line explains, not whether the residuals "
-                "are sticky. Next-open fills, BTC."
+                "lib.donchian20 buys a new high and exits on the prior low. "
+                "This name uses closes, and the long lasts only while the "
+                "close holds that prior closing high. lib.dmid is the midpoint "
+                "of the prior high and low. A close equal to the prior highest "
+                "close is not long. Next-open fills, BTC."
             ),
         ),
     ),
