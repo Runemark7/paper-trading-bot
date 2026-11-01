@@ -20,6 +20,7 @@ import {
   toneOf,
   usd,
 } from "../components/kit";
+import { ScrollAfter } from "../components/ScrollAfter";
 import TradeLog from "../components/TradeLog";
 import { championDetailPath } from "../status/championPath";
 import { farmStatusLabel } from "../status/FarmControl";
@@ -175,36 +176,40 @@ export default function Overview() {
             Admitted strategies trade live prices in their own $10,000 paper account. A champion succeeds only if it is
             profitable after fees.
           </p>
-          <ul className="mt-4 space-y-2 min-w-0">
-            {champs.isPending ? (
+          {champs.isPending ? (
+            <div className="mt-4">
               <SkeletonRows rows={2} />
-            ) : !active.length ? (
-              <li className="text-sm text-white/50">No champions admitted yet. The book falls back to the sma_stack baseline.</li>
-            ) : (
-              active.map((c) => {
-                const t = byName.get(c.name);
-                const pnl = t ? (t.equity != null ? t.equity - t.start_cash : t.realized_pnl) : null;
-                return (
-                  <li key={c.name}>
-                    <Link
-                      to={championDetailPath(c.name)}
-                      className="flex items-center justify-between gap-3 rounded-lg bg-white/[0.04] px-3 py-2.5 hover:bg-white/[0.07] min-w-0"
-                    >
-                      <span className="min-w-0">
-                        <BlockChips name={c.name} />
-                        <span className="mt-1 block text-[11px] text-white/45">
-                          {t ? `${t.closed} closed · ${t.open} open` : `${c.closed} closed`} · since {fmtChampionSince(c.champion_since)}
+            </div>
+          ) : !active.length ? (
+            <p className="mt-4 text-sm text-white/50">No champions admitted yet. The book falls back to the sma_stack baseline.</p>
+          ) : (
+            <ScrollAfter className="mt-4" label="Admitted champions" itemCount={active.length}>
+              <ul className="space-y-2 min-w-0">
+                {active.map((c) => {
+                  const t = byName.get(c.name);
+                  const pnl = t ? (t.equity != null ? t.equity - t.start_cash : t.realized_pnl) : null;
+                  return (
+                    <li key={c.name} data-scroll-item>
+                      <Link
+                        to={championDetailPath(c.name)}
+                        className="flex items-center justify-between gap-3 rounded-lg bg-white/[0.04] px-3 py-2.5 hover:bg-white/[0.07] min-w-0"
+                      >
+                        <span className="min-w-0">
+                          <BlockChips name={c.name} />
+                          <span className="mt-1 block text-[11px] text-white/45">
+                            {t ? `${t.closed} closed · ${t.open} open` : `${c.closed} closed`} · since {fmtChampionSince(c.champion_since)}
+                          </span>
                         </span>
-                      </span>
-                      <span className={`shrink-0 text-sm font-semibold tabular-nums ${pnl == null ? "text-white/40" : pnl >= 0 ? "text-emerald-300" : "text-rose-300"}`}>
-                        {usd(pnl, 2, true)}
-                      </span>
-                    </Link>
-                  </li>
-                );
-              })
-            )}
-          </ul>
+                        <span className={`shrink-0 text-sm font-semibold tabular-nums ${pnl == null ? "text-white/40" : pnl >= 0 ? "text-emerald-300" : "text-rose-300"}`}>
+                          {usd(pnl, 2, true)}
+                        </span>
+                      </Link>
+                    </li>
+                  );
+                })}
+              </ul>
+            </ScrollAfter>
+          )}
           <div className="mt-auto pt-4">
             <Link
               to="/champions"

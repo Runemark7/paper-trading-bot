@@ -8,7 +8,9 @@ is evaluated on a request.
 from __future__ import annotations
 
 import json
+import math
 import os
+import re
 import threading
 from pathlib import Path
 
@@ -167,14 +169,191 @@ def _slim(record: dict) -> dict:
     return row
 
 
-def library_result_view(record: dict | None) -> dict | None:
+# Buy-and-hold book P&L is the warning threshold, not the window-sum
+# ``bh_oos_pnl``. The first number in a warning is the test-year book;
+# a second number is the holdout book.
+_BH_NUMBER = re.compile(r"buy-and-hold\s+(-?[0-9]+(?:\.[0-9]+)?)")
+
+
+def _finite(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    if not math.isfinite(number):
+        return None
+    return number
+
+
+def _library_block(record: dict | None) -> dict:
+    if not isinstance(record, dict):
+        return {}
+    lib = record.get("library")
+    return lib if isinstance(lib, dict) else {}
+
+
+def _bh_numbers_from_warnings(record: dict | None) -> list[float]:
+    if not isinstance(record, dict):
+        return []
+    warnings = record.get("warnings")
+    if not isinstance(warnings, list):
+        return []
+    found: list[float] = []
+    for item in warnings:
+        if not isinstance(item, str):
+            continue
+        for match in _BH_NUMBER.findall(item):
+            number = _finite(float(match))
+            if number is not None:
+                found.append(number)
+    return found
+
+
+def _check_block(record: dict | None, key: str) -> dict | None:
+    if not isinstance(record, dict):
+        return None
+    nested = _library_block(record).get("checks")
+    if isinstance(nested, dict) and isinstance(nested.get(key), dict):
+        return nested[key]
+    top = record.get("checks")
+    if isinstance(top, dict) and isinstance(top.get(key), dict):
+        return top[key]
+    return None
+
+
+def _book_bh(record: dict | None) -> float | None:
+    """Continuous-book buy-and-hold over the test years.
+
+    ``bh_oos_pnl`` on the row is the sum of rebased windows, which is not
+    the book the gate compares. The check threshold is that book.
+    """
+    block = _check_block(record, "buy_and_hold")
+    if isinstance(block, dict):
+        number = _finite(block.get("threshold"))
+        if number is not None:
+            return number
+    nums = _bh_numbers_from_warnings(record)
+    return nums[0] if nums else None
+
+
+def _holdout_bh(record: dict | None) -> float | None:
+    hold = _library_block(record).get("holdout")
+    bh = hold.get("bh") if isinstance(hold, dict) else None
+    if isinstance(bh, dict):
+        number = _finite(bh.get("net_pnl"))
+        if number is not None:
+            return number
+    nums = _bh_numbers_from_warnings(record)
+    return nums[1] if len(nums) > 1 else None
+
+
+def _gate_number(record: dict | None, key: str) -> float | None:
+    if not isinstance(record, dict):
+        return None
+    gate = record.get("gate_v4")
+    if isinstance(gate, dict):
+        number = _finite(gate.get(key))
+        if number is not None:
+            return number
+    return _finite(record.get(key))
+
+
+def _warning_checks(record: dict | None) -> list[str] | None:
+    lib = _library_block(record)
+    raw = None
+    if "warning_checks" in lib:
+        raw = lib.get("warning_checks")
+    elif isinstance(record, dict) and "warning_checks" in record:
+        raw = record.get("warning_checks")
+    else:
+        return None
+    if not isinstance(raw, list):
+        return None
+    return [item for item in raw if isinstance(item, str) and item]
+
+
+def _strategy_profile(name: object) -> dict:
+    """Static catalog sentence. Not an evaluation and not a gate decision."""
+    if not isinstance(name, str) or not name:
+        return {}
+    from hedge_fund.library.catalog import parse_variant
+
+    try:
+        strategy, params = parse_variant(name)
+    except ValueError:
+        return {}
+    link = strategy.citation.link.strip()
+    profile = {
+        "title": strategy.title,
+        "rule": strategy.citation.implemented_rule,
+        "citation": strategy.citation.short(),
+        "safety_stop_pct": round(float(strategy.stop_frac) * 100.0, 2),
+        "params": [
+            {"name": p.name, "value": int(params[p.name]), "unit": p.unit}
+            for p in strategy.params
+        ],
+    }
+    if link:
+        profile["citation_link"] = link
+    return profile
+
+
+def _fill_display(out: dict, record: dict | None, stored: dict | None) -> None:
+    """Add plain-language fields. Never replaces a P&L already taken from the log."""
+    def first(getter):
+        value = getter(record)
+        if value is None:
+            value = getter(stored)
+        return value
+
+    book = first(_book_bh)
+    hold_bh = first(_holdout_bh)
+    if book is not None:
+        out["bh_book_pnl"] = book
+    if hold_bh is not None:
+        out["bh_holdout_pnl"] = hold_bh
+    for key in ("dsr", "pbo"):
+        number = first(lambda row, key=key: _gate_number(row, key))
+        if number is not None:
+            out[key] = number
+    sharpe = first(lambda row: _finite(row.get("daily_sharpe")) if isinstance(row, dict) else None)
+    if sharpe is None:
+        sharpe = first(lambda row: _finite(row.get("sharpe")) if isinstance(row, dict) else None)
+    if sharpe is not None:
+        out["daily_sharpe"] = sharpe
+    hold_sharpe = first(
+        lambda row: _finite((_library_block(row).get("holdout") or {}).get("daily_sharpe"))
+        if isinstance(_library_block(row).get("holdout"), dict)
+        else None
+    )
+    if hold_sharpe is None:
+        hold_sharpe = first(lambda row: _finite(row.get("holdout_sharpe")) if isinstance(row, dict) else None)
+    if hold_sharpe is not None:
+        out["holdout_sharpe"] = hold_sharpe
+    checks = first(_warning_checks)
+    if checks:
+        out["warning_checks"] = checks
+    name = None
+    for source in (record, stored):
+        if isinstance(source, dict) and isinstance(source.get("strategy"), str):
+            name = source["strategy"]
+            break
+    for key, value in _strategy_profile(name).items():
+        out.setdefault(key, value)
+
+
+def library_result_view(record: dict | None, stored: dict | None = None) -> dict | None:
     """Read-only display slice of one library eval. Does not score a tape.
 
     Nested ``library.holdout`` / ``gate_v4`` win, matching ``_slim``. A
     trimmed discovery-results row has already copied the five P&L numbers
     to the top level and dropped those objects; those top-level keys are
-    the fallback.
+    the fallback. ``stored`` fills display-only gaps (buy-and-hold book,
+    Sharpe, DSR, PBO) from ``library_results.json`` and never overrides
+    the log's P&L.
     """
+    if not isinstance(record, dict):
+        record = stored if isinstance(stored, dict) else None
+        stored = None
     if not isinstance(record, dict):
         return None
     slim = _slim(record)
@@ -199,6 +378,53 @@ def library_result_view(record: dict | None) -> dict | None:
     if not isinstance(gate, dict) or "cost_holdout_pnl" not in gate:
         if out.get("cost_holdout_pnl") is None and "cost_holdout_pnl" in record:
             out["cost_holdout_pnl"] = record.get("cost_holdout_pnl")
+    _fill_display(out, record, stored if isinstance(stored, dict) else None)
+    return out
+
+
+def legacy_backtest_view(champ: dict, logged: dict | None = None) -> dict:
+    """Read-only 5-minute qualification fields. Omits anything that is not a real number.
+
+    Does not score a tape and does not decide admission. Missing figures are
+    left out so the UI can say they were not stored instead of printing a blank.
+    """
+    qual = champ.get("qual") if isinstance(champ, dict) and isinstance(champ.get("qual"), dict) else {}
+    logged = logged if isinstance(logged, dict) else {}
+
+    def num(*values: object) -> float | None:
+        for value in values:
+            number = _finite(value)
+            if number is not None:
+                return number
+        return None
+
+    out: dict = {"kind": "legacy_5m"}
+    numbers = {
+        "sharpe": num(qual.get("sharpe"), champ.get("sharpe_qual") if isinstance(champ, dict) else None, logged.get("sharpe")),
+        "win_rate_pct": num(champ.get("winrate_qual") if isinstance(champ, dict) else None, logged.get("win_rate_pct")),
+        "test_pnl": num(qual.get("test_pnl"), logged.get("test_pnl")),
+        "trades": num(qual.get("trades"), logged.get("trades")),
+        "daily_sharpe": num(qual.get("daily_sharpe"), logged.get("daily_sharpe")),
+        "bh_daily_sharpe": num(qual.get("bh_daily_sharpe"), logged.get("bh_daily_sharpe")),
+        "bh_oos_pnl": num(logged.get("bh_oos_pnl")),
+    }
+    for key, value in numbers.items():
+        if value is None:
+            continue
+        if key == "trades" and float(value).is_integer():
+            out[key] = int(value)
+        else:
+            out[key] = value
+    if "test_pnl" not in out:
+        out.pop("bh_oos_pnl", None)
+    texts = {
+        "timeframe": (champ.get("timeframe") if isinstance(champ, dict) else None) or logged.get("timeframe"),
+        "risk_policy": (champ.get("risk_policy") if isinstance(champ, dict) else None) or logged.get("risk_policy"),
+        "gate_rules": qual.get("gate_rules") or logged.get("gate_rules"),
+    }
+    for key, value in texts.items():
+        if isinstance(value, str) and value.strip():
+            out[key] = value.strip()
     return out
 
 

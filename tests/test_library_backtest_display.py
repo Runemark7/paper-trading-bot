@@ -166,12 +166,25 @@ class LibraryBacktestDisplayTests(unittest.TestCase):
         self.assertEqual(shown["cost_holdout_pnl"], COST_HOLD)
         self.assertIn(NEIGHBOURS, shown["warnings"])
         self.assertNotEqual(shown["oos_net_pnl"], 1.0)
+        self.assertEqual(shown["bh_book_pnl"], 271534.12)
+        self.assertNotEqual(shown.get("bh_book_pnl"), 81674.0)
+        self.assertNotIn("bh_oos_pnl", shown)
+        self.assertEqual(shown["title"], "Price vs 200-day SMA")
+        self.assertIn("200-day SMA", shown["rule"])
+        self.assertIn("Brock", shown["citation"])
+        self.assertEqual(shown["safety_stop_pct"], 20.0)
+        self.assertTrue(any(p["name"] == "long" and p["value"] == 200 for p in shown["params"]))
         self.assertEqual(by_name[SMA]["pnl"], 40.0)
         self.assertEqual(by_name[SMA]["closed"], 0)
         self.assertNotIn("library_result", by_name[DIP])
+        self.assertEqual(by_name[DIP]["legacy_backtest"]["kind"], "legacy_5m")
+        self.assertEqual(by_name[DIP]["legacy_backtest"]["test_pnl"], 12.0)
+        self.assertEqual(by_name[DIP]["legacy_backtest"]["trades"], 48)
+        self.assertNotIn("legacy_backtest", by_name[SMA])
         self.assertEqual(by_name[DIP]["pnl"], 12.5)
         self.assertEqual(by_name[DIP]["closed"], 4)
         self.assertIsNone(by_name[RSI]["library_result"])
+        self.assertNotIn("legacy_backtest", by_name[RSI])
 
         eval_row = _eval_row(latest[SMA])
         self.assertEqual(eval_row["oos_net_pnl"], OOS)
@@ -193,6 +206,69 @@ class LibraryBacktestDisplayTests(unittest.TestCase):
         self.assertNotIn("oos_net_pnl", api_rows[DIP])
         self.assertNotIn("holdout_pnl", api_rows[DIP])
         self.assertNotIn("cost_oos_pnl", api_rows[DIP])
+
+
+class BacktestDisplaySliceTests(unittest.TestCase):
+    def test_continuous_book_beats_the_window_sum_and_stored_cannot_override_pnl(self):
+        from hedge_fund.library.results import legacy_backtest_view, library_result_view
+
+        record = {
+            "strategy": SMA,
+            "bh_oos_pnl": 81673.58,
+            "oos_net_pnl": OOS,
+            "warnings": ["oos_pnl 102241.97 <= buy-and-hold 1.0"],
+            "library": {"checks": {"buy_and_hold": {"threshold": 271534.12, "pass": False}}},
+            "gate_v4": {"dsr": 0.59, "pbo": 0.3},
+        }
+        stored = {
+            "strategy": SMA,
+            "oos_net_pnl": 1.0,
+            "library": {
+                "holdout": {"bh": {"net_pnl": 900.5}, "daily_sharpe": 0.36},
+                "warning_checks": ["dsr", "buy_and_hold"],
+            },
+        }
+        view = library_result_view(record, stored)
+        self.assertEqual(view["bh_book_pnl"], 271534.12)
+        self.assertEqual(view["bh_holdout_pnl"], 900.5)
+        self.assertEqual(view["oos_net_pnl"], OOS)
+        self.assertEqual(view["dsr"], 0.59)
+        self.assertEqual(view["holdout_sharpe"], 0.36)
+        self.assertEqual(view["warning_checks"], ["dsr", "buy_and_hold"])
+        self.assertNotIn("bh_oos_pnl", view)
+
+        legacy = legacy_backtest_view(
+            {"name": DIP, "sharpe_qual": float("nan"), "winrate_qual": 46.1, "timeframe": "5m"},
+            {"test_pnl": None, "trades": float("inf")},
+        )
+        self.assertEqual(legacy["kind"], "legacy_5m")
+        self.assertEqual(legacy["win_rate_pct"], 46.1)
+        self.assertEqual(legacy["timeframe"], "5m")
+        self.assertNotIn("sharpe", legacy)
+        self.assertNotIn("test_pnl", legacy)
+        self.assertNotIn("trades", legacy)
+        self.assertNotIn("bh_oos_pnl", legacy)
+
+
+class ChampionBacktestUiTests(unittest.TestCase):
+    def test_backtest_copy_is_plain_and_labels_legacy(self):
+        ui = (Path(__file__).resolve().parents[1] / "frontend" / "src" / "status" / "LibraryBacktest.tsx").read_text()
+        book = (Path(__file__).resolve().parents[1] / "frontend" / "src" / "status" / "ChampionBook.tsx").read_text()
+        detail = (Path(__file__).resolve().parents[1] / "frontend" / "src" / "pages" / "ChampionDetail.tsx").read_text()
+        self.assertIn("2018-12-01 to 2025-09-30", ui)
+        self.assertIn("2025-10-01 to 2026-10-01", ui)
+        self.assertIn("2× fee + 5 bps", ui)
+        self.assertIn("Buy-and-hold over that same span", ui)
+        self.assertIn("Warnings.", ui)
+        self.assertIn("Legacy 5-minute backtest", ui)
+        self.assertIn("aria-label=\"Backtest\"", ui)
+        self.assertIn("aria-label=\"Legacy 5-minute backtest\"", ui)
+        self.assertNotIn("Backtest (gate)", ui)
+        self.assertNotIn("{result.gate_rules", ui)
+        self.assertIn("<ChampionBacktest champ={champ} />", book)
+        self.assertIn("<ChampionBacktest champ={champ} />", detail)
+        self.assertIn("LIBRARY_BOOK_RULES", book)
+        self.assertIn("LIBRARY_BOOK_RULES", detail)
 
 
 if __name__ == "__main__":
