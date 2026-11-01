@@ -1,37 +1,43 @@
-# Library backlog (batch 5 and after)
+# Library backlog (batch 6 and after)
 
 Paper only. BTC only. Daily bars, long or flat, next-open fills, the
 pre-registered 20% stop. These are candidates for a later catalog append.
 They are not registered, and discovery will not claim them until they are
-added to `LIBRARY` the same way batch 4 was.
+added to `LIBRARY` the same way batch 5 was.
 
-Batch 4 appended 26 names after the existing 56. It did not change those
-56, and it did not requeue them. The random farm stays paused.
+Batch 5 appended 26 names after the existing 82. It did not change those
+82, and it did not requeue them. The random farm stays paused.
 
-Do not add a near-duplicate of a name already in the catalog. Batch 4
+Do not add a near-duplicate of a name already in the catalog. Batch 5
 skipped, on purpose:
 
-- Ichimoku chikou (close versus the close 26 days ago). That is a 26-day
-  sign. `lib.tsmom30d` is the 30-day sign and its neighbours are 21 and 42,
-  so 26 sits inside a rule that has already been tested. `lib.ichimoku_tk`
-  is the tenkan/kijun cross, which is the distinct Hosoda rule.
-- TEMA(20) rising. The sign of a triple EMA is TRIX. `lib.trix` is that
-  slope at length 15, with neighbours 12 and 18. Length 20 is the same
-  rule. `lib.dema` is the double average, which is not TRIX.
-- Turn of the quarter. The last day and the first three days, kept only at
-  quarter-ends, is a subset of `lib.tom`. That window is already tested
-  every month.
-- Heikin-Ashi trend. A synthetic up-candle has no published test. It is a
-  one-day smoothed trend next to the EMA, DEMA, and Hull rules already in
-  the catalog.
-- Donchian 20/55, turtle 20/55, Bollinger breakout and mean reversion,
-  Keltner breakout and mean reversion, the 1% SMA band, MACD, the 12/26
-  and 50/200 crosses, RSI(2), RSI(14), ConnorsRSI, Williams %R, IBS,
-  Supertrend, ADX, Aroon, CCI, stochastic, StochRSI, the Ultimate
-  Oscillator, Vortex, the chandelier, the 52-week high, time-series
-  momentum at 1/3/6/12 months and the 1/3/12 vote, Monday-only, the turn
-  of the month, and the Halloween window. Those are already seated or
-  tested names. Batch 4 did not add a neighbour of any of them as a new key.
+- An SMA that is rising. An n-day simple average rises if and only if the
+  close is above the close n days ago. That is `lib.tsmom30d` and the
+  month-end cousins. It is not a new rule.
+- PPO above zero. (EMA 12 − EMA 26) / EMA 26 is positive exactly when EMA 12
+  is above EMA 26, which is `lib.ema12x26`.
+- The sign of the correlation of price with time. That sign is the sign of
+  the least-squares slope, so it is `lib.linreg`.
+- The inverse Fisher transform of RSI. It crosses zero when RSI crosses 50,
+  which is `lib.rsi14`.
+- NR4 as its own key. It is the neighbour n=4 of `lib.nr7`.
+- A daily Coppock. The published curve is the monthly one, and that one
+  stays blocked. Shortening it so the warm-up fits is not the cited rule.
+- Ichimoku chikou, TEMA rising, the turn of the quarter, and Heikin-Ashi.
+  Batch 4 skipped those. They are still not keys.
+- Yang-Zhang volatility as a second "variance below its median" key next to
+  the Garman-Klass candidate below. One OHLC variance filter is enough until
+  that one has been tested.
+- Donchian, turtle, Bollinger, Keltner, the SMA band, MACD and its histogram
+  slope, the impulse system, RSI, ConnorsRSI, the double seven, three lower
+  closes, Williams %R, the stochastic cross, the stochastic pop, IBS,
+  Qstick, balance of power, Supertrend, ADX, Aroon, CCI, Vortex, choppiness,
+  the random walk index, TRIX, TSI, the awesome oscillator, the alligator,
+  VIDYA, T3, the McGinley dynamic, KAMA, the Hull average, DEMA, the cloud
+  and the tenkan/kijun cross, time-series momentum, the intermediate window,
+  the first half of the month, the weekend, Monday, the turn of the month,
+  and the Halloween window. Those are already seated or tested names.
+  Batch 5 did not add a neighbour of any of them as a new key.
 - Inverse-volatility position sizing is still not a signal. The book is
   all-in or flat.
 
@@ -55,10 +61,10 @@ These need a data or engine change this batch did not make.
 | 200-week moving average | The long bitcoin average used by many practitioners | 200 weeks is about 1400 days. The tape is not warm by 2018-12-01. |
 | January effect | Rozeff and Kinney, *Journal of Financial Economics* (1976); Keim, *Journal of Financial Economics* (1983) | The discovery window holds seven Januaries. The floor is 8 out-of-sample round-trips, so a one-trade-a-year rule cannot pass. |
 | Santa Claus rally | Yale Hirsch, *Stock Trader's Almanac* | The last five sessions of December plus the first two of January. Same trade-floor problem as the January effect. |
-| Opening-range breakout | Crabel, *Day Trading with Short Term Price Patterns and Opening Range Breakout* (1990) | The daily engine has one decision per UTC day, at the prior close. NR7 and the inside day are the daily forms already registered. |
+| Opening-range breakout | Crabel, *Day Trading with Short Term Price Patterns and Opening Range Breakout* (1990) | The daily engine has one decision per UTC day, at the prior close. NR7, the inside day, and the outside day are the daily forms already registered. |
 | Funding-rate or basis carry | Crypto perpetual funding | Not on the OHLC tape. |
 | On-chain value (MVRV, SOPR, stock-to-flow) | Coin-metrics style valuation | Not on the OHLC tape. |
-| Cross-sectional momentum, pairs, or Antonacci's relative leg | Jegadeesh and Titman, *Journal of Finance* (1993); Antonacci, *Dual Momentum Investing* (2014) | One asset. BTC only. Absolute momentum is already `lib.tsmom12m` / `lib.tsmom12_1`. |
+| Cross-sectional momentum, pairs, or Antonacci's relative leg | Jegadeesh and Titman, *Journal of Finance* (1993); Antonacci, *Dual Momentum Investing* (2014) | One asset. BTC only. Absolute momentum is already `lib.tsmom12m` / `lib.tsmom12_1` / `lib.mom_mid`. |
 | ZigZag / repainting swings | Chart practice | A swing that is rewritten after later bars is look-ahead. Do not add it. |
 
 ## Ready for a later batch
@@ -68,33 +74,31 @@ Lookbacks stay inside the 2017-08-17 warm-up so the score start can remain
 2018-12-01. Neighbours stay one-at-a-time, as in the catalog. None of these
 is a parameter neighbour of a name already registered.
 
-1. **Elder Impulse.** Elder, *Trading for a Living* (1993). Long when the 13-day EMA is rising and the MACD histogram is rising. Not `lib.elder_ray` (bear power) and not `lib.macd` (the signal-line cross).
-2. **MACD histogram slope.** Appel. Long while the 12/26/9 histogram is above its previous value. `lib.macd` is the signal cross. `lib.ema12x26` is the zero line. The histogram's own slope is the third reading.
-3. **True Strength Index.** William Blau, *Technical Analysis of Stocks & Commodities* (1991). Double-smoothed momentum, long while TSI(25, 13) is above zero. Not TRIX (a triple EMA of price) and not `lib.cmo` (a raw sum).
-4. **Awesome Oscillator.** Bill Williams, *Trading Chaos* (1995). SMA(5) of the median price minus SMA(34), long while that difference is above zero. Not `lib.fractal`.
-5. **Alligator alignment.** Williams, same book. Long when the lips (5, displaced 3) are above the teeth (8, displaced 5) and the teeth are above the jaw (13, displaced 8). The displacement uses only older bars. Not the fractal break.
-6. **Balance of Power.** Igor Livshin, *Technical Analysis of Stocks & Commodities*. SMA of (close − open) / (high − low), long above zero. Not `lib.ibs` (one day, no open) and not `lib.qstick` (the body is not divided by the range).
-7. **Psychological line.** The percent of up closes over 12 days, long above 50. Achelis, *Technical Analysis from A to Z*, records the standard form. Not an RSI.
-8. **Choppiness Index.** E. W. Dreiss, *Technical Analysis of Stocks & Commodities* (1992). Long when CI(14) is below 38.2 and the close is above the 200-day SMA. A low reading means the path is trending. Not ADX.
-9. **Random Walk Index.** Michael Poulos, *Technical Analysis of Stocks & Commodities*. Long when the RWI of the highs is above 1 and above the RWI of the lows, length 14. Not ADX and not `lib.vortex`.
-10. **Accumulative Swing Index.** Wilder, *New Concepts in Technical Trading Systems* (1978). Long while the ASI is above its previous value. The limit move in his formula can be a fixed fraction of price (the book was written for futures). Not `lib.wilder_vol`, which is a band around yesterday's close.
-11. **Darvas box.** Nicolas Darvas, *How I Made $2,000,000 in the Stock Market* (1960). After a new high, a box is the range of the next three days that do not take that high out. Long on a close above the box top. Not a fixed Donchian window.
-12. **Ichimoku cloud color.** Hosoda, *Ichimoku Kinko Hyo* (1969). Long while senkou span A is above senkou span B, using the displaced cloud already computed for `lib.ichimoku`. Not price-versus-cloud and not `lib.ichimoku_tk`.
-13. **TD setup.** Tom DeMark, *New Market Timing Techniques* (1997). Long after nine consecutive closes each above the close four days earlier, while the close is above the 200-day SMA; flat when the setup fails. The countdown is a later piece and is not this rule.
-14. **Range Expansion Index.** DeMark, same book. REI compares each close with the high and low of the bars two and three days back. Long while REI(5) is above zero. Not RSI.
-15. **Linear regression slope.** The least-squares slope of the last 20 closes, long while it is positive. Achelis records the standard form. Not a moving-average cross.
-16. **Intermediate momentum.** Novy-Marx, "Is Momentum Really Momentum?", *Journal of Financial Economics* (2012). Long when the close 126 days ago is above the close 252 days ago (the return from 12 months ago to 6 months ago). `lib.tsmom12_1` skips only the latest month. This one drops the whole recent half-year.
-17. **First half of the month.** Ariel, "A Monthly Effect in Stock Returns", *Journal of Financial Economics* (1987). Long when tomorrow is calendar day 1 through 15; flat on the 16th through month-end. Not `lib.tom`, which is four days.
-18. **Laguerre RSI.** Ehlers, *Cybernetic Analysis for Stocks and Futures* (2004), gamma 0.5. Long while the Laguerre RSI is above 0.5. Not `lib.fisher` and not Wilder RSI.
-19. **VIDYA.** Chande, the variable index dynamic average. Long while the close is above VIDYA, with the Chande momentum oscillator as the adaptive constant. Not `lib.kama`, which uses the efficiency ratio.
-20. **Tillson T3.** Tim Tillson, "Smoothing Techniques for More Accurate Signals", *Technical Analysis of Stocks & Commodities* (1998). Long while the close is above T3(5) with the volume factor at 0.7. Not `lib.dema` and not `lib.hma`.
-21. **Relative Momentum Index.** Roger Altman, *Technical Analysis of Stocks & Commodities* (1993). RSI built on an 5-day momentum instead of a one-day change, length 14, long above 50. Not `lib.rsi14` and not `lib.cmo`.
-22. **Connors double seven.** Connors and Alvarez, *Short Term Trading Strategies That Work* (2008). Close above the 200-day SMA, long after a 7-day closing low, flat after a 7-day closing high. Not `lib.rsi2` and not `lib.rsi2_cum`.
-23. **McGinley Dynamic.** John McGinley, *Technical Analysis of Stocks & Commodities*. Long while the close is above the dynamic average of length 20. The adjustment uses price relative to the average. Not an EMA and not `lib.kama`.
-24. **Stochastic pop.** Jake Bernstein. Long after fast %K(14) crosses above 80; flat after it crosses back below 80. Not `lib.stoch` (the %K/%D cross) and not `lib.willr` (the oversold side).
-25. **Outside day.** Crabel, *Day Trading with Short Term Price Patterns and Opening Range Breakout* (1990). A day whose high is above the prior high and whose low is below the prior low, then long on a later close above that day's high. Not `lib.inside_day`.
-26. **Three lower closes.** Connors. Three consecutive lower closes while the close stays above the 200-day SMA; flat on a close above the 5-day SMA. Not `lib.turtle_soup`, which needs a 20-day low to fail.
+1. **DeMarker.** Tom DeMark, *The New Science of Technical Analysis* (1994). DeMax is the part of today's high above yesterday's high, DeMin the part of yesterday's low above today's low, each smoothed. Long while DeMarker(14) is above 0.5. Highs and lows versus the prior bar, not close-to-close RSI (`lib.rsi14`) and not `lib.rei`.
+2. **TD countdown.** DeMark, *New Market Timing Techniques* (1997). After a completed 9-bar setup, count 13 closes that satisfy the countdown test. Long when the buy countdown completes above the 200-day SMA. Not `lib.td_setup`, which stops at the setup.
+3. **TRIX signal line.** Jack Hutson, *Technical Analysis of Stocks & Commodities* (1983). Long while TRIX is above its 9-day SMA. `lib.trix` is the zero line. The triple-EMA length stays the published 15 at the center.
+4. **Slow stochastic.** George Lane, *Technical Analysis of Stocks & Commodities* (1984). Slow %D is an average of fast %D. Long while slow %D is above a further 3-day average of itself. `lib.stoch` is fast %K versus %D. `lib.stoch_pop` is the cross of fast %K through 80.
+5. **Zero-lag EMA.** John Ehlers and Ric Way. Close above ZLEMA(20), where the lag is `(n − 1) / 2` and the input is close plus the close-minus-lagged-close. Not `lib.dema`, not `lib.t3`, and not an ordinary EMA.
+6. **FRAMA.** John Ehlers, fractal adaptive moving average, *Technical Analysis of Stocks & Commodities*. Close above FRAMA. The adaptive constant is the fractal dimension of the last few closes. Not `lib.kama` (efficiency ratio) and not `lib.vidya` (Chande momentum).
+7. **Super smoother.** Ehlers, *Cybernetic Analysis for Stocks and Futures* (2004). Close above the two-pole super smoother of length 10. A Butterworth-style smoother, not an EMA.
+8. **Cyber cycle.** Ehlers, same book. The high-pass cycle line above its one-bar trigger. Not `lib.fisher` and not `lib.laguerre`.
+9. **Laguerre filter.** Ehlers, same book. Close above the four-pole Laguerre moving average at gamma 0.5. Not the Laguerre RSI (`lib.laguerre`), which is the up-move share of those poles.
+10. **Arnaud Legoux moving average.** Arnaud Legoux and Dimitris Kouzis-Loukas (2009). Close above ALMA(9), offset 0.85, sigma 6. A Gaussian window, not `lib.hma`.
+11. **Three-line break.** Steve Nison, *Japanese Candlestick Charting Techniques* (1991). Long when a new white line closes beyond the high of the prior three lines. Close only, built in order. Not `lib.outside`.
+12. **Bullish engulfing.** Nison, same book. Today's body engulfs the prior down body and the close is above the 200-day SMA. The long is that close. Not `lib.outside`, which waits for a later break of the high, and not `lib.bop`.
+13. **Piercing pattern.** Nison, same book. The open is below the prior low and the close finishes above the midpoint of the prior body, with the close above the 200-day SMA.
+14. **Three white soldiers.** Nison, same book. Three rising bodies, each opening inside the prior body and closing near its high, above the 200-day SMA. Not `lib.three_dn`, which buys lower closes.
+15. **Williams Oops.** Larry Williams, *Long-Term Secrets to Short-Term Trading* (1999). The low takes out yesterday's low and the close finishes back above that low. Not `lib.turtle_soup` (no 20-day extreme) and not `lib.outside`.
+16. **Variance ratio.** Lo and MacKinlay, "Stock Market Prices Do Not Follow Random Walks", *Review of Financial Studies* 1(1), 1988. Long when the variance ratio of daily returns at horizon 16 is above 1 and the close is above the 200-day SMA. Not the sign of one return (`lib.tsmom30d`) and not `lib.linreg`.
+17. **Vertical horizontal filter.** Adam White, *Technical Analysis of Stocks & Commodities*. VHF(28) above its 100-day median and the close above the 200-day SMA. The median length stays fixed. Not `lib.chop` (the log true-range ratio) and not ADX.
+18. **Accelerator oscillator.** Bill Williams, *Trading Chaos* (1995). The awesome oscillator minus its 5-period SMA, long while that difference is above zero. Not `lib.awesome`, which is the zero line of the oscillator itself.
+19. **Gator expanding.** Williams, same book. Both the absolute jaw-to-teeth gap and the absolute teeth-to-lips gap are larger than the day before, and the lips are above the jaw. Not `lib.alligator`, which is the alignment alone.
+20. **Camarilla pivot.** Nick Stott's equation. H3 of the prior day is close + (high − low) × 1.1 / 4. Long when the close is above that H3 and the 200-day SMA. Not `lib.floor_pivot`, which is (high + low + close) / 3.
+21. **Regression value.** Mel Widner, projection bands, *Technical Analysis of Stocks & Commodities* (1995). Long while the close is above the fitted value of the 20-day least-squares line on the current bar. Price can sit above a line whose slope is negative, so this is not `lib.linreg`.
+22. **Garman-Klass filter.** Garman and Klass, "On the Estimation of Security Price Volatilities from Historical Data", *Journal of Business* 53(1), 1980. Long while the close is above the 200-day SMA and the 14-day Garman-Klass variance is below its 100-day median. The median length stays fixed. Not `lib.vol_trend` (close-to-close) and not `lib.ulcer`.
+23. **Bullish harami.** Nison, *Japanese Candlestick Charting Techniques* (1991). Today's body sits inside the prior body after a down close, and the close is above the 200-day SMA. Not `lib.inside_day`, which uses the full high and low and waits for a later break.
+24. **Expiration week.** Stoll and Whaley, "Program Trading and Expiration-Day Effects", *Journal of Finance* (1987). Long for the three UTC sessions ending on the third Friday of the month. Twelve turns a year, so it is not a one-trade-a-year calendar. Not `lib.tom` and not `lib.first_half`.
 
-Twenty-six of these can be coded on the current OHLC bars. Prefer 1–16
+Twenty-four of these can be coded on the current OHLC bars. Prefer 1–22
 before the remaining calendar rule if the next batch should not be all
-seasonality. Item 17 is the only calendar rule in this list.
+seasonality. Item 24 is the only calendar rule in this list.
