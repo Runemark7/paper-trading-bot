@@ -1,7 +1,7 @@
 import { Link, useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { api, fetchChampionTrades, fetchChampions } from "../api/client";
-import { EXIT_RULES, SIZING_RULES } from "../lib/rules";
+import { EXIT_RULES, LIBRARY_BOOK_RULES, SIZING_RULES } from "../lib/rules";
 import { Disclosure, EmptyState, RuleList, SkeletonRows, toneOf, usd } from "../components/kit";
 import TradeLog from "../components/TradeLog";
 import { forwardPnl, summaryFor } from "../status/ChampionBook";
@@ -35,7 +35,7 @@ import {
   openLotsForChampion,
 } from "../status/format";
 import { AdmissionBadge } from "../status/admission";
-import { isLibraryName, LibraryBacktestBox } from "../status/LibraryBacktest";
+import { ChampionBacktest, isLibraryName } from "../status/LibraryBacktest";
 import { ForwardStatusBadge, forwardStatusText } from "../status/forwardStatus";
 
 function findChampion(champs: Champion[], name: string): Champion | undefined {
@@ -235,23 +235,31 @@ export default function ChampionDetail() {
                 </div>
               </div>
             ) : null}
-            {champ && isLibraryName(champ.name) ? (
+            {champ ? (
               <div className="mt-4">
-                <LibraryBacktestBox result={champ.library_result} />
+                <ChampionBacktest champ={champ} />
               </div>
             ) : null}
           </Card>
 
-          <Card title="Rules in plain words" aside="entry blocks from the name · exits are the same for every champion">
+          <Card title="Rules in plain words" aside="daily library rules, or the 5-minute blocks this name was admitted with">
             <div className="grid gap-4 md:grid-cols-2 min-w-0">
               <div className="min-w-0">
-                <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-white/45">Buys when all are true</div>
-                <RuleList name={name} />
+                <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-white/45">
+                  {isLibraryName(name) ? "The daily rule" : "Buys when all are true"}
+                </div>
+                {isLibraryName(name) ? (
+                  <p className="text-sm leading-relaxed text-white/80">
+                    {champ?.library_result?.rule ?? "The stored result does not include the rule sentence."}
+                  </p>
+                ) : (
+                  <RuleList name={name} />
+                )}
               </div>
               <div className="min-w-0">
                 <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-white/45">Exits and sizing</div>
                 <ul className="space-y-1 text-sm text-white/70">
-                  {[...EXIT_RULES, ...SIZING_RULES].map((r) => (
+                  {(isLibraryName(name) ? LIBRARY_BOOK_RULES : [...EXIT_RULES, ...SIZING_RULES]).map((r) => (
                     <li key={r} className="flex gap-2">
                       <span aria-hidden className="text-white/30">•</span>
                       {r}

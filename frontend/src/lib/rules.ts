@@ -193,3 +193,11 @@ export const SIZING_RULES = [
   "Open notional capped at 100% of equity; BTC/USDT only",
   "Fees: 0.1% taker each side plus 2 bps slippage",
 ];
+
+/** Daily library book. Not the 5-minute ATR stop used by older dip champions. */
+export const LIBRARY_BOOK_RULES = [
+  "Long or flat on daily BTC/USDT, all-in when the signal is on",
+  "Fills at the next open after the signal changes",
+  "Exits when the signal turns off, or on a 20% stop under the entry",
+  "Costs already in the backtest: 0.1% taker fee and 2 bps slippage",
+];

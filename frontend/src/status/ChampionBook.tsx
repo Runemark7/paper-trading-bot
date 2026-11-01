@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import type { Champion, ChampionTradeSummary, ChampionTradesPayload } from "../api/types";
-import { EXIT_RULES, SIZING_RULES } from "../lib/rules";
+import { EXIT_RULES, LIBRARY_BOOK_RULES, SIZING_RULES } from "../lib/rules";
 import {
   EmptyState,
   ErrorNote,
@@ -19,7 +19,7 @@ import {
 import TradeLog from "../components/TradeLog";
 import { MonoName } from "../components/ui";
 import { AdmissionBadge } from "./admission";
-import { isLibraryName, LibraryBacktestBox } from "./LibraryBacktest";
+import { ChampionBacktest, isLibraryName } from "./LibraryBacktest";
 import { ForwardStatusBadge, forwardStatusText } from "./forwardStatus";
 import { championDetailPath } from "./championPath";
 import { accountsMatch, fmtChampionSince } from "./format";
@@ -142,13 +142,21 @@ export function ChampionCard({
 
       <div className="grid gap-4 md:grid-cols-2 min-w-0">
         <div className="min-w-0">
-          <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-white/45">Buys when all are true</div>
-          <RuleList name={champ.name} />
+          <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-white/45">
+            {isLibraryName(champ.name) ? "The daily rule" : "Buys when all are true"}
+          </div>
+          {isLibraryName(champ.name) ? (
+            <p className="text-sm leading-relaxed text-white/80">
+              {champ.library_result?.rule ?? "The stored result does not include the rule sentence."}
+            </p>
+          ) : (
+            <RuleList name={champ.name} />
+          )}
         </div>
         <div className="min-w-0">
           <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-white/45">Then manages the trade</div>
           <ul className="space-y-1 text-sm text-white/70">
-            {[...EXIT_RULES, SIZING_RULES[0]].map((r) => (
+            {(isLibraryName(champ.name) ? LIBRARY_BOOK_RULES : [...EXIT_RULES, SIZING_RULES[0]]).map((r) => (
               <li key={r} className="flex gap-2">
                 <span aria-hidden className="text-white/30">•</span>
                 {r}
@@ -174,7 +182,7 @@ export function ChampionCard({
         </div>
       </div>
 
-      {isLibraryName(champ.name) ? <LibraryBacktestBox result={champ.library_result} /> : null}
+      <ChampionBacktest champ={champ} />
 
       {openEntries.length ? (
         <div className="rounded-xl border border-indigo-400/20 bg-indigo-500/[0.06] p-3">

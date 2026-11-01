@@ -535,18 +535,20 @@ def _forward_status(row: dict) -> dict:
 
 
 def _attach_library_results(champs: list[dict]) -> None:
-    """Stamp lib.* response copies with the newest discovery-log slice.
+    """Stamp response copies with a read-only backtest slice.
 
-    The pool dict is not modified and nothing is written. The log parse is
-    the display-log cache; this does not score a tape. Dip rows are left
-    untouched, including the absence of ``library_result``.
+    The pool dict is not modified and nothing is written. Library names
+    get the newest discovery-log P&L, with display gaps filled from
+    ``library_results.json``. Other names get ``legacy_backtest`` from
+    fields already stored on the champion or the log. This does not score
+    a tape and does not change admission.
     """
     from hedge_fund.library.catalog import is_library_name
 
-    wanted = {c.get("name") for c in champs if is_library_name(c.get("name"))}
-    if not wanted:
+    names = {c.get("name") for c in champs if isinstance(c.get("name"), str) and c.get("name")}
+    if not names:
         return
-    from hedge_fund.library.results import library_result_view
+    from hedge_fund.library.results import legacy_backtest_view, library_result_view, load_library_results
     from hedge_fund.trading.discovery import load_discovery_log
 
     latest: dict[str, dict] = {}
@@ -554,16 +556,21 @@ def _attach_library_results(champs: list[dict]) -> None:
         if not isinstance(raw, dict):
             continue
         name = raw.get("strategy")
-        if name not in wanted or name in latest:
+        if name not in names or name in latest:
             continue
         latest[name] = raw
-        if len(latest) == len(wanted):
+        if len(latest) == len(names):
             break
+    stored = load_library_results()
     for row in champs:
         name = row.get("name")
-        if name not in wanted:
+        if not isinstance(name, str) or not name:
             continue
-        row["library_result"] = library_result_view(latest.get(name))
+        if is_library_name(name):
+            extra = stored.get(name) if isinstance(stored.get(name), dict) else None
+            row["library_result"] = library_result_view(latest.get(name), extra)
+        else:
+            row["legacy_backtest"] = legacy_backtest_view(row, latest.get(name))
 
 
 def pool_status(*, read_only: bool = False) -> dict:

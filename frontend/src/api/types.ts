@@ -147,9 +147,22 @@ export interface Champion {
   forward_status?: ForwardStatus | null;
   /** Newest discovery-log slice for a lib.* name. Absent on dip champions. */
   library_result?: LibraryBacktest | null;
+  /** Present on champions admitted from the 5-minute search. */
+  legacy_backtest?: LegacyBacktest | null;
 }
 
-/** Read-only gate backtest copied from the newest discovery-log row. */
+/** Parameter values of the variant that was actually tested. */
+export interface BacktestParam {
+  name: string;
+  value: number;
+  unit?: string;
+}
+
+/**
+ * Read-only gate backtest copied from the newest discovery-log row.
+ * Buy-and-hold here is the continuous book over the same span as oos_net_pnl,
+ * not the sum of rebased windows.
+ */
 export interface LibraryBacktest {
   gate_rules?: string | null;
   tested_at?: string | null;
@@ -160,6 +173,36 @@ export interface LibraryBacktest {
   cost_oos_pnl?: number | null;
   cost_holdout_pnl?: number | null;
   warnings?: string[];
+  /** Ending-equity buy-and-hold minus the $10,000 start, test years. */
+  bh_book_pnl?: number | null;
+  /** Same book on the sealed holdout year. */
+  bh_holdout_pnl?: number | null;
+  title?: string | null;
+  rule?: string | null;
+  citation?: string | null;
+  citation_link?: string | null;
+  safety_stop_pct?: number | null;
+  params?: BacktestParam[];
+  dsr?: number | null;
+  pbo?: number | null;
+  daily_sharpe?: number | null;
+  holdout_sharpe?: number | null;
+  warning_checks?: string[];
+}
+
+/** 5-minute qualification stored on a pre-library champion. Absent numbers are omitted. */
+export interface LegacyBacktest {
+  kind: "legacy_5m";
+  timeframe?: string;
+  risk_policy?: string;
+  gate_rules?: string;
+  sharpe?: number;
+  win_rate_pct?: number;
+  test_pnl?: number;
+  trades?: number;
+  daily_sharpe?: number;
+  bh_daily_sharpe?: number;
+  bh_oos_pnl?: number;
 }
 
 export interface GraduatedTrade {
