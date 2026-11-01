@@ -54,6 +54,7 @@ from hedge_fund.library.indicators import (
     day_of_month,
     days_in_month,
     dema,
+    dominant_period,
     demarker,
     detrended_price,
     efficiency_ratio,
@@ -72,6 +73,7 @@ from hedge_fund.library.indicators import (
     instantaneous_trendline,
     is_month_end,
     is_week_end,
+    kase_devstop,
     kaufman_ama,
     keltner,
     know_sure_thing,
@@ -90,6 +92,7 @@ from hedge_fund.library.indicators import (
     parabolic_sar,
     prior_max,
     prior_min,
+    prior_percentile,
     psychological_line,
     qstick,
     random_walk_index,
@@ -97,6 +100,7 @@ from hedge_fund.library.indicators import (
     realized_vol,
     relative_momentum_index,
     relative_vigor,
+    rogers_satchell,
     relative_volatility,
     roofing_filter,
     rolling_max,
@@ -120,6 +124,7 @@ from hedge_fund.library.indicators import (
     theil_sen_slope,
     third_friday_dom,
     tillson_t3,
+    trend_intensity,
     trix,
     true_strength_index,
     ulcer_index,
@@ -131,6 +136,7 @@ from hedge_fund.library.indicators import (
     week_number,
     weekday_utc,
     williams_r,
+    yang_zhang,
     zero_lag_ema,
 )
 
@@ -1785,7 +1791,7 @@ def _cmo_signal(bars: DailyBars, p: dict) -> np.ndarray:
 
 def _mama_up(bars: DailyBars, p: dict) -> np.ndarray:
     """Long while the close is above MAMA. The slow limit stays 0.05."""
-    mama, _phase = mesa_adaptive(bars.high, bars.low, float(p["fast"]) / 100.0, 0.05)
+    mama, _phase, _period = mesa_adaptive(bars.high, bars.low, float(p["fast"]) / 100.0, 0.05)
     out = _finite_gt(bars.close, mama)
     out[:HILBERT_READY] = False
     return out
@@ -1805,7 +1811,7 @@ def _ebsw_up(bars: DailyBars, p: dict) -> np.ndarray:
     The lead is ``lead`` degrees ahead. 45 is the book's advance. The phase
     is the Hilbert arctangent, not the one-bar slope of the cyber cycle.
     """
-    _mama, phase = mesa_adaptive(bars.high, bars.low, 0.5, 0.05)
+    _mama, phase, _period = mesa_adaptive(bars.high, bars.low, 0.5, 0.05)
     rad = np.deg2rad(phase)
     lead = np.deg2rad(float(p["lead"]))
     sine = np.sin(rad)
@@ -2498,7 +2504,7 @@ def _ss_rise(bars: DailyBars, p: dict) -> np.ndarray:
 
 def _mama_rise(bars: DailyBars, p: dict) -> np.ndarray:
     """Long while MAMA is above its previous value. The slow limit stays 0.05."""
-    mama, _phase = mesa_adaptive(bars.high, bars.low, float(p["fast"]) / 100.0, 0.05)
+    mama, _phase, _period = mesa_adaptive(bars.high, bars.low, float(p["fast"]) / 100.0, 0.05)
     out = _finite_gt(mama, shift_previous(mama, 1))
     out[: HILBERT_READY + 1] = False
     return out
@@ -2628,6 +2634,460 @@ def _safezone_first(close: np.ndarray, lookback: int, downs: int = 10) -> int:
         if count >= int(downs) and t >= need:
             return t
     return int(close.shape[0])
+
+
+def _ratchet_long(close: np.ndarray, raw: np.ndarray) -> np.ndarray:
+    """Long while the close is above ``raw``, and the stop only rises while long.
+
+    A bar with no raw stop is flat and forgets the old stop. The next finite
+    bar starts again from that raw level.
+    """
+    out = np.zeros(close.shape[0], dtype=bool)
+    long = False
+    stop = np.nan
+    for t in range(close.shape[0]):
+        level = float(raw[t])
+        if not np.isfinite(level):
+            long = False
+            stop = np.nan
+            continue
+        if not long:
+            stop = level
+            if close[t] > stop:
+                long = True
+        elif level > stop:
+            stop = level
+        if long and close[t] <= stop:
+            long = False
+        out[t] = long
+    return out
+
+
+def _equal_band(bars: DailyBars) -> np.ndarray:
+    """Five percent of the average high-low range of the five bars before today."""
+    return 0.05 * _prior_mean(bars.high - bars.low, 5)
+
+
+def _holy_grail(bars: DailyBars, p: dict) -> np.ndarray:
+    """ADX(14) above 30 and falling, and the low tags the EMA while the close holds it.
+
+    The 14, the 30, and the 200-day SMA stay fixed. The long is that close.
+    """
+    _plus, _minus, adx = adx_wilder(bars.high, bars.low, bars.close, 14)
+    prev = shift_previous(adx, 1)
+    line = ema(bars.close, int(p["n"]))
+    trend = sma(bars.close, 200)
+    with np.errstate(invalid="ignore"):
+        tagged = np.isfinite(line) & (bars.low <= line) & (bars.close > line)
+        fading = np.isfinite(adx) & np.isfinite(prev) & (adx > 30.0) & (adx < prev)
+        return tagged & fading & np.isfinite(trend) & (bars.close > trend)
+
+
+def _bar_8020(bars: DailyBars, p: dict) -> np.ndarray:
+    """Open in the bottom fifth of the range and close in the top fifth.
+
+    The fifths stay fixed. A zero range is not the bar. The long is that
+    close, and only above the trend SMA.
+    """
+    span = bars.high - bars.low
+    trend = sma(bars.close, int(p["trend"]))
+    with np.errstate(divide="ignore", invalid="ignore"):
+        open_pos = (bars.open - bars.low) / span
+        close_pos = (bars.close - bars.low) / span
+        wide = (span > 0.0) & (open_pos <= 0.20) & (close_pos >= 0.80)
+        return wide & np.isfinite(trend) & (bars.close > trend)
+
+
+def _key_reversal(bars: DailyBars, p: dict) -> np.ndarray:
+    """Lower low than yesterday and a higher close, after a down close.
+
+    The long is that close, and only above the trend SMA. It does not have
+    to clear yesterday's high.
+    """
+    low = bars.low
+    close = bars.close
+    trend = sma(close, int(p["trend"]))
+    out = np.zeros(len(bars), dtype=bool)
+    for t in range(2, len(bars)):
+        if (
+            low[t] < low[t - 1]
+            and close[t] > close[t - 1]
+            and close[t - 1] < close[t - 2]
+            and _above_trend(close, trend, t)
+        ):
+            out[t] = True
+    return out
+
+
+def _three_inside(bars: DailyBars, p: dict) -> np.ndarray:
+    """Bullish harami, then a close above the first candle's high.
+
+    The long is that third close, and only above the trend SMA. The harami
+    body test is the same strict interior the harami name uses.
+    """
+    o = bars.open
+    h = bars.high
+    c = bars.close
+    trend = sma(c, int(p["trend"]))
+    out = np.zeros(len(bars), dtype=bool)
+    for t in range(2, len(bars)):
+        if not (c[t - 2] < o[t - 2]):
+            continue
+        body_hi = max(float(o[t - 1]), float(c[t - 1]))
+        body_lo = min(float(o[t - 1]), float(c[t - 1]))
+        harami = body_hi < o[t - 2] and body_lo > c[t - 2]
+        if harami and c[t] > h[t - 2] and _above_trend(c, trend, t):
+            out[t] = True
+    return out
+
+
+def _meeting_lines(bars: DailyBars, p: dict) -> np.ndarray:
+    """Black candle, then a white close within the equal-band of that black close.
+
+    Cent-exact closes do not repeat. The band is 5 percent of the average
+    high-low range of the five bars before today. The long is the white close,
+    and only above the trend SMA.
+    """
+    o = bars.open
+    c = bars.close
+    band = _equal_band(bars)
+    trend = sma(c, int(p["trend"]))
+    out = np.zeros(len(bars), dtype=bool)
+    for t in range(1, len(bars)):
+        if (
+            c[t - 1] < o[t - 1]
+            and c[t] > o[t]
+            and np.isfinite(band[t])
+            and abs(float(c[t] - c[t - 1])) <= float(band[t])
+            and _above_trend(c, trend, t)
+        ):
+            out[t] = True
+    return out
+
+
+def _separating_lines(bars: DailyBars, p: dict) -> np.ndarray:
+    """Black candle, then a white candle whose open matches that black open.
+
+    The match is the same 5 percent equal-band. The white candle closes up.
+    The long is that close, and only above the trend SMA.
+    """
+    o = bars.open
+    c = bars.close
+    band = _equal_band(bars)
+    trend = sma(c, int(p["trend"]))
+    out = np.zeros(len(bars), dtype=bool)
+    for t in range(1, len(bars)):
+        if (
+            c[t - 1] < o[t - 1]
+            and c[t] > o[t]
+            and np.isfinite(band[t])
+            and abs(float(o[t] - o[t - 1])) <= float(band[t])
+            and _above_trend(c, trend, t)
+        ):
+            out[t] = True
+    return out
+
+
+def _pnf_up(bars: DailyBars, p: dict) -> np.ndarray:
+    """Long after a rising column exceeds the prior rising column.
+
+    A box is ``box`` percent of the level it leaves. A column reverses after
+    three boxes. The three stays fixed. Built from closes, in order. Flat
+    after a falling column exceeds the prior falling column. The first
+    column does not enter.
+    """
+    pct = float(p["box"]) / 100.0
+    close = bars.close
+    out = np.zeros(len(bars), dtype=bool)
+    if len(bars) == 0 or pct <= 0.0 or pct >= 1.0:
+        return out
+    level = float(close[0])
+    if not np.isfinite(level) or level <= 0.0:
+        return out
+    direction = 0
+    x_high = level
+    o_low = level
+    prev_x = np.nan
+    prev_o = np.nan
+    long = False
+    up = 1.0 + pct
+    down = 1.0 - pct
+    rev_down = down ** 3
+    rev_up = up ** 3
+    for t in range(1, len(bars)):
+        price = float(close[t])
+        if not np.isfinite(price) or price <= 0.0 or level <= 0.0:
+            long = False
+            out[t] = False
+            continue
+        if direction == 0:
+            if price >= level * up:
+                direction = 1
+                x_high = level
+            elif price <= level * down:
+                direction = -1
+                o_low = level
+        if direction == 1:
+            guard = 0
+            while guard < 10000 and level > 0.0 and price >= level * up:
+                level *= up
+                x_high = level
+                guard += 1
+                if np.isfinite(prev_x) and level > prev_x:
+                    long = True
+            if price <= x_high * rev_down:
+                prev_x = x_high
+                direction = -1
+                level = x_high
+                o_low = level
+                guard = 0
+                while guard < 10000 and level > 0.0 and price <= level * down:
+                    level *= down
+                    o_low = level
+                    guard += 1
+                if np.isfinite(prev_o) and o_low < prev_o:
+                    long = False
+        elif direction == -1:
+            guard = 0
+            while guard < 10000 and level > 0.0 and price <= level * down:
+                level *= down
+                o_low = level
+                guard += 1
+                if np.isfinite(prev_o) and level < prev_o:
+                    long = False
+            if price >= o_low * rev_up:
+                prev_o = o_low
+                direction = 1
+                level = o_low
+                x_high = level
+                guard = 0
+                while guard < 10000 and level > 0.0 and price >= level * up:
+                    level *= up
+                    x_high = level
+                    guard += 1
+                if np.isfinite(prev_x) and level > prev_x:
+                    long = True
+        out[t] = long
+    return out
+
+
+def _heikin_ashi(bars: DailyBars, p: dict) -> np.ndarray:
+    """Long while the last ``n`` Heikin-Ashi candles are white.
+
+    The HA close is (open + high + low + close) / 4. The HA open is the
+    average of the prior HA open and HA close. The first HA open is the
+    average of the first bar's open and close. The seed bar is not a
+    position. ``n`` is 1 at the center, which is the white candle itself.
+    """
+    n = int(p["n"])
+    m = len(bars)
+    out = np.zeros(m, dtype=bool)
+    if m == 0 or n < 1:
+        return out
+    ha_close = (bars.open + bars.high + bars.low + bars.close) / 4.0
+    ha_open = np.empty(m, dtype=np.float64)
+    ha_open[0] = (float(bars.open[0]) + float(bars.close[0])) / 2.0
+    for t in range(1, m):
+        ha_open[t] = (ha_open[t - 1] + float(ha_close[t - 1])) / 2.0
+    white = ha_close > ha_open
+    run = 0
+    for t in range(m):
+        run = run + 1 if bool(white[t]) else 0
+        out[t] = t > 0 and run >= n
+    return out
+
+
+def _kase_long(bars: DailyBars, p: dict) -> np.ndarray:
+    """Long while the close is above the Kase DevStop.
+
+    The raw stop is the highest close of the last ``n`` days minus twice
+    the standard deviation of the true range. While long the stop only
+    ratchets up. A flat bar starts the next campaign from that day's raw
+    stop. The 2 stays fixed.
+    """
+    raw = kase_devstop(bars.high, bars.low, bars.close, int(p["n"]))
+    return _ratchet_long(bars.close, raw)
+
+
+def _yang_zhang_quiet(bars: DailyBars, p: dict) -> np.ndarray:
+    """Yang-Zhang variance below its 100-day median and the close above the trend SMA.
+
+    The median length is fixed.
+    """
+    value = yang_zhang(bars.open, bars.high, bars.low, bars.close, int(p["n"]))
+    med = rolling_median_skip_leading(value, 100)
+    trend = sma(bars.close, int(p["trend"]))
+    with np.errstate(invalid="ignore"):
+        calm = np.isfinite(value) & np.isfinite(med) & (value < med)
+        return calm & np.isfinite(trend) & (bars.close > trend)
+
+
+def _rogers_satchell_quiet(bars: DailyBars, p: dict) -> np.ndarray:
+    """Rogers-Satchell mean below its 100-day median and the close above the trend SMA.
+
+    The median length is fixed. This is not the Yang-Zhang combination.
+    """
+    value = rogers_satchell(bars.open, bars.high, bars.low, bars.close, int(p["n"]))
+    med = rolling_median_skip_leading(value, 100)
+    trend = sma(bars.close, int(p["trend"]))
+    with np.errstate(invalid="ignore"):
+        calm = np.isfinite(value) & np.isfinite(med) & (value < med)
+        return calm & np.isfinite(trend) & (bars.close > trend)
+
+
+def _tii_up(bars: DailyBars, p: dict) -> np.ndarray:
+    """Long while the trend intensity index is above 50. The 50 stays fixed."""
+    value = trend_intensity(bars.close, int(p["n"]))
+    with np.errstate(invalid="ignore"):
+        return np.isfinite(value) & (value > 50.0)
+
+
+def _chaikin_vol(bars: DailyBars, p: dict) -> np.ndarray:
+    """Long while the Chaikin volatility rate of change is above zero.
+
+    The EMA of the high-low range and the rate-of-change lag share ``n``.
+    No volume. The close also has to be above the 200-day SMA. That average
+    stays fixed.
+    """
+    span = bars.high - bars.low
+    average = ema(span, int(p["n"]))
+    prev = shift_previous(average, int(p["n"]))
+    trend = sma(bars.close, 200)
+    with np.errstate(invalid="ignore"):
+        expanding = np.isfinite(average) & np.isfinite(prev) & (prev > 0.0) & (average > prev)
+        return expanding & np.isfinite(trend) & (bars.close > trend)
+
+
+def _dominant_cycle(bars: DailyBars, p: dict) -> np.ndarray:
+    """Long when the close is above the close ``n`` homodyne periods ago.
+
+    The period is the one MAMA computes, rounded and clamped from 6 to 50.
+    ``n`` is 1 at the center. The fast and slow limits stay 0.5 and 0.05.
+    Bars before ``n`` times the 50-bar clamp are not a position.
+    """
+    cycles = int(p["n"])
+    period = dominant_period(bars.high, bars.low)
+    close = bars.close
+    out = np.zeros(len(bars), dtype=bool)
+    start = cycles * 50
+    if cycles < 1 or len(bars) <= start:
+        return out
+    for t in range(start, len(bars)):
+        per = float(period[t])
+        if not np.isfinite(per) or per <= 0.0:
+            continue
+        lag = int(np.clip(int(round(per)), 6, 50)) * cycles
+        if lag <= t and close[t] > close[t - lag]:
+            out[t] = True
+    return out
+
+
+def _bullish_hook(bars: DailyBars, p: dict) -> np.ndarray:
+    """Low takes out yesterday's low and the close finishes in the top quarter.
+
+    The quarter stays fixed. A zero range is not the bar. The long is that
+    close, and only above the trend SMA.
+    """
+    span = bars.high - bars.low
+    trend = sma(bars.close, int(p["trend"]))
+    out = np.zeros(len(bars), dtype=bool)
+    for t in range(1, len(bars)):
+        if span[t] <= 0.0 or not (bars.low[t] < bars.low[t - 1]):
+            continue
+        if (bars.close[t] - bars.low[t]) / span[t] >= 0.75 and _above_trend(bars.close, trend, t):
+            out[t] = True
+    return out
+
+
+def _outside_close(bars: DailyBars, p: dict) -> np.ndarray:
+    """Outside day whose close finishes in the top half.
+
+    The high takes out yesterday's high and the low takes out yesterday's
+    low. The long is that close, and only above the trend SMA. It does not
+    wait for a later break of the outside high.
+    """
+    span = bars.high - bars.low
+    trend = sma(bars.close, int(p["trend"]))
+    out = np.zeros(len(bars), dtype=bool)
+    for t in range(1, len(bars)):
+        if span[t] <= 0.0:
+            continue
+        outside = bars.high[t] > bars.high[t - 1] and bars.low[t] < bars.low[t - 1]
+        top_half = (bars.close[t] - bars.low[t]) / span[t] >= 0.5
+        if outside and top_half and _above_trend(bars.close, trend, t):
+            out[t] = True
+    return out
+
+
+def _stick_sandwich(bars: DailyBars, p: dict) -> np.ndarray:
+    """Two black closes inside the equal-band, with a white candle between them.
+
+    The band is the same 5 percent of the prior five ranges. The long is the
+    second black close, and only above the trend SMA.
+    """
+    o = bars.open
+    c = bars.close
+    band = _equal_band(bars)
+    trend = sma(c, int(p["trend"]))
+    out = np.zeros(len(bars), dtype=bool)
+    for t in range(2, len(bars)):
+        blacks = c[t - 2] < o[t - 2] and c[t] < o[t]
+        white = c[t - 1] > o[t - 1]
+        if (
+            blacks
+            and white
+            and np.isfinite(band[t])
+            and abs(float(c[t] - c[t - 2])) <= float(band[t])
+            and _above_trend(c, trend, t)
+        ):
+            out[t] = True
+    return out
+
+
+def _pinball(bars: DailyBars, p: dict) -> np.ndarray:
+    """3-day RSI of the one-day percent change below 30, above the trend SMA.
+
+    The 3 and the 30 stay fixed. The percent change starts at the second
+    close, and the RSI is Wilder's on that series. The long is that close.
+    """
+    close = bars.close
+    ret = np.full(close.shape[0], np.nan)
+    if close.shape[0] > 1:
+        base = close[:-1]
+        good = base > 0.0
+        ret[1:][good] = close[1:][good] / base[good] - 1.0
+    rsi = np.full(close.shape[0], np.nan)
+    if close.shape[0] > 4 and np.isfinite(ret[1:]).all():
+        rsi[1:] = rsi_wilder(ret[1:], 3)
+    trend = sma(close, int(p["trend"]))
+    with np.errstate(invalid="ignore"):
+        return np.isfinite(rsi) & (rsi < 30.0) & np.isfinite(trend) & (close > trend)
+
+
+def _range_index(bars: DailyBars, p: dict) -> np.ndarray:
+    """Long while the Gopalakrishnan range index is below its previous value.
+
+    The index is ``ln(highest high - lowest low) / ln(n)`` over ``n`` bars.
+    The close also has to be above the trend SMA. A non-positive range is
+    undefined.
+    """
+    n = int(p["n"])
+    if n <= 1:
+        return np.zeros(len(bars), dtype=bool)
+    span = rolling_max(bars.high, n) - rolling_min(bars.low, n)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        value = np.where(span > 0.0, np.log(span) / np.log(float(n)), np.nan)
+    trend = sma(bars.close, int(p["trend"]))
+    return _finite_gt(shift_previous(value, 1), value) & _finite_gt(bars.close, trend)
+
+
+def _percentile_channel(bars: DailyBars, p: dict) -> np.ndarray:
+    """Long while the close is above the 80th percentile of the prior ``n`` closes.
+
+    Today is outside the window. The 80 stays fixed.
+    """
+    level = prior_percentile(bars.close, int(p["n"]), 80.0)
+    return _finite_gt(bars.close, level)
 
 
 def _defined_from(n: int, first: int) -> np.ndarray:
@@ -3129,6 +3589,52 @@ def signal_ready(strategy: LibraryStrategy, bars: DailyBars, params: dict) -> np
     if key == "safezone":
         # Ten down days, and a highest-close window of ``n``. The later of the two.
         return _defined_from(n, _safezone_first(bars.close, int(params["n"])))
+    if key == "holy":
+        # ADX(14) and its one-bar fall start at index 28. The 200-day SMA binds.
+        return _defined_from(n, max(adx_first_index(14) + 1, int(params["n"]) - 1, 199))
+    if key == "bar8020":
+        return _defined_from(n, int(params["trend"]) - 1)
+    if key == "keyrev":
+        return _defined_from(n, max(2, int(params["trend"]) - 1))
+    if key == "three_in":
+        return _defined_from(n, max(2, int(params["trend"]) - 1))
+    if key in ("meet", "separate", "sandwich"):
+        # The equal-band is the prior five ranges, finite at index 5.
+        return _defined_from(n, max(5, int(params["trend"]) - 1))
+    if key == "pnf":
+        return _defined_from(n, 1)
+    if key == "ha":
+        # The seed bar is not a position. ``n`` white candles can finish at n - 1.
+        return _defined_from(n, max(int(params["n"]) - 1, 1))
+    if key == "kase":
+        return _defined_from(n, int(params["n"]) - 1)
+    if key == "yz":
+        # Overnight returns start at index 1, so n of them end at index n.
+        # The 100-day median needs 99 further bars.
+        return _defined_from(n, max(int(params["n"]) + 99, int(params["trend"]) - 1))
+    if key == "rsvol":
+        # The n-day mean is finite at n - 1. A 100-day median needs 99 further bars.
+        return _defined_from(n, max(int(params["n"]) + 98, int(params["trend"]) - 1))
+    if key == "tii":
+        return _defined_from(n, int(params["n"]) - 1)
+    if key == "cv":
+        # The EMA exists at n - 1. The n-day rate of change starts at 2n - 1.
+        # The 200-day SMA stays fixed.
+        return _defined_from(n, max(2 * int(params["n"]) - 1, 199))
+    if key == "dcyc":
+        # The period is at most 50. ``n`` cycles of that lag cover the Hilbert startup.
+        return _defined_from(n, int(params["n"]) * 50)
+    if key in ("hook", "outclose"):
+        return _defined_from(n, max(1, int(params["trend"]) - 1))
+    if key == "pinball":
+        # The percent change starts at index 1. RSI(3) of it is finite at index 4.
+        return _defined_from(n, max(4, int(params["trend"]) - 1))
+    if key == "gri":
+        # The range index exists at n - 1. The fall starts one bar later.
+        return _defined_from(n, max(int(params["n"]), int(params["trend"]) - 1))
+    if key == "pctile":
+        # The prior window excludes today, so it is finite at index n.
+        return _defined_from(n, int(params["n"]))
     raise ValueError(f"no warmup rule for {key}")
 
 
@@ -8998,6 +9504,662 @@ LIBRARY: tuple[LibraryStrategy, ...] = (
                 "multiple from the highest high of the trade. An old high "
                 "does not keep this stop up after the book has gone flat. "
                 "The long is the close, not an intrabar print. Next-open fills, BTC."
+            ),
+        ),
+    ),
+    # Batch 10 (2026-11-01). Appended after the batch-9 seventeen. Claims
+    # walk this tuple in order, so these names are leased only once the
+    # names above are tested or on the book. Do not insert above ``safezone``.
+    # Not keys: the thrusting line, which is the white candle that stops
+    # short of the piercing-line midpoint, and the Ichimoku cloud twist,
+    # which is already lib.ichimoku_cloud (span A above span B).
+    LibraryStrategy(
+        key="holy",
+        title="Holy grail: ADX(14) above 30 and falling, low tags the 20-day EMA",
+        family="trend",
+        evaluation="daily",
+        params=(Param("n", 20, (15, 30)),),
+        signal=_holy_grail,
+        citation=Citation(
+            authors="Connors & Raschke",
+            year=1995,
+            title="Street Smarts",
+            venue="Practitioner book (holy grail)",
+            peer_reviewed=False,
+            tested_rule=(
+                "ADX is above 30 and turning down, and price pulls back to the "
+                "20-period exponential average. The tag of that average in the "
+                "direction of the trend is the setup. They often buy a break of "
+                "the bar that tagged the average."
+            ),
+            implemented_rule=(
+                "Long on a close above the 20-day EMA whose low is at or below "
+                "that EMA, while ADX(14) is above 30 and below its previous "
+                "value, and the close is above the 200-day SMA. The 14, the 30, "
+                "and the 200 stay fixed. The EMA length is the grid."
+            ),
+            differences=(
+                "The book often enters on the next bar's break of the setup bar. "
+                "This name is long on the setup close. lib.adx14 requires +DI "
+                "above -DI and ADX above 25, and it does not ask for a pullback. "
+                "lib.elder_ray is bull power with a rising EMA and no ADX test. "
+                "Next-open fills, BTC."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="bar8020",
+        title="80-20 bar above the 200-day SMA",
+        family="momentum",
+        evaluation="daily",
+        params=(Param("trend", 200, (150, 250)),),
+        signal=_bar_8020,
+        citation=Citation(
+            authors="Connors & Raschke",
+            year=1995,
+            title="Street Smarts",
+            venue="Practitioner book (80-20 bar)",
+            peer_reviewed=False,
+            tested_rule=(
+                "An 80-20 bar opens in one extreme fifth of its high-low range "
+                "and closes in the other. The bullish bar opens in the bottom "
+                "fifth and closes in the top fifth. The book then looks at the "
+                "next session."
+            ),
+            implemented_rule=(
+                "Long on that close when it is also above the 200-day SMA. The "
+                "fifths stay fixed. A zero range is not the bar."
+            ),
+            differences=(
+                "The book often fades or follows on the next day. This name is "
+                "long on the close that completes the bar. lib.ibs is a smoothed "
+                "hold of the close's location. lib.hammer is the lower shadow, "
+                "not the open and the close. Next-open fills, BTC."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="keyrev",
+        title="Bullish key reversal above the 200-day SMA",
+        family="mean_reversion",
+        evaluation="daily",
+        params=(Param("trend", 200, (150, 250)),),
+        signal=_key_reversal,
+        citation=Citation(
+            authors="Achelis",
+            year=1995,
+            title="Technical Analysis from A to Z",
+            venue="Practitioner reference (key reversal)",
+            peer_reviewed=False,
+            tested_rule=(
+                "A bullish key reversal makes a lower low than yesterday and "
+                "closes above yesterday's close, after a decline."
+            ),
+            implemented_rule=(
+                "Long on that close when yesterday itself closed down, and only "
+                "when the close is above the 200-day SMA."
+            ),
+            differences=(
+                "lib.twobar needs the close above yesterday's high, not merely "
+                "above yesterday's close. lib.oops reclaims the broken low and "
+                "does not ask for a higher close than yesterday. The long is "
+                "that close only. Next-open fills, BTC."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="three_in",
+        title="Three inside up above the 200-day SMA",
+        family="mean_reversion",
+        evaluation="daily",
+        params=(Param("trend", 200, (150, 250)),),
+        signal=_three_inside,
+        citation=Citation(
+            authors="Nison",
+            year=1991,
+            title="Japanese Candlestick Charting Techniques",
+            venue="Practitioner book (three inside up)",
+            peer_reviewed=False,
+            tested_rule=(
+                "Three inside up is a bullish harami followed by a close above "
+                "the first candle's high. The third close confirms the harami."
+            ),
+            implemented_rule=(
+                "Long on that third close, and only when it is above the 200-day "
+                "SMA. The harami body has to sit strictly inside the prior black body."
+            ),
+            differences=(
+                "lib.harami is the harami close itself and does not wait for the "
+                "next bar. lib.three_out confirms an engulfing, not a harami. "
+                "The long is the third close only. Next-open fills, BTC."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="meet",
+        title="Bullish meeting lines above the 200-day SMA",
+        family="mean_reversion",
+        evaluation="daily",
+        params=(Param("trend", 200, (150, 250)),),
+        signal=_meeting_lines,
+        citation=Citation(
+            authors="Nison",
+            year=1991,
+            title="Japanese Candlestick Charting Techniques",
+            venue="Practitioner book (meeting lines)",
+            peer_reviewed=False,
+            tested_rule=(
+                "Bullish meeting lines are a black candle and a white candle "
+                "that closes at the black candle's close. The matching close "
+                "is the pattern."
+            ),
+            implemented_rule=(
+                "Long on that white close when it differs from the black close "
+                "by at most 5 percent of the average high-low range of the prior "
+                "five bars, and the close is above the 200-day SMA."
+            ),
+            differences=(
+                "A cent-exact close does not repeat on this tape, so the match "
+                "is the same equal-band lib.matchlow uses on lows. lib.pierce "
+                "closes through the midpoint of the black body and does not "
+                "need the closes to meet. The long is the white close only. "
+                "Next-open fills, BTC."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="separate",
+        title="Bullish separating lines above the 200-day SMA",
+        family="trend",
+        evaluation="daily",
+        params=(Param("trend", 200, (150, 250)),),
+        signal=_separating_lines,
+        citation=Citation(
+            authors="Nison",
+            year=1991,
+            title="Japanese Candlestick Charting Techniques",
+            venue="Practitioner book (separating lines)",
+            peer_reviewed=False,
+            tested_rule=(
+                "Bullish separating lines are a black candle and a white candle "
+                "that opens at the black candle's open and closes up. The shared "
+                "open is the pattern. It is a continuation."
+            ),
+            implemented_rule=(
+                "Long on that white close when the opens differ by at most 5 "
+                "percent of the average high-low range of the prior five bars, "
+                "and the close is above the 200-day SMA."
+            ),
+            differences=(
+                "The open match uses the same equal-band as lib.matchlow. "
+                "lib.belt is one long white candle after a down close and does "
+                "not look at yesterday's open. The long is the white close only. "
+                "Next-open fills, BTC."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="pnf",
+        title="Point-and-figure double top, 1 percent box, 3-box reversal",
+        family="breakout",
+        evaluation="daily",
+        params=(Param("box", 1, (2, 3), unit="percent"),),
+        signal=_pnf_up,
+        citation=Citation(
+            authors="Cohen",
+            year=1978,
+            title="How to Use the Three-Point Reversal Method of Point & Figure Stock Market Trading",
+            venue="Practitioner book (point and figure)",
+            peer_reviewed=False,
+            tested_rule=(
+                "A three-box reversal chart changes column only after price "
+                "retraces three boxes. A double-top buy is a rising column of "
+                "Xs that exceeds the prior rising column. A double-bottom sell "
+                "is a falling column that exceeds the prior falling column."
+            ),
+            implemented_rule=(
+                "Long after a column of rising 1 percent boxes exceeds the prior "
+                "rising column. Flat after a column of falling boxes exceeds the "
+                "prior falling column. A column reverses after 3 boxes. The chart "
+                "is built from closes. The 3 stays fixed."
+            ),
+            differences=(
+                "The book uses a fixed dollar box. A percent of the level the "
+                "box leaves is what travels with bitcoin. lib.renko prints equal "
+                "bricks and does not wait for a second column. lib.kagi reverses "
+                "by one swing, not by a count of boxes against the prior column. "
+                "The first column does not enter. Two percent and three percent "
+                "are the neighbours. The 3-box reversal stays fixed. "
+                "Next-open fills, BTC."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="ha",
+        title="Heikin-Ashi white candle",
+        family="trend",
+        evaluation="daily",
+        params=(Param("n", 1, (2, 3), unit="bars"),),
+        signal=_heikin_ashi,
+        citation=Citation(
+            authors="Valcu",
+            year=2004,
+            title="Using The Heikin-Ashi Technique",
+            venue="Technical Analysis of Stocks & Commodities, February 2004",
+            peer_reviewed=False,
+            tested_rule=(
+                "The Heikin-Ashi close is the average of the open, high, low, "
+                "and close. The Heikin-Ashi open is the average of the prior "
+                "Heikin-Ashi open and close. A white candle, close above open, "
+                "is the up trend."
+            ),
+            implemented_rule=(
+                "Long while the last n Heikin-Ashi candles are white. n is 1 "
+                "at the center. The first open is the average of the first "
+                "bar's open and close. The seed bar is not a position."
+            ),
+            differences=(
+                "Not a one-day white candle of the raw open and close. lib.qstick "
+                "averages the raw close-open and does not build a synthetic "
+                "candle. Two and three white candles are the neighbours. "
+                "Next-open fills, BTC."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="kase",
+        title="Kase DevStop of 20 days",
+        family="trend",
+        evaluation="daily",
+        params=(Param("n", 20, (15, 30)),),
+        signal=_kase_long,
+        citation=Citation(
+            authors="Kase",
+            year=1996,
+            title="Trading with the Odds",
+            venue="Practitioner book (DevStop)",
+            peer_reviewed=False,
+            tested_rule=(
+                "The DevStop places stops a multiple of the standard deviation "
+                "of the true range under the recent high. Two standard "
+                "deviations is the double-deviation stop. The stop trails the "
+                "trade and is redrawn for the next one."
+            ),
+            implemented_rule=(
+                "Long while the close is above the stop. The raw stop is the "
+                "highest close of the last 20 days minus twice the population "
+                "standard deviation of the true range over those days. While "
+                "long, the stop only ratchets up. A flat bar starts the next "
+                "stop from that day's raw level. The 2 stays fixed."
+            ),
+            differences=(
+                "The chart in the book can plot more than one multiple. This "
+                "name uses 2. lib.safezone subtracts the average penetration of "
+                "down days, not the standard deviation of the true range. "
+                "lib.chandelier subtracts an ATR multiple from the highest high "
+                "of the trade. The divisor is n, the same population deviation "
+                "as the Bollinger bands in this catalog. An old high does not "
+                "keep the stop up after the book has gone flat. Next-open fills, BTC."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="yz",
+        title="Quiet Yang-Zhang variance above the 200-day SMA",
+        family="trend",
+        evaluation="daily",
+        params=(
+            Param("n", 20, (15, 30)),
+            Param("trend", 200, (150, 250)),
+        ),
+        signal=_yang_zhang_quiet,
+        citation=Citation(
+            authors="Yang & Zhang",
+            year=2000,
+            title="Drift-Independent Volatility Estimation Based on High, Low, Open, and Close Prices",
+            venue="Journal of Business 73(3), 477-491",
+            peer_reviewed=True,
+            link="https://doi.org/10.1086/209650",
+            tested_rule=(
+                "The estimator adds the overnight variance to a weighted sum of "
+                "the open-to-close variance and the Rogers-Satchell variance. "
+                "The weight is 0.34 / (1.34 + (n + 1) / (n - 1)). They estimate "
+                "variance. They do not publish a timing rule."
+            ),
+            implemented_rule=(
+                "Long while the close is above the 200-day SMA and the 20-day "
+                "Yang-Zhang variance is below its own 100-day median."
+            ),
+            differences=(
+                "The 100-day median is fixed. Overnight and open-to-close use "
+                "the sample variance. The Rogers-Satchell piece is the mean of "
+                "the daily terms. lib.gk is the Garman-Klass average and has no "
+                "overnight jump. lib.rsvol is the Rogers-Satchell mean alone. "
+                "A negative reading can still sit below its median. Next-open "
+                "fills, BTC, fees."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="rsvol",
+        title="Quiet Rogers-Satchell variance above the 200-day SMA",
+        family="trend",
+        evaluation="daily",
+        params=(
+            Param("n", 20, (15, 30)),
+            Param("trend", 200, (150, 250)),
+        ),
+        signal=_rogers_satchell_quiet,
+        citation=Citation(
+            authors="Rogers & Satchell",
+            year=1991,
+            title="Estimating Variance From High, Low and Closing Prices",
+            venue="Annals of Applied Probability 1(4), 504-512",
+            peer_reviewed=True,
+            link="https://doi.org/10.1214/aoap/1177005835",
+            tested_rule=(
+                "The drift-independent estimator from the high, low, and close, "
+                "measured from the open, is ln(H/O) * (ln(H/O) - ln(C/O)) + "
+                "ln(L/O) * (ln(L/O) - ln(C/O)). They estimate variance. They do "
+                "not publish a timing rule."
+            ),
+            implemented_rule=(
+                "Long while the close is above the 200-day SMA and the 20-day "
+                "mean of that daily term is below its own 100-day median."
+            ),
+            differences=(
+                "The 100-day median is fixed. This is not Yang-Zhang: there is "
+                "no overnight variance and no open-to-close variance. lib.gk "
+                "uses 0.5 * ln(H/L)^2 minus a close-open term. The mean can be "
+                "negative, and a negative reading can still sit below its median. "
+                "Next-open fills, BTC, fees."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="tii",
+        title="Trend intensity index(20) above 50",
+        family="trend",
+        evaluation="daily",
+        params=(Param("n", 20, (15, 30)),),
+        signal=_tii_up,
+        citation=Citation(
+            authors="Pee",
+            year=2002,
+            title="Trend Intensity Index",
+            venue="Technical Analysis of Stocks & Commodities",
+            peer_reviewed=False,
+            tested_rule=(
+                "The trend intensity index is the share of the window's closes "
+                "that sit above the moving average of that window. Above 50, "
+                "more closes are above the average than below it."
+            ),
+            implemented_rule=(
+                "Long while the percent of the last 20 closes above the 20-day "
+                "SMA of those same closes is above 50. The 50 stays fixed. A "
+                "close equal to the average does not count."
+            ),
+            differences=(
+                "lib.psych counts up-closes, not closes above the average. The "
+                "close above the SMA by itself is one bar, not the share of the "
+                "window. A straight line splits the window in half and is not "
+                "long. Next-open fills, BTC."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="cv",
+        title="Chaikin volatility expansion above the 200-day SMA",
+        family="trend",
+        evaluation="daily",
+        params=(Param("n", 10, (8, 14)),),
+        signal=_chaikin_vol,
+        citation=Citation(
+            authors="Chaikin",
+            year=1980,
+            title="Chaikin volatility",
+            venue="Practitioner; Achelis records the range EMA and its rate of change",
+            peer_reviewed=False,
+            tested_rule=(
+                "Chaikin volatility is the rate of change of a moving average of "
+                "the high-low range. A positive rate of change is an expanding "
+                "range. It does not use volume. The money-flow oscillator is a "
+                "different series."
+            ),
+            implemented_rule=(
+                "Long while the n-day EMA of the high-low range is above its "
+                "value n days ago, and the close is above the 200-day SMA. n is "
+                "10 at the center. The 200 stays fixed."
+            ),
+            differences=(
+                "No volume. lib.mass_index is a ratio of two EMAs of the range, "
+                "summed, not this rate of change. A zero average range has no "
+                "rate of change and is not long. Next-open fills, BTC."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="dcyc",
+        title="Close above the close one homodyne period ago",
+        family="momentum",
+        evaluation="daily",
+        params=(Param("n", 1, (2, 3), unit="cycles"),),
+        signal=_dominant_cycle,
+        citation=Citation(
+            authors="Ehlers",
+            year=2004,
+            title="Cybernetic Analysis for Stocks and Futures",
+            venue="Practitioner book (homodyne dominant cycle)",
+            peer_reviewed=False,
+            tested_rule=(
+                "The homodyne discriminator measures the dominant cycle. The "
+                "period is smoothed and held between 6 and 50 bars. Momentum "
+                "over that measured period is the close versus the close one "
+                "period ago. The fast and slow alpha limits of MAMA do not "
+                "enter the period."
+            ),
+            implemented_rule=(
+                "Long when the close is above the close n homodyne periods ago. "
+                "n is 1 at the center. The period is the smoothed MAMA period, "
+                "rounded and clamped from 6 to 50. The fast and slow limits "
+                "stay 0.5 and 0.05."
+            ),
+            differences=(
+                "lib.tsmom30d uses a fixed 30-day window. This window is the "
+                "measured cycle and it changes. lib.mama is the close versus "
+                "the adaptive average, not versus a lagged close. Bars before "
+                "n times the 50-bar clamp are not a position. Next-open fills, BTC."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="hook",
+        title="Bullish hook above the 200-day SMA",
+        family="mean_reversion",
+        evaluation="daily",
+        params=(Param("trend", 200, (150, 250)),),
+        signal=_bullish_hook,
+        citation=Citation(
+            authors="Crabel",
+            year=1990,
+            title="Day Trading with Short Term Price Patterns and Opening Range Breakout",
+            venue="Practitioner book (hook)",
+            peer_reviewed=False,
+            tested_rule=(
+                "A bullish hook takes out the prior low and closes in the top "
+                "of its own range. The close is the reversal."
+            ),
+            implemented_rule=(
+                "Long on a close in the top quarter of the range whose low is "
+                "below yesterday's low, and only when the close is above the "
+                "200-day SMA. The quarter stays fixed."
+            ),
+            differences=(
+                "lib.hammer needs a lower shadow at least twice the body and a "
+                "body in the top third. It does not require a break of "
+                "yesterday's low. lib.twobar needs the close above yesterday's "
+                "high. A zero range is not a hook. The long is that close only. "
+                "Next-open fills, BTC."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="outclose",
+        title="Bullish outside close above the 200-day SMA",
+        family="breakout",
+        evaluation="daily",
+        params=(Param("trend", 200, (150, 250)),),
+        signal=_outside_close,
+        citation=Citation(
+            authors="Crabel",
+            year=1990,
+            title="Day Trading with Short Term Price Patterns and Opening Range Breakout",
+            venue="Practitioner book (outside day)",
+            peer_reviewed=False,
+            tested_rule=(
+                "An outside day takes out yesterday's high and yesterday's low. "
+                "A bullish outside day closes in the top half of its range. The "
+                "close is the bar."
+            ),
+            implemented_rule=(
+                "Long on that close when it is also above the 200-day SMA. The "
+                "top half includes the midpoint."
+            ),
+            differences=(
+                "lib.outside waits for a later close through the outside day's "
+                "high. This name is long on the outside close itself. A zero "
+                "range is not the bar. The long is that close only. Next-open "
+                "fills, BTC."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="sandwich",
+        title="Stick sandwich above the 200-day SMA",
+        family="mean_reversion",
+        evaluation="daily",
+        params=(Param("trend", 200, (150, 250)),),
+        signal=_stick_sandwich,
+        citation=Citation(
+            authors="Nison",
+            year=1991,
+            title="Japanese Candlestick Charting Techniques",
+            venue="Practitioner book (stick sandwich)",
+            peer_reviewed=False,
+            tested_rule=(
+                "A stick sandwich is two black candles with the same close and "
+                "a white candle between them. The matching closes are the pattern."
+            ),
+            implemented_rule=(
+                "Long on the second black close when the two black closes differ "
+                "by at most 5 percent of the average high-low range of the prior "
+                "five bars, the middle candle is white, and the close is above "
+                "the 200-day SMA."
+            ),
+            differences=(
+                "lib.matchlow matches the lows of two adjacent black candles and "
+                "has no white candle between them. The equal-band is the same "
+                "5 percent. The long is the second black close only. Next-open "
+                "fills, BTC."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="pinball",
+        title="Momentum pinball below 30 above the 200-day SMA",
+        family="mean_reversion",
+        evaluation="daily",
+        params=(Param("trend", 200, (150, 250)),),
+        signal=_pinball,
+        citation=Citation(
+            authors="Connors & Raschke",
+            year=1995,
+            title="Street Smarts",
+            venue="Practitioner book (momentum pinball)",
+            peer_reviewed=False,
+            tested_rule=(
+                "The 3-period RSI of the 1-period rate of change closes below "
+                "30. That close is the setup. The book then buys a break on the "
+                "next day."
+            ),
+            implemented_rule=(
+                "Long while the 3-day RSI of the one-day percent change is below "
+                "30 and the close is above the 200-day SMA. The 3 and the 30 "
+                "stay fixed."
+            ),
+            differences=(
+                "The book buys the next day's break of the setup. This name is "
+                "long on the setup close and stays long while the RSI remains "
+                "below 30. lib.rsi2 is the RSI of price, not of the percent "
+                "change. lib.rmi is a momentum length inside an RSI and does "
+                "not use a one-day percent change. The percent change starts at "
+                "the second close. Next-open fills, BTC."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="gri",
+        title="Gopalakrishnan range index falling above the 200-day SMA",
+        family="trend",
+        evaluation="daily",
+        params=(
+            Param("n", 20, (14, 30)),
+            Param("trend", 200, (150, 250)),
+        ),
+        signal=_range_index,
+        citation=Citation(
+            authors="Gopalakrishnan",
+            year=2000,
+            title="The Gopalakrishnan Range Index",
+            venue="Technical Analysis of Stocks & Commodities",
+            peer_reviewed=False,
+            tested_rule=(
+                "The range index is the log of the high-low range divided by "
+                "the log of the number of bars. A falling index is a contracting "
+                "range. The window is the one in the article's short reading."
+            ),
+            implemented_rule=(
+                "Long while ln(highest high - lowest low) / ln(n) over 20 bars "
+                "is below its previous value and the close is above the 200-day "
+                "SMA. A non-positive range is undefined."
+            ),
+            differences=(
+                "lib.chop divides a path length by the range and reads a high "
+                "number as chop. lib.vhf divides the range by the path length. "
+                "Neither is the log ratio, and neither asks the index to fall. "
+                "Next-open fills, BTC."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="pctile",
+        title="Close above the 80th percentile of the prior 20 closes",
+        family="breakout",
+        evaluation="daily",
+        params=(Param("n", 20, (14, 30)),),
+        signal=_percentile_channel,
+        citation=Citation(
+            authors="Achelis",
+            year=1995,
+            title="Technical Analysis from A to Z",
+            venue="Practitioner reference (percentile rank)",
+            peer_reviewed=False,
+            tested_rule=(
+                "A percentile rank says where the current close sits among "
+                "recent closes. Achelis records it apart from a moving average. "
+                "Above the 80th percentile the close is in the top fifth of "
+                "that window."
+            ),
+            implemented_rule=(
+                "Long while the close is above the 80th percentile of the prior "
+                "20 closes. Today is outside the window. The 80 stays fixed. "
+                "The percentile is the linear one."
+            ),
+            differences=(
+                "lib.donchian20 buys a break of the prior high, which is the "
+                "100th percentile of the highs, not the 80th percentile of the "
+                "closes. The close above an SMA is the mean, not this rank. A "
+                "close equal to the percentile is not long. Next-open fills, BTC."
             ),
         ),
     ),
