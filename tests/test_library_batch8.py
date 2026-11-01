@@ -154,9 +154,11 @@ def _rise(n: int, step: float = 1.0) -> DailyBars:
 
 class CatalogOrderTests(unittest.TestCase):
     def test_batch8_is_appended_after_the_first_hundred_fifty_four(self):
-        self.assertEqual(tuple(s.key for s in LIBRARY[BATCH7_END:]), NEW)
+        end = BATCH7_END + len(NEW)
+        self.assertEqual(tuple(s.key for s in LIBRARY[BATCH7_END:end]), NEW)
         self.assertEqual(LIBRARY[BATCH7_END - 1].key, "gator_wake")
-        self.assertEqual(len(LIBRARY), BATCH7_END + len(NEW))
+        self.assertEqual(LIBRARY[end].key, "rvi_z")
+        self.assertGreater(len(LIBRARY), end)
         for key, center in CENTERS.items():
             strategy = strategy_by_key(key)
             self.assertEqual(strategy.center, center)

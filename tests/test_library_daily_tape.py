@@ -4,7 +4,7 @@ The web sends the cycle's npz. It does not resample the 5m tape.
 A worker that cannot load a series from 2017-08-17 does not claim
 ``lib.*`` names. ``lib.sma200`` on the recorded daily bars matches the
 prod cycle: 27 trades, PBO 0.30, score start 2018-12-01.
-DSR moves only with the library trial count (0.287 at N=715).
+DSR moves only with the library trial count (0.280 at N=766).
 """
 from __future__ import annotations
 
@@ -281,14 +281,14 @@ class LibraryDailyWorkerTests(unittest.TestCase):
             build_library_data(direct_bars),
             tested_at="2026-10-29T00:00:00+00:00",
         )
-        self.assertEqual(f"{direct['gate_v4']['dsr']:.3f}", "0.287")
-        self.assertEqual(direct["gate_v4"]["n_trials"], 715)
+        self.assertEqual(f"{direct['gate_v4']['dsr']:.3f}", "0.280")
+        self.assertEqual(direct["gate_v4"]["n_trials"], 766)
         self.assertEqual(f"{direct['gate_v4']['pbo']:.2f}", "0.30")
         self.assertEqual(direct["trades"], 27)
         self.assertEqual(direct["library"]["blocks"]["score_start"], "2018-12-01")
         self.assertEqual(direct["gate_v4"]["oos_pnl"], 102241.97)
         self.assertTrue(direct["qualified"])
-        self.assertIn("dsr 0.287 < 0.95 (n_trials=715)", direct["warnings"])
+        self.assertIn("dsr 0.280 < 0.95 (n_trials=766)", direct["warnings"])
         self.assertIn("pbo 0.300 > 0.2", direct["warnings"])
         self.assertIn("oos_pnl 102241.97 <= buy-and-hold 271534.12", direct["warnings"])
         self.assertTrue(any("neighbours 0/3" in str(item) for item in direct["warnings"]))
@@ -330,7 +330,7 @@ class LibraryDailyWorkerTests(unittest.TestCase):
         self.assertEqual(worker_row["library"]["failing_checks"], direct["library"]["failing_checks"])
         self.assertEqual(worker_row["warnings"], direct["warnings"])
         self.assertEqual(worker_row["qualified"], direct["qualified"])
-        self.assertEqual(f"{worker_row['gate_v4']['dsr']:.3f}", "0.287")
+        self.assertEqual(f"{worker_row['gate_v4']['dsr']:.3f}", "0.280")
         self.assertEqual(f"{worker_row['gate_v4']['pbo']:.2f}", "0.30")
 
     def test_unavailable_tape_does_not_claim(self):
