@@ -2145,23 +2145,27 @@ HILBERT_READY = 40
 
 def mesa_adaptive(
     high: np.ndarray, low: np.ndarray, fast_limit: float, slow_limit: float,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Ehlers MAMA and the dominant-cycle phase in degrees.
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Ehlers MAMA, the dominant-cycle phase in degrees, and the smoothed period.
 
     Price is the median. Fast and slow limits bound the adaptive alpha.
-    Both outputs are finite from :data:`HILBERT_READY`. Earlier bars are
-    the zero-seeded startup the EasyLanguage leaves unpublished.
-    Phase is the arctangent of the quadrature over the in-phase component,
-    in degrees, which the sine-wave rule reads. It is not MAMA.
+    They do not enter the period. MAMA and phase are finite from
+    :data:`HILBERT_READY`. Earlier bars are the zero-seeded startup the
+    EasyLanguage leaves unpublished. Phase is the arctangent of the
+    quadrature over the in-phase component, in degrees, which the sine-wave
+    rule reads. It is not MAMA. The third series is the homodyne period in
+    bars, smoothed and already clamped to 6-50 before that smoother, and
+    NaN on the same startup.
     """
     price = (np.asarray(high, dtype=np.float64) + np.asarray(low, dtype=np.float64)) / 2.0
     m = price.shape[0]
     mama = _nan(m)
     phase = _nan(m)
+    period_out = _nan(m)
     fast = float(fast_limit)
     slow = float(slow_limit)
     if m <= HILBERT_READY or fast <= 0.0 or slow <= 0.0 or slow > fast:
-        return mama, phase
+        return mama, phase, period_out
     smooth = np.zeros(m, dtype=np.float64)
     detrender = np.zeros(m, dtype=np.float64)
     i1 = np.zeros(m, dtype=np.float64)
@@ -2248,7 +2252,8 @@ def mesa_adaptive(
         if t >= HILBERT_READY:
             mama[t] = mama_v
             phase[t] = phase_v[t]
-    return mama, phase
+            period_out[t] = smooth_period[t]
+    return mama, phase, period_out
 
 
 def center_of_gravity(close: np.ndarray, n: int) -> np.ndarray:
@@ -2495,4 +2500,132 @@ def safezone_stop(
             continue
         high_close = float(np.max(close[t - lookback + 1 : t + 1]))
         out[t] = high_close - float(multiple) * float(np.mean(pens))
+    return out
+
+
+def dominant_period(high: np.ndarray, low: np.ndarray) -> np.ndarray:
+    """Smoothed homodyne dominant cycle, in bars. Finite from :data:`HILBERT_READY`.
+
+    This is the period MAMA already computes. The fast and slow limits do
+    not enter it. 0.5 and 0.05 are the published alpha clamps. The value is
+    clamped to 6-50 before the last smoother. Startup bars stay NaN.
+    """
+    _mama, _phase, period = mesa_adaptive(high, low, 0.5, 0.05)
+    return period
+
+
+def kase_devstop(
+    high: np.ndarray, low: np.ndarray, close: np.ndarray, n: int, multiple: float = 2.0,
+) -> np.ndarray:
+    """Raw Kase DevStop. Finite at index ``n - 1``.
+
+    The highest close of the last ``n`` days, minus ``multiple`` times the
+    population standard deviation of the true range over those days. The
+    ratchet, which only rises while a book is long, is applied by the signal.
+    Nothing after ``t`` enters the value at ``t``.
+    """
+    deviation = rolling_std(true_range(high, low, close), n)
+    peak = rolling_max(np.asarray(close, dtype=np.float64), n)
+    with np.errstate(invalid="ignore"):
+        return peak - float(multiple) * deviation
+
+
+def rogers_satchell(
+    open_: np.ndarray, high: np.ndarray, low: np.ndarray, close: np.ndarray, n: int,
+) -> np.ndarray:
+    """Mean of the last ``n`` Rogers-Satchell terms. Finite at index ``n - 1``.
+
+    One day is ``ln(H/O) * (ln(H/O) - ln(C/O)) + ln(L/O) * (ln(L/O) - ln(C/O))``.
+    A non-positive price leaves that day undefined. The mean can be negative.
+    """
+    open_ = np.asarray(open_, dtype=np.float64)
+    high = np.asarray(high, dtype=np.float64)
+    low = np.asarray(low, dtype=np.float64)
+    close = np.asarray(close, dtype=np.float64)
+    raw = _nan(close.shape[0])
+    with np.errstate(divide="ignore", invalid="ignore"):
+        ok = (high > 0.0) & (low > 0.0) & (open_ > 0.0) & (close > 0.0) & (high >= low)
+        ho = np.log(high[ok] / open_[ok])
+        lo = np.log(low[ok] / open_[ok])
+        co = np.log(close[ok] / open_[ok])
+        raw[ok] = ho * (ho - co) + lo * (lo - co)
+    return sma_skip_leading(raw, n)
+
+
+def yang_zhang(
+    open_: np.ndarray, high: np.ndarray, low: np.ndarray, close: np.ndarray, n: int,
+) -> np.ndarray:
+    """Yang-Zhang variance of the last ``n`` days. Finite at index ``n``.
+
+    Overnight variance and open-to-close variance are sample variances.
+    The Rogers-Satchell piece is the mean of the daily terms, not a second
+    sample variance. ``k = 0.34 / (1.34 + (n + 1) / (n - 1))``. The window
+    needs the close before its first day, so ``n`` days end at index ``n``.
+    A window with a non-positive price is undefined.
+    """
+    open_ = np.asarray(open_, dtype=np.float64)
+    high = np.asarray(high, dtype=np.float64)
+    low = np.asarray(low, dtype=np.float64)
+    close = np.asarray(close, dtype=np.float64)
+    m = int(close.shape[0])
+    out = _nan(m)
+    n = int(n)
+    if n < 2 or m <= n:
+        return out
+    overnight = _nan(m)
+    session = _nan(m)
+    rs = _nan(m)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        ok = (
+            (open_[1:] > 0.0) & (high[1:] > 0.0) & (low[1:] > 0.0) & (close[1:] > 0.0)
+            & (close[:-1] > 0.0) & (high[1:] >= low[1:])
+        )
+        idx = np.flatnonzero(ok) + 1
+        overnight[idx] = np.log(open_[idx] / close[idx - 1])
+        session[idx] = np.log(close[idx] / open_[idx])
+        ho = np.log(high[idx] / open_[idx])
+        lo = np.log(low[idx] / open_[idx])
+        rs[idx] = ho * (ho - session[idx]) + lo * (lo - session[idx])
+    k = 0.34 / (1.34 + (n + 1.0) / (n - 1.0))
+    for t in range(n, m):
+        window = slice(t - n + 1, t + 1)
+        on = overnight[window]
+        oc = session[window]
+        raw = rs[window]
+        if not (np.isfinite(on).all() and np.isfinite(oc).all() and np.isfinite(raw).all()):
+            continue
+        out[t] = float(np.var(on, ddof=1) + k * np.var(oc, ddof=1) + (1.0 - k) * np.mean(raw))
+    return out
+
+
+def trend_intensity(close: np.ndarray, n: int) -> np.ndarray:
+    """Percent of the last ``n`` closes that sit above their own mean.
+
+    Finite at index ``n - 1``. The mean is the SMA of that same window.
+    A close equal to the mean does not count. A flat window is 0.
+    """
+    close = np.asarray(close, dtype=np.float64)
+    out = _nan(close.shape[0])
+    n = int(n)
+    if n <= 1 or close.shape[0] < n:
+        return out
+    windows = sliding_window_view(close, n)
+    means = windows.mean(axis=1)
+    count = np.sum(windows > means[:, None], axis=1)
+    out[n - 1 :] = 100.0 * count / float(n)
+    return out
+
+
+def prior_percentile(close: np.ndarray, n: int, q: float) -> np.ndarray:
+    """Percentile ``q`` of the ``n`` closes before today. Finite at index ``n``.
+
+    Today is outside the window. The percentile is the linear one.
+    """
+    close = np.asarray(close, dtype=np.float64)
+    out = _nan(close.shape[0])
+    n = int(n)
+    if n <= 0 or close.shape[0] <= n:
+        return out
+    windows = sliding_window_view(close, n)
+    out[n:] = np.percentile(windows[:-1], float(q), axis=1, method="linear")
     return out
