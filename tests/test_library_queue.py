@@ -138,7 +138,7 @@ class LibraryClaimTests(_LibraryMode):
         rest = names[cap:]
         for worker in (
             "omarchy-1", "omarchy-2", "omarchy-3", "omarchy-4", "omarchy-5",
-            "omarchy-6", "omarchy-7", "omarchy-8",
+            "omarchy-6", "omarchy-7", "omarchy-8", "omarchy-9",
         ):
             if not rest:
                 break
@@ -219,7 +219,10 @@ class LibraryClaimTests(_LibraryMode):
         cap = LEASES_PER_LANE * 8
         got: list[str] = []
         rest = fresh
-        for worker in ("zealous-lion", "omarchy-1", "omarchy-2", "omarchy-3", "omarchy-4"):
+        for worker in (
+            "zealous-lion", "omarchy-1", "omarchy-2", "omarchy-3",
+            "omarchy-4", "omarchy-5", "omarchy-6",
+        ):
             body = claim_discovery_batch(
                 worker, 64, parallel=8, now=now, gate_rules=GATE_RULES, require_gate_rules=True,
             )
@@ -253,7 +256,7 @@ class LibraryClaimTests(_LibraryMode):
         cap = LEASES_PER_LANE * 8
         got: list[str] = []
         rest = fresh
-        for worker in ("zealous-lion", "omarchy-1", "omarchy-2", "omarchy-3"):
+        for worker in ("zealous-lion", "omarchy-1", "omarchy-2", "omarchy-3", "omarchy-4"):
             body = claim_discovery_batch(
                 worker, 64, parallel=8, now=now, gate_rules=GATE_RULES, require_gate_rules=True,
             )
@@ -277,8 +280,10 @@ class LibraryClaimTests(_LibraryMode):
         self.assertEqual(done[-1], "lib.three_dn")
         fresh = claim_names()[108:]
         self.assertEqual(fresh[0], "lib.demarker")
-        self.assertEqual(fresh[-1], "lib.expiry")
-        self.assertEqual(len(fresh), 24)
+        self.assertEqual(fresh[23], "lib.expiry")
+        self.assertEqual(fresh[24], "lib.smi")
+        self.assertEqual(fresh[-1], "lib.gator_wake")
+        self.assertEqual(len(fresh), 46)
         for name in done:
             ingested = ingest_discovery_payload({"evaluations": [_row(name)]})
             self.assertEqual(ingested["ingested"], [name])
@@ -287,7 +292,7 @@ class LibraryClaimTests(_LibraryMode):
         cap = LEASES_PER_LANE * 8
         got: list[str] = []
         rest = fresh
-        for worker in ("zealous-lion", "omarchy-1"):
+        for worker in ("zealous-lion", "omarchy-1", "omarchy-2"):
             body = claim_discovery_batch(
                 worker, 64, parallel=8, now=now, gate_rules=GATE_RULES, require_gate_rules=True,
             )

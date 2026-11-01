@@ -9,6 +9,8 @@ that close, so they are not lookahead either.
 """
 from __future__ import annotations
 
+import math
+
 import numpy as np
 from numpy.lib.stride_tricks import sliding_window_view
 
@@ -1992,3 +1994,258 @@ def garman_klass(open_: np.ndarray, high: np.ndarray, low: np.ndarray, close: np
         co = np.log(close[ok] / open_[ok])
         raw[ok] = 0.5 * hl * hl - (2.0 * np.log(2.0) - 1.0) * co * co
     return sma_skip_leading(raw, n)
+
+
+def efficiency_ratio(close: np.ndarray, n: int) -> np.ndarray:
+    """Kaufman efficiency ratio. Finite at index ``n``.
+
+    The net change over ``n`` closes, divided by the sum of the absolute
+    one-day changes in that window. A window with no movement is 0.
+    """
+    close = np.asarray(close, dtype=np.float64)
+    out = _nan(close.shape[0])
+    n = int(n)
+    if n <= 0 or close.shape[0] <= n:
+        return out
+    change = np.abs(np.diff(close))
+    csum = np.concatenate(([0.0], np.cumsum(change)))
+    volatility = csum[n:] - csum[:-n]
+    direction = np.abs(close[n:] - close[:-n])
+    ratio = np.zeros(direction.shape[0], dtype=np.float64)
+    np.divide(direction, volatility, out=ratio, where=volatility > 0.0)
+    out[n:] = ratio
+    return out
+
+
+def stochastic_momentum_index(
+    high: np.ndarray, low: np.ndarray, close: np.ndarray, n: int, smooth: int,
+) -> np.ndarray:
+    """Blau SMI. Double-smoothed distance from the range midpoint, over half the range.
+
+    Both exponential smooths use ``smooth``. A zero range is 0, the midpoint.
+    The scale is about -100 to 100. Finite once the second smooth exists.
+    """
+    high = np.asarray(high, dtype=np.float64)
+    low = np.asarray(low, dtype=np.float64)
+    close = np.asarray(close, dtype=np.float64)
+    out = _nan(close.shape[0])
+    n = int(n)
+    smooth = int(smooth)
+    if n <= 0 or smooth <= 0:
+        return out
+    hh = rolling_max(high, n)
+    ll = rolling_min(low, n)
+    width = hh - ll
+    num = ema(ema(close - (hh + ll) / 2.0, smooth), smooth)
+    den = ema(ema(width, smooth), smooth)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        ok = np.isfinite(num) & np.isfinite(den) & (den > 0.0)
+        flat = np.isfinite(num) & np.isfinite(den) & (den == 0.0)
+        out[ok] = 100.0 * num[ok] / (0.5 * den[ok])
+        out[flat] = 0.0
+    return out
+
+
+def linreg_r2(close: np.ndarray, n: int) -> np.ndarray:
+    """R-squared of the least-squares line on the last ``n`` closes. Finite at ``n - 1``.
+
+    A flat window, with no variance, is 0 rather than undefined.
+    """
+    _slope, _fitted, r2, _se = _linreg_parts(close, n)
+    return r2
+
+
+def linreg_stderr(close: np.ndarray, n: int) -> np.ndarray:
+    """Residual standard error of that line, divisor ``n - 2``. Finite at ``n - 1``.
+
+    A perfect line has standard error 0. ``n`` below 3 is undefined.
+    """
+    _slope, _fitted, _r2, se = _linreg_parts(close, n)
+    return se
+
+
+def _linreg_parts(
+    close: np.ndarray, n: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    close = np.asarray(close, dtype=np.float64)
+    m = close.shape[0]
+    slope = _nan(m)
+    fitted = _nan(m)
+    r2 = _nan(m)
+    se = _nan(m)
+    n = int(n)
+    if n <= 2 or m < n:
+        return slope, fitted, r2, se
+    x = np.arange(n, dtype=np.float64)
+    sum_x = float(x.sum())
+    sum_x2 = float(x @ x)
+    denom = n * sum_x2 - sum_x * sum_x
+    if denom == 0.0:
+        return slope, fitted, r2, se
+    window = sliding_window_view(close, n)
+    sum_y = window.sum(axis=1)
+    sum_y2 = np.square(window).sum(axis=1)
+    sum_xy = window @ x
+    mean_x = sum_x / n
+    mean_y = sum_y / n
+    slope_v = (n * sum_xy - sum_x * sum_y) / denom
+    intercept = mean_y - slope_v * mean_x
+    fitted_v = intercept + slope_v * (n - 1)
+    ss_tot = sum_y2 - n * np.square(mean_y)
+    ss_xx = sum_x2 - n * mean_x * mean_x
+    ss_res = np.maximum(ss_tot - np.square(slope_v) * ss_xx, 0.0)
+    r2_v = np.zeros(slope_v.shape[0], dtype=np.float64)
+    np.divide(ss_tot - ss_res, ss_tot, out=r2_v, where=ss_tot > 1e-18)
+    se_v = np.sqrt(ss_res / (n - 2))
+    slope[n - 1 :] = slope_v
+    fitted[n - 1 :] = fitted_v
+    r2[n - 1 :] = r2_v
+    se[n - 1 :] = se_v
+    return slope, fitted, r2, se
+
+
+def instantaneous_trendline(high: np.ndarray, low: np.ndarray, alpha: float) -> np.ndarray:
+    """Ehlers instantaneous trendline of the median price. Finite from index 6.
+
+    The first six bars only seed the recursion, the same way the book
+    replaces the filter until the seventh bar. ``alpha`` is the book
+    coefficient (he uses 0.07), not a period.
+    """
+    price = (np.asarray(high, dtype=np.float64) + np.asarray(low, dtype=np.float64)) / 2.0
+    out = _nan(price.shape[0])
+    a = float(alpha)
+    if price.shape[0] < 7 or not (0.0 < a < 1.0):
+        return out
+    smooth = _nan(price.shape[0])
+    for t in range(3, price.shape[0]):
+        smooth[t] = (price[t] + 2.0 * price[t - 1] + 2.0 * price[t - 2] + price[t - 3]) / 6.0
+    it0 = float(price[4])
+    it1 = float(price[5])
+    c0 = a - 0.25 * a * a
+    c1 = 0.5 * a * a
+    c2 = -(a - 0.75 * a * a)
+    a1 = 2.0 * (1.0 - a)
+    a2 = -((1.0 - a) ** 2)
+    for t in range(6, price.shape[0]):
+        value = (
+            c0 * float(smooth[t]) + c1 * float(smooth[t - 1]) + c2 * float(smooth[t - 2])
+            + a1 * it1 + a2 * it0
+        )
+        out[t] = value
+        it0, it1 = it1, value
+    return out
+
+
+# First bar at which the Hilbert homodyne uses only earlier real prices.
+# Smooth needs 3, the detrender's sixth lag needs smooth, and that series
+# is lagged again by the quadrature and the 90-degree advance. Index 40
+# is past that chain, and the period clamp has had bars to settle.
+HILBERT_READY = 40
+
+
+def mesa_adaptive(
+    high: np.ndarray, low: np.ndarray, fast_limit: float, slow_limit: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Ehlers MAMA and the dominant-cycle phase in degrees.
+
+    Price is the median. Fast and slow limits bound the adaptive alpha.
+    Both outputs are finite from :data:`HILBERT_READY`. Earlier bars are
+    the zero-seeded startup the EasyLanguage leaves unpublished.
+    Phase is the arctangent of the quadrature over the in-phase component,
+    in degrees, which the sine-wave rule reads. It is not MAMA.
+    """
+    price = (np.asarray(high, dtype=np.float64) + np.asarray(low, dtype=np.float64)) / 2.0
+    m = price.shape[0]
+    mama = _nan(m)
+    phase = _nan(m)
+    fast = float(fast_limit)
+    slow = float(slow_limit)
+    if m <= HILBERT_READY or fast <= 0.0 or slow <= 0.0 or slow > fast:
+        return mama, phase
+    smooth = np.zeros(m, dtype=np.float64)
+    detrender = np.zeros(m, dtype=np.float64)
+    i1 = np.zeros(m, dtype=np.float64)
+    q1 = np.zeros(m, dtype=np.float64)
+    i2 = np.zeros(m, dtype=np.float64)
+    q2 = np.zeros(m, dtype=np.float64)
+    re = np.zeros(m, dtype=np.float64)
+    im = np.zeros(m, dtype=np.float64)
+    period = np.zeros(m, dtype=np.float64)
+    smooth_period = np.zeros(m, dtype=np.float64)
+    phase_v = np.zeros(m, dtype=np.float64)
+    mama_v = 0.0
+    fama_v = 0.0
+    for t in range(m):
+        if t >= 3:
+            smooth[t] = (
+                4.0 * price[t] + 3.0 * price[t - 1] + 2.0 * price[t - 2] + price[t - 3]
+            ) / 10.0
+        adj = 0.075 * (period[t - 1] if t >= 1 else 0.0) + 0.54
+        if t >= 6:
+            detrender[t] = (
+                0.0962 * smooth[t] + 0.5769 * smooth[t - 2]
+                - 0.5769 * smooth[t - 4] - 0.0962 * smooth[t - 6]
+            ) * adj
+        if t >= 6:
+            q1[t] = (
+                0.0962 * detrender[t] + 0.5769 * detrender[t - 2]
+                - 0.5769 * detrender[t - 4] - 0.0962 * detrender[t - 6]
+            ) * adj
+            i1[t] = detrender[t - 3]
+        if t >= 6:
+            ji = (
+                0.0962 * i1[t] + 0.5769 * i1[t - 2]
+                - 0.5769 * i1[t - 4] - 0.0962 * i1[t - 6]
+            ) * adj
+            jq = (
+                0.0962 * q1[t] + 0.5769 * q1[t - 2]
+                - 0.5769 * q1[t - 4] - 0.0962 * q1[t - 6]
+            ) * adj
+            i2_raw = i1[t] - jq
+            q2_raw = q1[t] + ji
+            i2[t] = 0.2 * i2_raw + 0.8 * i2[t - 1]
+            q2[t] = 0.2 * q2_raw + 0.8 * q2[t - 1]
+        if t >= 1:
+            re_raw = i2[t] * i2[t - 1] + q2[t] * q2[t - 1]
+            im_raw = i2[t] * q2[t - 1] - q2[t] * i2[t - 1]
+            re[t] = 0.2 * re_raw + 0.8 * re[t - 1]
+            im[t] = 0.2 * im_raw + 0.8 * im[t - 1]
+        per = period[t - 1] if t >= 1 else 0.0
+        if im[t] != 0.0 and re[t] != 0.0:
+            per = 360.0 / math.degrees(math.atan(im[t] / re[t]))
+        prev = period[t - 1] if t >= 1 else 0.0
+        if prev != 0.0:
+            if per > 1.5 * prev:
+                per = 1.5 * prev
+            if per < 0.67 * prev:
+                per = 0.67 * prev
+        if per < 6.0:
+            per = 6.0
+        if per > 50.0:
+            per = 50.0
+        if t >= 1:
+            per = 0.2 * per + 0.8 * period[t - 1]
+            smooth_period[t] = 0.33 * per + 0.67 * smooth_period[t - 1]
+        period[t] = per
+        if i1[t] != 0.0:
+            phase_v[t] = math.degrees(math.atan(q1[t] / i1[t]))
+        elif t >= 1:
+            phase_v[t] = phase_v[t - 1]
+        delta = (phase_v[t - 1] - phase_v[t]) if t >= 1 else 1.0
+        if delta < 1.0:
+            delta = 1.0
+        alpha = fast / delta
+        if alpha < slow:
+            alpha = slow
+        if alpha > fast:
+            alpha = fast
+        if t == 0:
+            mama_v = float(price[0])
+            fama_v = float(price[0])
+        else:
+            mama_v = alpha * float(price[t]) + (1.0 - alpha) * mama_v
+            fama_v = 0.5 * alpha * mama_v + (1.0 - 0.5 * alpha) * fama_v
+        if t >= HILBERT_READY:
+            mama[t] = mama_v
+            phase[t] = phase_v[t]
+    return mama, phase
