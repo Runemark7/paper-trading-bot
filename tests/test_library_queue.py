@@ -173,6 +173,31 @@ class LibraryClaimTests(_LibraryMode):
         self.assertEqual(body["refilled"], [])
         self.assertEqual(body["retest"], [])
 
+    def test_tested_catalog_through_batch2_leaves_batch3_claimable(self):
+        from hedge_fund.trading.ingest import ingest_discovery_payload
+        from hedge_fund.trading.leases import LEASES_PER_LANE, claim_discovery_batch
+
+        done = claim_names()[:32]
+        self.assertEqual(done[-1], "lib.ibs")
+        fresh = claim_names()[32:]
+        self.assertEqual(fresh[0], "lib.donchian55")
+        self.assertEqual(fresh[-1], "lib.halloween")
+        self.assertGreaterEqual(len(fresh), 20)
+        for name in done:
+            ingested = ingest_discovery_payload({"evaluations": [_row(name)]})
+            self.assertEqual(ingested["ingested"], [name])
+            self.assertEqual(ingested["admitted"], [])
+        now = datetime(2026, 11, 1, 12, 0, tzinfo=timezone.utc)
+        body = claim_discovery_batch(
+            "zealous-lion", 64, parallel=8, now=now, gate_rules=GATE_RULES, require_gate_rules=True,
+        )
+        cap = LEASES_PER_LANE * 8
+        self.assertEqual(body["names"], fresh[:cap])
+        self.assertTrue(set(body["names"]).isdisjoint(done))
+        self.assertEqual(body["source"], "library")
+        self.assertEqual(body["refilled"], [])
+        self.assertEqual(body["retest"], [])
+
     def test_stale_v5_worker_gets_no_names(self):
         from hedge_fund.trading.leases import claim_discovery_batch, load_lease_state
 

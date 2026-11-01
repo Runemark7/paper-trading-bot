@@ -298,15 +298,19 @@ def bollinger(close: np.ndarray, n: int, width: float) -> tuple[np.ndarray, np.n
 
 def keltner(
     high: np.ndarray, low: np.ndarray, close: np.ndarray, ema_n: int, atr_n: int, width: float,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Middle (EMA of typical price) and upper band (middle + ``width`` * ATR)."""
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Middle (EMA of typical price), lower band, and upper band.
+
+    Bands sit ``width`` Wilder-ATR units off the middle line. A missing ATR
+    or a missing EMA leaves that band NaN.
+    """
     high = np.asarray(high, dtype=np.float64)
     low = np.asarray(low, dtype=np.float64)
     close = np.asarray(close, dtype=np.float64)
     typical = (high + low + close) / 3.0
     mid = ema(typical, ema_n)
-    upper = mid + float(width) * atr_wilder(high, low, close, atr_n)
-    return mid, upper
+    band = float(width) * atr_wilder(high, low, close, atr_n)
+    return mid, mid - band, mid + band
 
 
 def ichimoku_first_index(base: int, span: int) -> int:
@@ -426,6 +430,484 @@ def ibs(high: np.ndarray, low: np.ndarray, close: np.ndarray) -> np.ndarray:
     with np.errstate(invalid="ignore", divide="ignore"):
         ok = np.isfinite(span) & (span > 0.0)
         out[ok] = (close[ok] - low[ok]) / span[ok]
+    return out
+
+
+def _finite_tail(x: np.ndarray) -> int | None:
+    """Index of the first finite value, if the rest of the series stays finite."""
+    x = np.asarray(x, dtype=np.float64)
+    idx = np.flatnonzero(np.isfinite(x))
+    if idx.size == 0:
+        return None
+    first = int(idx[0])
+    if not bool(np.all(np.isfinite(x[first:]))):
+        return None
+    return first
+
+
+def wma(x: np.ndarray, n: int) -> np.ndarray:
+    """Linear weighted moving average. Weight ``n`` is on the newest value."""
+    x = np.asarray(x, dtype=np.float64)
+    out = _nan(x.shape[0])
+    n = int(n)
+    if n <= 0 or x.shape[0] < n:
+        return out
+    weights = np.arange(1, n + 1, dtype=np.float64)
+    out[n - 1 :] = sliding_window_view(x, n) @ weights / float(weights.sum())
+    return out
+
+
+def wma_skip_leading(x: np.ndarray, n: int) -> np.ndarray:
+    """WMA that starts once ``n`` finite values exist after leading NaNs."""
+    x = np.asarray(x, dtype=np.float64)
+    out = _nan(x.shape[0])
+    first = _finite_tail(x)
+    if first is None:
+        return out
+    out[first:] = wma(x[first:], n)
+    return out
+
+
+def rolling_sum_from(x: np.ndarray, n: int, start: int) -> np.ndarray:
+    """Sum of ``x[t - n + 1 : t + 1]`` for ``t >= start``. Earlier bars are NaN."""
+    x = np.asarray(x, dtype=np.float64)
+    out = _nan(x.shape[0])
+    n = int(n)
+    start = int(start)
+    if n <= 0 or start < n - 1 or x.shape[0] <= start:
+        return out
+    csum = np.concatenate(([0.0], np.cumsum(x)))
+    idx = np.arange(start, x.shape[0])
+    out[idx] = csum[idx + 1] - csum[idx + 1 - n]
+    return out
+
+
+def rolling_median_skip_leading(x: np.ndarray, n: int) -> np.ndarray:
+    """Median of the last ``n`` finite values. Leading NaNs are skipped."""
+    x = np.asarray(x, dtype=np.float64)
+    out = _nan(x.shape[0])
+    first = _finite_tail(x)
+    n = int(n)
+    if first is None or n <= 0 or x.shape[0] - first < n:
+        return out
+    out[first + n - 1 :] = np.median(sliding_window_view(x[first:], n), axis=1)
+    return out
+
+
+def rolling_max_skip_leading(x: np.ndarray, n: int) -> np.ndarray:
+    x = np.asarray(x, dtype=np.float64)
+    out = _nan(x.shape[0])
+    first = _finite_tail(x)
+    if first is None:
+        return out
+    out[first:] = rolling_max(x[first:], n)
+    return out
+
+
+def rolling_min_skip_leading(x: np.ndarray, n: int) -> np.ndarray:
+    x = np.asarray(x, dtype=np.float64)
+    out = _nan(x.shape[0])
+    first = _finite_tail(x)
+    if first is None:
+        return out
+    out[first:] = rolling_min(x[first:], n)
+    return out
+
+
+def shift_previous(x: np.ndarray, k: int) -> np.ndarray:
+    """``x[t - k]``, NaN for the first ``k`` bars. ``k`` is not a look into the future."""
+    x = np.asarray(x, dtype=np.float64)
+    out = _nan(x.shape[0])
+    k = int(k)
+    if k <= 0 or x.shape[0] <= k:
+        return out
+    out[k:] = x[:-k]
+    return out
+
+
+def weekday_utc(ts: np.ndarray) -> np.ndarray:
+    """UTC weekday, Monday = 0. 1970-01-01 was a Thursday."""
+    t = np.asarray(ts, dtype=np.int64)
+    return ((t // DAY_MS) + 3) % 7
+
+
+def month_of_year(ts: np.ndarray) -> np.ndarray:
+    """Calendar month 1..12 of each UTC timestamp."""
+    t = np.asarray(ts, dtype=np.int64)
+    months = t.astype("datetime64[ms]").astype("datetime64[M]").astype(np.int64)
+    return (months % 12) + 1
+
+
+def day_of_month(ts: np.ndarray) -> np.ndarray:
+    """Calendar day 1..31 of each UTC timestamp."""
+    t = np.asarray(ts, dtype=np.int64)
+    days = t.astype("datetime64[ms]").astype("datetime64[D]")
+    months = days.astype("datetime64[M]")
+    return (days - months).astype(np.int64) + 1
+
+
+def days_in_month(ts: np.ndarray) -> np.ndarray:
+    """Length of the UTC month that contains each timestamp."""
+    t = np.asarray(ts, dtype=np.int64)
+    months = t.astype("datetime64[ms]").astype("datetime64[M]")
+    nxt = months + np.timedelta64(1, "M")
+    last = nxt.astype("datetime64[D]") - np.timedelta64(1, "D")
+    start = months.astype("datetime64[D]")
+    return (last - start).astype(np.int64) + 1
+
+
+def parabolic_sar(
+    high: np.ndarray, low: np.ndarray, af_start: float, af_step: float, af_max: float,
+) -> np.ndarray:
+    """True while Wilder's parabolic SAR is in an uptrend.
+
+    The first bar is not a signal (there is no prior extreme yet). From the
+    second bar the stop ratchets toward the extreme price by ``af``, which
+    starts at ``af_start``, steps by ``af_step`` on a new extreme, and caps
+    at ``af_max``. In an uptrend the stop cannot sit above either of the two
+    previous lows; in a downtrend it cannot sit below either of the two
+    previous highs. A bar that breaks the stop flips, and that bar takes the
+    new direction. Every input at ``t`` is known at that close.
+    """
+    high = np.asarray(high, dtype=np.float64)
+    low = np.asarray(low, dtype=np.float64)
+    m = int(high.shape[0])
+    out = np.zeros(m, dtype=bool)
+    if m < 2:
+        return out
+    bull = True
+    af = float(af_start)
+    ep = float(high[0])
+    sar = float(low[0])
+    cap = float(af_max)
+    step = float(af_step)
+    for t in range(1, m):
+        nxt = sar + af * (ep - sar)
+        if bull:
+            nxt = min(nxt, float(low[t - 1]))
+            if t >= 2:
+                nxt = min(nxt, float(low[t - 2]))
+            if float(low[t]) < nxt:
+                bull = False
+                nxt = ep
+                ep = float(low[t])
+                af = float(af_start)
+            elif float(high[t]) > ep:
+                ep = float(high[t])
+                af = min(af + step, cap)
+        else:
+            nxt = max(nxt, float(high[t - 1]))
+            if t >= 2:
+                nxt = max(nxt, float(high[t - 2]))
+            if float(high[t]) > nxt:
+                bull = True
+                nxt = ep
+                ep = float(high[t])
+                af = float(af_start)
+            elif float(low[t]) < ep:
+                ep = float(low[t])
+                af = min(af + step, cap)
+        sar = nxt
+        out[t] = bull
+    return out
+
+
+def kaufman_ama(close: np.ndarray, er_n: int, fast: int, slow: int) -> np.ndarray:
+    """Kaufman adaptive moving average.
+
+    The efficiency ratio is the n-day net change divided by the sum of the
+    absolute one-day changes. The smoothing constant is the squared mix of
+    the fast and slow EMA constants. The seed, at index ``er_n``, is the
+    close. A zero-volatility window has efficiency 0 and uses the slow constant.
+    """
+    close = np.asarray(close, dtype=np.float64)
+    out = _nan(close.shape[0])
+    er_n = int(er_n)
+    fast = int(fast)
+    slow = int(slow)
+    if er_n <= 0 or fast <= 0 or slow <= 0 or close.shape[0] <= er_n:
+        return out
+    change = np.abs(np.diff(close))
+    csum = np.concatenate(([0.0], np.cumsum(change)))
+    volatility = csum[er_n:] - csum[:-er_n]
+    direction = np.abs(close[er_n:] - close[:-er_n])
+    efficiency = np.zeros(direction.shape[0], dtype=np.float64)
+    np.divide(direction, volatility, out=efficiency, where=volatility > 0.0)
+    fast_sc = 2.0 / (fast + 1.0)
+    slow_sc = 2.0 / (slow + 1.0)
+    smooth = (efficiency * (fast_sc - slow_sc) + slow_sc) ** 2
+    value = float(close[er_n])
+    out[er_n] = value
+    for i in range(1, smooth.shape[0]):
+        value = value + float(smooth[i]) * (float(close[er_n + i]) - value)
+        out[er_n + i] = value
+    return out
+
+
+def aroon(high: np.ndarray, low: np.ndarray, n: int) -> tuple[np.ndarray, np.ndarray]:
+    """Aroon Up and Aroon Down. Ties take the most recent extreme.
+
+    The window is the last ``n`` bars plus today (``n + 1`` closes of the
+    high/low). 100 means the extreme printed today. Defined from index ``n``.
+    """
+    high = np.asarray(high, dtype=np.float64)
+    low = np.asarray(low, dtype=np.float64)
+    m = int(high.shape[0])
+    up = _nan(m)
+    down = _nan(m)
+    n = int(n)
+    if n <= 0 or m <= n:
+        return up, down
+    hw = sliding_window_view(high, n + 1)
+    lw = sliding_window_view(low, n + 1)
+    since_high = np.argmax(hw[:, ::-1], axis=1)
+    since_low = np.argmin(lw[:, ::-1], axis=1)
+    up[n:] = 100.0 * (n - since_high) / n
+    down[n:] = 100.0 * (n - since_low) / n
+    return up, down
+
+
+def cci(high: np.ndarray, low: np.ndarray, close: np.ndarray, n: int) -> np.ndarray:
+    """Lambert CCI. Typical price versus its mean, scaled by 0.015 * MAD.
+
+    A window with no deviation is 0 when typical price equals its mean.
+    Defined from index ``n - 1``.
+    """
+    high = np.asarray(high, dtype=np.float64)
+    low = np.asarray(low, dtype=np.float64)
+    close = np.asarray(close, dtype=np.float64)
+    out = _nan(close.shape[0])
+    n = int(n)
+    if n <= 1 or close.shape[0] < n:
+        return out
+    typical = (high + low + close) / 3.0
+    mid = sma(typical, n)
+    window = sliding_window_view(typical, n)
+    mad = np.mean(np.abs(window - mid[n - 1 :, None]), axis=1)
+    num = typical[n - 1 :] - mid[n - 1 :]
+    with np.errstate(invalid="ignore", divide="ignore"):
+        scaled = num / (0.015 * mad)
+    flat = np.isfinite(mid[n - 1 :]) & (mad == 0.0)
+    ok = np.isfinite(scaled)
+    out[n - 1 :] = np.where(ok, scaled, np.where(flat, 0.0, np.nan))
+    return out
+
+
+def stochastic_k(high: np.ndarray, low: np.ndarray, close: np.ndarray, n: int) -> np.ndarray:
+    """Lane fast %K, 0 to 100, on the last ``n`` bars including today.
+
+    A zero-range window is 50 (the close is the only price in the window),
+    so a later %D still has a defined input. Defined from index ``n - 1``.
+    """
+    high = np.asarray(high, dtype=np.float64)
+    low = np.asarray(low, dtype=np.float64)
+    close = np.asarray(close, dtype=np.float64)
+    hh = rolling_max(high, n)
+    ll = rolling_min(low, n)
+    out = _nan(close.shape[0])
+    span = hh - ll
+    with np.errstate(invalid="ignore", divide="ignore"):
+        ok = np.isfinite(span) & (span > 0.0) & np.isfinite(close)
+        flat = np.isfinite(span) & (span == 0.0)
+        out[ok] = 100.0 * (close[ok] - ll[ok]) / span[ok]
+        out[flat] = 50.0
+    return out
+
+
+def sma_skip_leading(x: np.ndarray, n: int) -> np.ndarray:
+    """SMA that starts once ``n`` finite values exist after leading NaNs."""
+    x = np.asarray(x, dtype=np.float64)
+    out = _nan(x.shape[0])
+    first = _finite_tail(x)
+    if first is None:
+        return out
+    out[first:] = sma(x[first:], n)
+    return out
+
+
+def close_streak(close: np.ndarray) -> np.ndarray:
+    """Connors up/down streak. A higher close adds 1, a lower close subtracts 1, a tie is 0."""
+    close = np.asarray(close, dtype=np.float64)
+    out = np.zeros(close.shape[0], dtype=np.float64)
+    for i in range(1, close.shape[0]):
+        if close[i] > close[i - 1]:
+            out[i] = out[i - 1] + 1.0 if out[i - 1] > 0.0 else 1.0
+        elif close[i] < close[i - 1]:
+            out[i] = out[i - 1] - 1.0 if out[i - 1] < 0.0 else -1.0
+    return out
+
+
+def percent_rank_change(close: np.ndarray, n: int) -> np.ndarray:
+    """Percent of the last ``n`` one-day percent changes, today included, strictly below today's.
+
+    This is the StockCharts / Connors form (count below, divided by ``n``).
+    Today's change is one of the ``n``, so the value is at most ``100 * (n - 1) / n``.
+    Defined from index ``n`` (the first ``n`` returns end there).
+    """
+    close = np.asarray(close, dtype=np.float64)
+    out = _nan(close.shape[0])
+    n = int(n)
+    if n <= 1 or close.shape[0] <= n:
+        return out
+    change = np.zeros(close.shape[0], dtype=np.float64)
+    prev = close[:-1]
+    with np.errstate(invalid="ignore", divide="ignore"):
+        step = np.where(prev != 0.0, close[1:] / prev - 1.0, 0.0)
+    change[1:] = np.where(np.isfinite(step), step, 0.0)
+    window = sliding_window_view(change[1:], n)
+    last = window[:, -1]
+    below = np.sum(window < last[:, None], axis=1)
+    # ``last`` is inside the window, so it contributes one false comparison.
+    out[n:] = 100.0 * below / n
+    return out
+
+
+def connors_rsi(close: np.ndarray, price_n: int = 3, streak_n: int = 2, rank_n: int = 100) -> np.ndarray:
+    """Average of RSI(price), RSI(streak), and the percent rank of the one-day change."""
+    close = np.asarray(close, dtype=np.float64)
+    price = rsi_wilder(close, int(price_n))
+    streak = rsi_wilder(close_streak(close), int(streak_n))
+    rank = percent_rank_change(close, int(rank_n))
+    out = _nan(close.shape[0])
+    ok = np.isfinite(price) & np.isfinite(streak) & np.isfinite(rank)
+    out[ok] = (price[ok] + streak[ok] + rank[ok]) / 3.0
+    return out
+
+
+def realized_vol(close: np.ndarray, n: int) -> np.ndarray:
+    """Sample standard deviation of the last ``n`` one-day log returns.
+
+    Not annualized: callers compare it with its own trailing median.
+    Defined from index ``n``.
+    """
+    close = np.asarray(close, dtype=np.float64)
+    out = _nan(close.shape[0])
+    n = int(n)
+    if n <= 1 or close.shape[0] <= n:
+        return out
+    prev = close[:-1]
+    with np.errstate(invalid="ignore", divide="ignore"):
+        ratio = np.where(prev > 0.0, close[1:] / prev, np.nan)
+        log_ret = np.log(ratio)
+    if not bool(np.all(np.isfinite(log_ret))):
+        return out
+    window = sliding_window_view(log_ret, n)
+    sd = window.std(axis=1, ddof=1)
+    # A window whose log returns differ only in float noise is flat. Real
+    # daily bitcoin moves are far above this, so it does not change a tape.
+    span = window.max(axis=1) - window.min(axis=1)
+    out[n:] = np.where(span <= 1e-12, 0.0, sd)
+    return out
+
+
+def hull_ma(close: np.ndarray, n: int) -> np.ndarray:
+    """Hull moving average: WMA of ``2 * WMA(n/2) - WMA(n)`` over ``round(sqrt(n))`` bars."""
+    close = np.asarray(close, dtype=np.float64)
+    n = int(n)
+    half = max(n // 2, 1)
+    root = max(int(round(n ** 0.5)), 1)
+    raw = 2.0 * wma(close, half) - wma(close, n)
+    return wma_skip_leading(raw, root)
+
+
+def vortex(high: np.ndarray, low: np.ndarray, close: np.ndarray, n: int) -> tuple[np.ndarray, np.ndarray]:
+    """Vortex VI+ and VI-. Sums start at the first bar that has a previous bar.
+
+    VI+ is the sum of ``|high - prior low|`` over ``n`` bars divided by the
+    sum of true range. VI- uses ``|low - prior high|``. Defined from index ``n``.
+    """
+    high = np.asarray(high, dtype=np.float64)
+    low = np.asarray(low, dtype=np.float64)
+    close = np.asarray(close, dtype=np.float64)
+    m = int(close.shape[0])
+    plus = _nan(m)
+    minus = _nan(m)
+    n = int(n)
+    if n <= 0 or m <= n:
+        return plus, minus
+    vm_plus = np.zeros(m, dtype=np.float64)
+    vm_minus = np.zeros(m, dtype=np.float64)
+    vm_plus[1:] = np.abs(high[1:] - low[:-1])
+    vm_minus[1:] = np.abs(low[1:] - high[:-1])
+    tr = true_range(high, low, close)
+    tr = np.where(np.isfinite(tr), tr, 0.0)
+    sp = rolling_sum_from(vm_plus, n, n)
+    sm = rolling_sum_from(vm_minus, n, n)
+    st = rolling_sum_from(tr, n, n)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        ok = np.isfinite(st) & (st > 0.0)
+        plus[ok] = sp[ok] / st[ok]
+        minus[ok] = sm[ok] / st[ok]
+    return plus, minus
+
+
+def ultimate_oscillator(
+    high: np.ndarray, low: np.ndarray, close: np.ndarray, short: int, mid: int, long: int,
+) -> np.ndarray:
+    """Williams Ultimate Oscillator. Buying pressure over true range, weighted 4/2/1.
+
+    Bar 0 has no prior close and is excluded from every sum. Defined from
+    index ``long`` when ``long`` is the longest period.
+    """
+    high = np.asarray(high, dtype=np.float64)
+    low = np.asarray(low, dtype=np.float64)
+    close = np.asarray(close, dtype=np.float64)
+    m = int(close.shape[0])
+    out = _nan(m)
+    if m < 2:
+        return out
+    bp = np.zeros(m, dtype=np.float64)
+    tr = np.zeros(m, dtype=np.float64)
+    bp[1:] = close[1:] - np.minimum(low[1:], close[:-1])
+    tr[1:] = np.maximum(high[1:], close[:-1]) - np.minimum(low[1:], close[:-1])
+
+    def average(period: int) -> np.ndarray:
+        bought = rolling_sum_from(bp, period, period)
+        span = rolling_sum_from(tr, period, period)
+        avg = _nan(m)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            ok = np.isfinite(span) & (span > 0.0)
+            avg[ok] = bought[ok] / span[ok]
+        return avg
+
+    a_short = average(int(short))
+    a_mid = average(int(mid))
+    a_long = average(int(long))
+    ok = np.isfinite(a_short) & np.isfinite(a_mid) & np.isfinite(a_long)
+    out[ok] = 100.0 * (4.0 * a_short[ok] + 2.0 * a_mid[ok] + a_long[ok]) / 7.0
+    return out
+
+
+def trix(close: np.ndarray, n: int) -> np.ndarray:
+    """One-day rate of change of a triple EMA. Positive means the triple EMA is rising."""
+    close = np.asarray(close, dtype=np.float64)
+    third = ema(ema(ema(close, n), n), n)
+    prev = shift_previous(third, 1)
+    out = _nan(close.shape[0])
+    with np.errstate(invalid="ignore", divide="ignore"):
+        ok = np.isfinite(third) & np.isfinite(prev) & (prev != 0.0)
+        out[ok] = (third[ok] - prev[ok]) / prev[ok]
+    return out
+
+
+def stoch_rsi(close: np.ndarray, n: int) -> np.ndarray:
+    """Stochastic of Wilder RSI(n) over the last ``n`` RSI values.
+
+    A zero RSI range uses the RSI level itself: a pinned 100 stays 100 and a
+    pinned 0 stays 0. Defined once ``n`` RSI values exist. RSI itself starts
+    at index ``n``, so this starts at index ``2n - 1``.
+    """
+    close = np.asarray(close, dtype=np.float64)
+    value = rsi_wilder(close, n)
+    hh = rolling_max_skip_leading(value, n)
+    ll = rolling_min_skip_leading(value, n)
+    out = _nan(close.shape[0])
+    span = hh - ll
+    with np.errstate(invalid="ignore", divide="ignore"):
+        ok = np.isfinite(span) & (span > 0.0) & np.isfinite(value)
+        flat = np.isfinite(span) & (span == 0.0) & np.isfinite(value)
+        out[ok] = 100.0 * (value[ok] - ll[ok]) / span[ok]
+        out[flat] = value[flat]
     return out
 
 
