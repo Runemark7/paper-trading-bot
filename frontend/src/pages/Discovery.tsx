@@ -159,7 +159,7 @@ export default function Discovery() {
       >
         Discovery evaluates a fixed library of cited daily BTC strategies: long or flat, all-in, exit when the
         signal turns off. Gate v7b passes a name that is profitable after fees on the test years and the final
-        year. Neighbours, DSR, and PBO are warnings. A pass is proposed, awaiting approval. The owner admits champions by hand.
+        year. Neighbours, DSR, and PBO are warnings. A library pass is seated as a paper champion. The random farm stays paused.
       </PageHeader>
 
       {summary.isError ? <ErrorNote what="discovery status" error={summary.error} stale={Boolean(summary.data)} /> : null}

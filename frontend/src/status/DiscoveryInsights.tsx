@@ -19,11 +19,11 @@ export function GateLegend({ insights }: { insights?: DiscoveryInsights }) {
         aside={insights ? `rejections among ${tested?.toLocaleString("en-US")} names under the current gate` : undefined}
         info={
           <InfoTip label="Gate v7" align="left">
-            The daily library passes when it is profitable after fees on the test years and the holdout year, including at higher costs, with the trade floors. Neighbours, DSR, PBO, Sharpe, sma_stack, and buy-and-hold are warnings. A pass is proposed, not seated. The 5m path is unchanged.
+            The daily library passes when it is profitable after fees on the test years and the holdout year, including at higher costs, with the trade floors. Neighbours, DSR, PBO, Sharpe, sma_stack, and buy-and-hold are warnings. A library pass is seated. The 5m path is unchanged.
           </InfoTip>
         }
       >
-        A library name is proposed only when every veto passes. Warnings are shown on the row and do not reject it.
+        A library name is seated only when every veto passes. Warnings are shown on the row and do not reject it.
       </SectionTitle>
       <div className="grid gap-4 lg:grid-cols-2">
         {groups.map((group) => (

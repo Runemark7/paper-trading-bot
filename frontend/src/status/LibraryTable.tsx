@@ -75,7 +75,7 @@ export default function LibraryTable() {
         title="Strategy library"
         aside={data?.gate_rules}
       >
-        Cited daily BTC rules. A pass is profitable after fees on the test years and the holdout year. Neighbours are a warning. It is proposed, not seated.
+        Cited daily BTC rules. A pass is profitable after fees on the test years and the holdout year. Neighbours are a warning. A pass is seated.
       </SectionTitle>
       {query.isError ? <ErrorNote what="the strategy library" error={query.error} stale={Boolean(data)} /> : null}
       {query.isPending && !data ? <SkeletonRows rows={6} /> : null}
