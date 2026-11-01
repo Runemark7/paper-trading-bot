@@ -911,6 +911,310 @@ def stoch_rsi(close: np.ndarray, n: int) -> np.ndarray:
     return out
 
 
+def sum_skip_leading(x: np.ndarray, n: int) -> np.ndarray:
+    """Sum of the last ``n`` values once ``n`` finite values exist after leading NaNs."""
+    x = np.asarray(x, dtype=np.float64)
+    out = _nan(x.shape[0])
+    first = _finite_tail(x)
+    n = int(n)
+    if first is None or n <= 0 or x.shape[0] - first < n:
+        return out
+    tail = x[first:]
+    csum = np.concatenate(([0.0], np.cumsum(tail)))
+    idx = np.arange(n - 1, tail.shape[0])
+    out[first + idx] = csum[idx + 1] - csum[idx + 1 - n]
+    return out
+
+
+def dema(close: np.ndarray, n: int) -> np.ndarray:
+    """Mulloy double EMA: ``2 * EMA(n) - EMA(EMA(n))``.
+
+    The inner EMA is finite at ``n - 1``. The outer EMA needs ``n`` finite
+    values of that line, so the result starts at ``2 * (n - 1)``.
+    """
+    close = np.asarray(close, dtype=np.float64)
+    first = ema(close, n)
+    second = ema(first, n)
+    out = _nan(close.shape[0])
+    ok = np.isfinite(first) & np.isfinite(second)
+    out[ok] = 2.0 * first[ok] - second[ok]
+    return out
+
+
+def chande_momentum(close: np.ndarray, n: int) -> np.ndarray:
+    """Chande momentum oscillator. Raw up-sum minus down-sum, over their total.
+
+    Unlike Wilder RSI, the sums are not smoothed. A window with no movement
+    is 0. Defined from index ``n`` (``n`` one-day changes).
+    """
+    close = np.asarray(close, dtype=np.float64)
+    out = _nan(close.shape[0])
+    n = int(n)
+    if n <= 0 or close.shape[0] <= n:
+        return out
+    diff = np.diff(close)
+    up = np.where(diff > 0.0, diff, 0.0)
+    down = np.where(diff < 0.0, -diff, 0.0)
+    c_up = np.concatenate(([0.0], np.cumsum(up)))
+    c_down = np.concatenate(([0.0], np.cumsum(down)))
+    idx = np.arange(n, close.shape[0])
+    su = c_up[idx] - c_up[idx - n]
+    sd = c_down[idx] - c_down[idx - n]
+    denom = su + sd
+    with np.errstate(invalid="ignore", divide="ignore"):
+        out[idx] = np.where(denom > 0.0, 100.0 * (su - sd) / denom, 0.0)
+    return out
+
+
+def qstick(open_: np.ndarray, close: np.ndarray, n: int) -> np.ndarray:
+    """SMA of close minus open. Positive means the bodies closed up on balance."""
+    body = np.asarray(close, dtype=np.float64) - np.asarray(open_, dtype=np.float64)
+    return sma(body, n)
+
+
+def know_sure_thing(close: np.ndarray) -> np.ndarray:
+    """Pring daily KST. Four smoothed rates of change, weights 1, 2, 3, 4.
+
+    ROC(10), ROC(15) and ROC(20) are smoothed by an SMA of 10. ROC(30) is
+    smoothed by an SMA of 15. The line is finite once that slowest average
+    is, at index ``30 + 15 - 1``.
+    """
+    close = np.asarray(close, dtype=np.float64)
+    roc10 = sma_skip_leading(trailing_return(close, 10), 10)
+    roc15 = sma_skip_leading(trailing_return(close, 15), 10)
+    roc20 = sma_skip_leading(trailing_return(close, 20), 10)
+    roc30 = sma_skip_leading(trailing_return(close, 30), 15)
+    out = _nan(close.shape[0])
+    ok = np.isfinite(roc10) & np.isfinite(roc15) & np.isfinite(roc20) & np.isfinite(roc30)
+    out[ok] = roc10[ok] + 2.0 * roc15[ok] + 3.0 * roc20[ok] + 4.0 * roc30[ok]
+    return out
+
+
+def fisher_transform(high: np.ndarray, low: np.ndarray, n: int) -> np.ndarray:
+    """Ehlers Fisher transform of the smoothed n-day location of the midpoint.
+
+    The midpoint's position in its own n-day range is smoothed with weights
+    0.33 and 0.67, clamped to ±0.999, then passed through the Fisher map
+    and smoothed the same way. The seed of both recursions is 0, which is
+    "no history", not a later bar. The first value sits at index ``n - 1``.
+    """
+    high = np.asarray(high, dtype=np.float64)
+    low = np.asarray(low, dtype=np.float64)
+    price = (high + low) / 2.0
+    out = _nan(price.shape[0])
+    n = int(n)
+    if n <= 1 or price.shape[0] < n:
+        return out
+    highest = rolling_max(price, n)
+    lowest = rolling_min(price, n)
+    value = 0.0
+    fish = 0.0
+    for t in range(n - 1, price.shape[0]):
+        span = float(highest[t] - lowest[t])
+        if not np.isfinite(span) or span <= 0.0:
+            raw = 0.0
+        else:
+            raw = 2.0 * ((float(price[t]) - float(lowest[t])) / span - 0.5)
+        raw = float(np.clip(raw, -0.999, 0.999))
+        value = 0.33 * raw + 0.67 * value
+        value = float(np.clip(value, -0.999, 0.999))
+        fish = 0.5 * float(np.log((1.0 + value) / (1.0 - value))) + 0.5 * fish
+        out[t] = fish
+    return out
+
+
+def relative_vigor(
+    open_: np.ndarray, high: np.ndarray, low: np.ndarray, close: np.ndarray, n: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Ehlers relative vigor index and its 4-bar signal line.
+
+    Close-open and high-low are each passed through the symmetric 1-2-2-1
+    weights, summed over ``n`` bars, and divided. The signal line is the
+    same weighting of the index. A zero range is 0. The index starts once
+    ``n`` weighted bars exist (index ``n + 2``). The signal needs three
+    earlier index values, so it starts at ``n + 5``.
+    """
+    open_ = np.asarray(open_, dtype=np.float64)
+    high = np.asarray(high, dtype=np.float64)
+    low = np.asarray(low, dtype=np.float64)
+    close = np.asarray(close, dtype=np.float64)
+    m = int(close.shape[0])
+    rvi = _nan(m)
+    signal = _nan(m)
+    n = int(n)
+    if n <= 0 or m < 4:
+        return rvi, signal
+    body = close - open_
+    span = high - low
+    num_bar = _nan(m)
+    den_bar = _nan(m)
+    num_bar[3:] = (body[3:] + 2.0 * body[2:-1] + 2.0 * body[1:-2] + body[:-3]) / 6.0
+    den_bar[3:] = (span[3:] + 2.0 * span[2:-1] + 2.0 * span[1:-2] + span[:-3]) / 6.0
+    num = sum_skip_leading(num_bar, n)
+    den = sum_skip_leading(den_bar, n)
+    ok = np.isfinite(num) & np.isfinite(den) & (den != 0.0)
+    flat = np.isfinite(num) & np.isfinite(den) & (den == 0.0)
+    rvi[ok] = num[ok] / den[ok]
+    rvi[flat] = 0.0
+    if m > 3:
+        mixed = (rvi[3:] + 2.0 * rvi[2:-1] + 2.0 * rvi[1:-2] + rvi[:-3]) / 6.0
+        signal[3:] = mixed
+    return rvi, signal
+
+
+def schaff_trend(close: np.ndarray, cycle: int, fast: int = 23, slow: int = 50) -> np.ndarray:
+    """Schaff trend cycle: MACD line, then a stochastic, twice, each smoothed by 1/2.
+
+    The 23/50 MACD lengths and the 0.5 smoother are the published defaults
+    and are not arguments a caller grids here. A zero-range stochastic keeps
+    the previous fraction; the first bar with no range and no history is 50.
+    The cycle length is the only lookback. The result starts once both
+    stochastic windows exist.
+    """
+    close = np.asarray(close, dtype=np.float64)
+    fast_ma = ema(close, fast)
+    slow_ma = ema(close, slow)
+    macd = _nan(close.shape[0])
+    ok = np.isfinite(fast_ma) & np.isfinite(slow_ma)
+    macd[ok] = fast_ma[ok] - slow_ma[ok]
+
+    def _smooth_stoch(series: np.ndarray, length: int) -> np.ndarray:
+        highest = rolling_max_skip_leading(series, length)
+        lowest = rolling_min_skip_leading(series, length)
+        out = _nan(series.shape[0])
+        frac_prev = None
+        smooth = None
+        for t in range(series.shape[0]):
+            if not (np.isfinite(highest[t]) and np.isfinite(lowest[t]) and np.isfinite(series[t])):
+                continue
+            span = float(highest[t] - lowest[t])
+            if span > 0.0:
+                frac = 100.0 * (float(series[t]) - float(lowest[t])) / span
+            elif frac_prev is not None:
+                frac = frac_prev
+            else:
+                frac = 50.0
+            frac_prev = frac
+            smooth = frac if smooth is None else smooth + 0.5 * (frac - smooth)
+            out[t] = smooth
+        return out
+
+    return _smooth_stoch(_smooth_stoch(macd, int(cycle)), int(cycle))
+
+
+def detrended_price(close: np.ndarray, n: int) -> np.ndarray:
+    """Close from ``n // 2 + 1`` bars ago, minus the SMA of ``n`` closes through today.
+
+    The displaced close is older than the average. Nothing after ``t`` enters
+    the value at ``t``. Defined from index ``n - 1``.
+    """
+    close = np.asarray(close, dtype=np.float64)
+    n = int(n)
+    lagged = shift_previous(close, n // 2 + 1)
+    average = sma(close, n)
+    out = _nan(close.shape[0])
+    ok = np.isfinite(lagged) & np.isfinite(average)
+    out[ok] = lagged[ok] - average[ok]
+    return out
+
+
+def ulcer_index(close: np.ndarray, n: int) -> np.ndarray:
+    """Martin ulcer index: root-mean-square percentage drawdown from the window high.
+
+    The high is the highest close in the last ``n`` closes, today included.
+    A window whose peak is not positive is left undefined. Defined from
+    index ``n - 1``.
+    """
+    close = np.asarray(close, dtype=np.float64)
+    out = _nan(close.shape[0])
+    n = int(n)
+    if n <= 1 or close.shape[0] < n:
+        return out
+    windows = sliding_window_view(close, n)
+    peak = windows.max(axis=1)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        drawdown = np.where(
+            peak[:, None] > 0.0,
+            100.0 * (peak[:, None] - windows) / peak[:, None],
+            np.nan,
+        )
+        value = np.sqrt(np.mean(drawdown * drawdown, axis=1))
+    ok = np.isfinite(value)
+    filled = out[n - 1 :]
+    filled[ok] = value[ok]
+    out[n - 1 :] = filled
+    return out
+
+
+def mass_index(high: np.ndarray, low: np.ndarray, ema_n: int, span: int) -> np.ndarray:
+    """Dorsey mass index: sum of the ratio of two EMAs of the high-low range.
+
+    Both EMAs use the standard ``2 / (n + 1)`` seed. A zero double-smoothed
+    range (no range at all) has ratio 1, so the sum stays defined. The sum
+    starts once ``span`` ratios exist.
+    """
+    span_px = np.asarray(high, dtype=np.float64) - np.asarray(low, dtype=np.float64)
+    first = ema(span_px, ema_n)
+    second = ema(first, ema_n)
+    ratio = _nan(span_px.shape[0])
+    ok = np.isfinite(first) & np.isfinite(second) & (second > 0.0)
+    flat = np.isfinite(first) & np.isfinite(second) & (second == 0.0)
+    ratio[ok] = first[ok] / second[ok]
+    ratio[flat] = 1.0
+    return sum_skip_leading(ratio, span)
+
+
+def relative_volatility(high: np.ndarray, low: np.ndarray, close: np.ndarray, n: int) -> np.ndarray:
+    """Dorsey relative volatility index, 0 to 100.
+
+    An up close contributes the population standard deviation of the highs;
+    a down close contributes the standard deviation of the lows. Those two
+    series are Wilder-smoothed over ``n`` and combined like RSI. Unchanged
+    closes contribute nothing. A day with no volatility on either side is 50.
+    The standard deviation exists at ``n - 1``; the smoother needs ``n`` of
+    those values, so the index starts at ``2 * n - 2``.
+    """
+    high = np.asarray(high, dtype=np.float64)
+    low = np.asarray(low, dtype=np.float64)
+    close = np.asarray(close, dtype=np.float64)
+    m = int(close.shape[0])
+    out = _nan(m)
+    n = int(n)
+    if n <= 1 or m <= 2 * n - 2:
+        return out
+    sd_high = rolling_std(high, n)
+    sd_low = rolling_std(low, n)
+    up = np.zeros(m, dtype=np.float64)
+    down = np.zeros(m, dtype=np.float64)
+    start = n - 1
+    higher = close[start:] > close[start - 1 : -1]
+    lower = close[start:] < close[start - 1 : -1]
+    up[start:] = np.where(higher, sd_high[start:], 0.0)
+    down[start:] = np.where(lower, sd_low[start:], 0.0)
+    up_avg = float(np.mean(up[start : start + n]))
+    down_avg = float(np.mean(down[start : start + n]))
+    first = start + n - 1
+
+    def _wilder(seed: float, raw: np.ndarray) -> np.ndarray:
+        series = _nan(m)
+        value = seed
+        series[first] = value
+        for i in range(first + 1, m):
+            value = (value * (n - 1) + float(raw[i])) / n
+            series[i] = value
+        return series
+
+    up_s = _wilder(up_avg, up)
+    down_s = _wilder(down_avg, down)
+    denom = up_s + down_s
+    with np.errstate(invalid="ignore", divide="ignore"):
+        ok = np.isfinite(denom) & (denom > 0.0)
+        flat = np.isfinite(denom) & (denom == 0.0)
+        out[ok] = 100.0 * up_s[ok] / denom[ok]
+        out[flat] = 50.0
+    return out
+
+
 def hold_between(eval_mask: np.ndarray, value: np.ndarray) -> np.ndarray:
     """Desired position that changes only on ``eval_mask`` days.
 

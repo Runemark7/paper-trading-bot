@@ -98,9 +98,8 @@ def _fall(n: int, step: float = 1.0) -> DailyBars:
 
 class CatalogOrderTests(unittest.TestCase):
     def test_batch3_is_appended_after_the_first_thirty_two(self):
-        self.assertEqual(tuple(s.key for s in LIBRARY[BATCH2_END:]), NEW)
+        self.assertEqual(tuple(s.key for s in LIBRARY[BATCH2_END:BATCH2_END + len(NEW)]), NEW)
         self.assertEqual(LIBRARY[BATCH2_END - 1].key, "ibs")
-        self.assertEqual(len(LIBRARY), BATCH2_END + len(NEW))
         for key, center in CENTERS.items():
             strategy = strategy_by_key(key)
             self.assertEqual(strategy.center, center)
