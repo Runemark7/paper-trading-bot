@@ -2853,3 +2853,403 @@ def run_count(close: np.ndarray, n: int) -> np.ndarray:
         runs = 1.0 + changes.astype(np.float64)
     out[n - 1 : n - 1 + runs.shape[0]] = runs
     return out
+
+
+def hampel_mad(close: np.ndarray, n: int) -> np.ndarray:
+    """Scaled median absolute deviation of the last ``n`` log returns.
+
+    Finite at index ``n``. The scale 1.4826 is the normal consistency
+    constant. A window of identical returns has MAD 0. Nothing after ``t``
+    enters the value at ``t``.
+    """
+    close = np.asarray(close, dtype=np.float64)
+    out = _nan(close.shape[0])
+    n = int(n)
+    rets = _log_returns(close)
+    if n < 1 or close.shape[0] <= n or not bool(np.all(np.isfinite(rets[1:]))):
+        return out
+    windows = sliding_window_view(rets[1:], n)
+    med = np.median(windows, axis=1)
+    mad = np.median(np.abs(windows - med[:, None]), axis=1)
+    out[n : n + mad.shape[0]] = 1.4826 * mad
+    return out
+
+
+def semivariance_share(close: np.ndarray, n: int) -> np.ndarray:
+    """Downside second moment divided by the total second moment.
+
+    Both moments use the last ``n`` log returns, measured from the window
+    mean. An up deviation adds nothing to the numerator and stays in the
+    denominator. Finite at index ``n``. A window with no variation is 0.5,
+    which is the symmetric share, not a low-downside reading by itself.
+    """
+    close = np.asarray(close, dtype=np.float64)
+    out = _nan(close.shape[0])
+    n = int(n)
+    rets = _log_returns(close)
+    if n < 2 or close.shape[0] <= n or not bool(np.all(np.isfinite(rets[1:]))):
+        return out
+    windows = sliding_window_view(rets[1:], n)
+    dev = windows - windows.mean(axis=1)[:, None]
+    total = np.mean(dev * dev, axis=1)
+    down = np.mean(np.minimum(dev, 0.0) ** 2, axis=1)
+    share = np.full(total.shape[0], 0.5, dtype=np.float64)
+    ok = total > 1e-18
+    share[ok] = down[ok] / total[ok]
+    out[n : n + share.shape[0]] = share
+    return out
+
+
+def hurst_rs(close: np.ndarray, n: int) -> np.ndarray:
+    """Rescaled-range Hurst exponent of the last ``n`` log returns.
+
+    Finite at index ``n`` when those returns exist. ``R`` is the range of
+    the cumulative demeaned returns and ``S`` is their population standard
+    deviation. ``H = log(R/S) / log(n)``. A window with no variation is 0.5,
+    which is not a reading above one half. A non-positive close leaves only
+    the windows that use that bar undefined. Later windows are computed.
+    """
+    close = np.asarray(close, dtype=np.float64)
+    out = _nan(close.shape[0])
+    n = int(n)
+    m = int(close.shape[0])
+    if n < 2 or m <= n:
+        return out
+    rets = _nan(m)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        ok = (close[1:] > 0.0) & (close[:-1] > 0.0)
+        rets[1:][ok] = np.log(close[1:][ok] / close[:-1][ok])
+    windows = sliding_window_view(rets[1:], n)
+    finite = np.isfinite(windows).all(axis=1)
+    safe = np.where(finite[:, None], windows, 0.0)
+    dev = safe - safe.mean(axis=1)[:, None]
+    cum = np.cumsum(dev, axis=1)
+    span = cum.max(axis=1) - cum.min(axis=1)
+    scale = safe.std(axis=1, ddof=0)
+    hurst = np.full(span.shape[0], np.nan, dtype=np.float64)
+    quiet = finite & ~((scale > 1e-8) & (span > 0.0))
+    usable = finite & (scale > 1e-8) & (span > 0.0)
+    hurst[quiet] = 0.5
+    hurst[usable] = np.log(span[usable] / scale[usable]) / np.log(float(n))
+    out[n : n + hurst.shape[0]] = hurst
+    return out
+
+
+def volatility_ratio(close: np.ndarray, short: int, long: int) -> np.ndarray:
+    """Short-window sample standard deviation divided by the long-window one.
+
+    Both legs are ``realized_vol``. Finite at index ``max(short, long)``.
+    A long window with no variation has ratio 1, which is not below 1.
+    """
+    close = np.asarray(close, dtype=np.float64)
+    short_vol = realized_vol(close, int(short))
+    long_vol = realized_vol(close, int(long))
+    out = _nan(close.shape[0])
+    with np.errstate(invalid="ignore", divide="ignore"):
+        ok = np.isfinite(short_vol) & np.isfinite(long_vol) & (long_vol > 1e-18)
+        flat = np.isfinite(short_vol) & np.isfinite(long_vol) & (long_vol <= 1e-18)
+        out[ok] = short_vol[ok] / long_vol[ok]
+        out[flat] = 1.0
+    return out
+
+
+def starc_upper(high: np.ndarray, low: np.ndarray, close: np.ndarray, n: int) -> np.ndarray:
+    """``n``-day SMA plus one Wilder ATR(``n``). Finite at index ``n``.
+
+    The multiple stays 1. The SMA is the close, not the typical price.
+    """
+    close = np.asarray(close, dtype=np.float64)
+    mid = sma(close, int(n))
+    atr = atr_wilder(high, low, close, int(n))
+    out = _nan(close.shape[0])
+    ok = np.isfinite(mid) & np.isfinite(atr)
+    out[ok] = mid[ok] + atr[ok]
+    return out
+
+
+def bollinger_percent_b(close: np.ndarray, n: int, width: float = 2.0) -> np.ndarray:
+    """Bollinger %b. Finite at index ``n - 1``.
+
+    ``(close - lower) / (upper - lower)`` of the population bands. A
+    zero-width window is 0.5, which is not above 0.8.
+    """
+    close = np.asarray(close, dtype=np.float64)
+    _mid, lower, upper = bollinger(close, int(n), float(width))
+    out = _nan(close.shape[0])
+    span = upper - lower
+    with np.errstate(invalid="ignore", divide="ignore"):
+        ok = np.isfinite(span) & (span > 0.0) & np.isfinite(close) & np.isfinite(lower)
+        flat = np.isfinite(span) & (span == 0.0)
+        out[ok] = (close[ok] - lower[ok]) / span[ok]
+        out[flat] = 0.5
+    return out
+
+
+def corwin_schultz(high: np.ndarray, low: np.ndarray, n: int) -> np.ndarray:
+    """Mean of the last ``n`` two-day Corwin-Schultz spreads. Finite at index ``n``.
+
+    Each day uses that day's high and low and the previous day's. A negative
+    alpha is a zero spread. A zero range contributes 0. The first bar has no
+    pair, so the mean starts once ``n`` pairs exist.
+    """
+    high = np.asarray(high, dtype=np.float64)
+    low = np.asarray(low, dtype=np.float64)
+    m = int(high.shape[0])
+    raw = _nan(m)
+    n = int(n)
+    if m < 2 or n < 1:
+        return raw
+    raw[1:] = 0.0
+    h1 = high[1:]
+    l1 = low[1:]
+    h0 = high[:-1]
+    l0 = low[:-1]
+    ok = (h1 > 0.0) & (l1 > 0.0) & (h0 > 0.0) & (l0 > 0.0) & (h1 >= l1) & (h0 >= l0)
+    beta = np.zeros(m - 1, dtype=np.float64)
+    gamma = np.zeros(m - 1, dtype=np.float64)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        ln1 = np.log(h1[ok] / l1[ok])
+        ln0 = np.log(h0[ok] / l0[ok])
+        beta[ok] = ln1 * ln1 + ln0 * ln0
+        hh = np.maximum(h1, h0)
+        ll = np.minimum(l1, l0)
+        pair = ok & (ll > 0.0) & (hh >= ll)
+        gamma[pair] = np.log(hh[pair] / ll[pair]) ** 2
+    den = 3.0 - 2.0 * np.sqrt(2.0)
+    alpha = (np.sqrt(2.0 * beta) - np.sqrt(np.maximum(beta, 0.0))) / den - np.sqrt(gamma / den)
+    spread = np.zeros(m - 1, dtype=np.float64)
+    pos = np.isfinite(alpha) & (alpha > 0.0)
+    grown = np.exp(alpha[pos])
+    spread[pos] = 2.0 * (grown - 1.0) / (1.0 + grown)
+    raw[1:] = spread
+    return sma_skip_leading(raw, n)
+
+
+def roll_spread(close: np.ndarray, n: int) -> np.ndarray:
+    """Roll's implicit spread from the last ``n`` price changes. Finite at index ``n``.
+
+    Twice the square root of the negative lag-1 autocovariance. A positive
+    autocovariance is a zero spread. The legs of each pair keep their own means.
+    """
+    close = np.asarray(close, dtype=np.float64)
+    out = _nan(close.shape[0])
+    n = int(n)
+    m = int(close.shape[0])
+    if n < 3 or m <= n:
+        return out
+    changes = np.empty(m - 1, dtype=np.float64)
+    changes[:] = close[1:] - close[:-1]
+    if not bool(np.all(np.isfinite(changes))):
+        return out
+    windows = sliding_window_view(changes, n)
+    left = windows[:, :-1]
+    right = windows[:, 1:]
+    left_dev = left - left.mean(axis=1)[:, None]
+    right_dev = right - right.mean(axis=1)[:, None]
+    cov = np.mean(left_dev * right_dev, axis=1)
+    spread = np.zeros(cov.shape[0], dtype=np.float64)
+    neg = cov < 0.0
+    spread[neg] = 2.0 * np.sqrt(-cov[neg])
+    out[n : n + spread.shape[0]] = spread
+    return out
+
+
+def partial_autocorr_lag2(close: np.ndarray, n: int) -> np.ndarray:
+    """Yule-Walker lag-2 partial autocorrelation of the last ``n`` log returns.
+
+    Finite at index ``n``. ``phi = (rho2 - rho1^2) / (1 - rho1^2)``. A
+    denominator at the noise floor is 0, which is not a positive reading.
+    Lag 1 is removed before the lag-2 coefficient.
+    """
+    close = np.asarray(close, dtype=np.float64)
+    out = _nan(close.shape[0])
+    n = int(n)
+    rets = _log_returns(close)
+    if n < 4 or close.shape[0] <= n or not bool(np.all(np.isfinite(rets[1:]))):
+        return out
+    windows = sliding_window_view(rets[1:], n)
+
+    def _corr(left: np.ndarray, right: np.ndarray) -> np.ndarray:
+        left_dev = left - left.mean(axis=1)[:, None]
+        right_dev = right - right.mean(axis=1)[:, None]
+        num = np.sum(left_dev * right_dev, axis=1)
+        den = np.sqrt(np.sum(left_dev * left_dev, axis=1) * np.sum(right_dev * right_dev, axis=1))
+        rho = np.zeros(num.shape[0], dtype=np.float64)
+        ok = den > 1e-18
+        rho[ok] = num[ok] / den[ok]
+        return rho
+
+    rho1 = _corr(windows[:, :-1], windows[:, 1:])
+    rho2 = _corr(windows[:, :-2], windows[:, 2:])
+    den = 1.0 - rho1 * rho1
+    phi = np.zeros(den.shape[0], dtype=np.float64)
+    ok = np.abs(den) > 1e-12
+    phi[ok] = (rho2[ok] - rho1[ok] * rho1[ok]) / den[ok]
+    out[n : n + phi.shape[0]] = phi
+    return out
+
+
+def turning_point_count(close: np.ndarray, n: int) -> np.ndarray:
+    """Interior turning points in the last ``n`` closes. Finite at index ``n - 1``.
+
+    A close strictly above both neighbours, or strictly below both, is one
+    turning point. The two ends of the window are not turning points.
+    """
+    close = np.asarray(close, dtype=np.float64)
+    out = _nan(close.shape[0])
+    n = int(n)
+    m = int(close.shape[0])
+    if n < 3 or m < n:
+        return out
+    above = (close[1:-1] > close[:-2]) & (close[1:-1] > close[2:])
+    below = (close[1:-1] < close[:-2]) & (close[1:-1] < close[2:])
+    flags = (above | below).astype(np.float64)
+    counts = sliding_window_view(flags, n - 2).sum(axis=1)
+    out[n - 1 : n - 1 + counts.shape[0]] = counts
+    return out
+
+
+def leverage_corr(close: np.ndarray, n: int) -> np.ndarray:
+    """Correlation of the log return with the previous squared log return.
+
+    Finite at index ``n + 1``. The window is ``n`` pairs ``(r_t, r_{t-1}^2)``.
+    A leg with no variation is 0, which is not a negative reading. A
+    non-positive close leaves only the pairs that use that bar undefined.
+    """
+    close = np.asarray(close, dtype=np.float64)
+    out = _nan(close.shape[0])
+    n = int(n)
+    m = int(close.shape[0])
+    if n < 3 or m <= n + 1:
+        return out
+    rets = _nan(m)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        ok = (close[1:] > 0.0) & (close[:-1] > 0.0)
+        rets[1:][ok] = np.log(close[1:][ok] / close[:-1][ok])
+    left = rets[2:]
+    right = rets[1:-1] ** 2
+    left_w = sliding_window_view(left, n)
+    right_w = sliding_window_view(right, n)
+    finite = np.isfinite(left_w).all(axis=1) & np.isfinite(right_w).all(axis=1)
+    safe_l = np.where(finite[:, None], left_w, 0.0)
+    safe_r = np.where(finite[:, None], right_w, 0.0)
+    left_dev = safe_l - safe_l.mean(axis=1)[:, None]
+    right_dev = safe_r - safe_r.mean(axis=1)[:, None]
+    num = np.sum(left_dev * right_dev, axis=1)
+    den = np.sqrt(np.sum(left_dev * left_dev, axis=1) * np.sum(right_dev * right_dev, axis=1))
+    rho = np.full(num.shape[0], np.nan, dtype=np.float64)
+    usable = finite & (den > 1e-18)
+    rho[finite & ~usable] = 0.0
+    rho[usable] = num[usable] / den[usable]
+    out[n + 1 : n + 1 + rho.shape[0]] = rho
+    return out
+
+
+def upper_half_count(high: np.ndarray, low: np.ndarray, close: np.ndarray, n: int) -> np.ndarray:
+    """How many of the last ``n`` bars closed above their own midpoint.
+
+    Finite at index ``n - 1``. A zero-range bar is not an upper-half close.
+    """
+    high = np.asarray(high, dtype=np.float64)
+    low = np.asarray(low, dtype=np.float64)
+    close = np.asarray(close, dtype=np.float64)
+    out = _nan(close.shape[0])
+    n = int(n)
+    if n < 1 or close.shape[0] < n:
+        return out
+    flag = ((close > (high + low) / 2.0) & (high > low)).astype(np.float64)
+    out[n - 1 :] = sliding_window_view(flag, n).sum(axis=1)
+    return out
+
+
+def true_range_imbalance(high: np.ndarray, low: np.ndarray, close: np.ndarray, n: int) -> np.ndarray:
+    """Mean true range on up closes minus the mean on down closes.
+
+    Finite at index ``n``. The window is the last ``n`` bars that have a
+    prior close. A tie is neither side. An empty side contributes 0, so the
+    difference stays defined.
+    """
+    close = np.asarray(close, dtype=np.float64)
+    out = _nan(close.shape[0])
+    n = int(n)
+    if n < 1 or close.shape[0] <= n:
+        return out
+    tr = true_range(high, low, close)[1:]
+    up = (close[1:] > close[:-1]).astype(np.float64)
+    down = (close[1:] < close[:-1]).astype(np.float64)
+    tr_w = sliding_window_view(tr, n)
+    up_w = sliding_window_view(up, n)
+    dn_w = sliding_window_view(down, n)
+    up_cnt = up_w.sum(axis=1)
+    dn_cnt = dn_w.sum(axis=1)
+    up_avg = np.zeros(up_cnt.shape[0], dtype=np.float64)
+    dn_avg = np.zeros(dn_cnt.shape[0], dtype=np.float64)
+    up_ok = up_cnt > 0.0
+    dn_ok = dn_cnt > 0.0
+    up_avg[up_ok] = (tr_w * up_w).sum(axis=1)[up_ok] / up_cnt[up_ok]
+    dn_avg[dn_ok] = (tr_w * dn_w).sum(axis=1)[dn_ok] / dn_cnt[dn_ok]
+    out[n : n + up_avg.shape[0]] = up_avg - dn_avg
+    return out
+
+
+def close_to_close_variance(close: np.ndarray, n: int) -> np.ndarray:
+    """Population variance of the last ``n`` log returns. Finite at index ``n``.
+
+    A window with no variation is 0.
+    """
+    close = np.asarray(close, dtype=np.float64)
+    out = _nan(close.shape[0])
+    n = int(n)
+    rets = _log_returns(close)
+    if n < 1 or close.shape[0] <= n or not bool(np.all(np.isfinite(rets[1:]))):
+        return out
+    windows = sliding_window_view(rets[1:], n)
+    out[n:] = windows.var(axis=1, ddof=0)
+    return out
+
+
+def open_close_skewness(open_: np.ndarray, close: np.ndarray, n: int) -> np.ndarray:
+    """Population central skewness of the last ``n`` open-to-close log returns.
+
+    Finite at index ``n - 1``. The session return uses that bar's own open
+    and close. A window whose second moment is at the noise floor is 0,
+    which is not a negative-skew reading. A non-positive price leaves the
+    series undefined.
+    """
+    open_ = np.asarray(open_, dtype=np.float64)
+    close = np.asarray(close, dtype=np.float64)
+    out = _nan(close.shape[0])
+    n = int(n)
+    if n < 3 or close.shape[0] < n:
+        return out
+    if not bool(np.all(open_ > 0.0)) or not bool(np.all(close > 0.0)):
+        return out
+    raw = np.log(close / open_)
+    windows = sliding_window_view(raw, n)
+    dev = windows - windows.mean(axis=1)[:, None]
+    m2 = np.mean(dev * dev, axis=1)
+    m3 = np.mean(dev * dev * dev, axis=1)
+    skew = np.zeros(m2.shape[0], dtype=np.float64)
+    ok = m2 > 1e-18
+    skew[ok] = m3[ok] / np.power(m2[ok], 1.5)
+    out[n - 1 :] = skew
+    return out
+
+
+def window_max_drawdown(close: np.ndarray, n: int) -> np.ndarray:
+    """Worst peak-to-trough decline inside the last ``n`` closes.
+
+    Finite at index ``n - 1``. The peak is the running maximum inside the
+    window, so the decline uses only a peak that has already printed. A
+    rising window is 0. A non-positive close leaves the series undefined.
+    """
+    close = np.asarray(close, dtype=np.float64)
+    out = _nan(close.shape[0])
+    n = int(n)
+    if n < 2 or close.shape[0] < n or not bool(np.all(close > 0.0)):
+        return out
+    windows = sliding_window_view(close, n)
+    peak = np.maximum.accumulate(windows, axis=1)
+    decline = (peak - windows) / peak
+    out[n - 1 :] = decline.max(axis=1)
+    return out
