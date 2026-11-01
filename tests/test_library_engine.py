@@ -288,9 +288,9 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual(tuple(s.key for s in LIBRARY[:15]), original)
         # Batch 2 added 17, batch 3 added 24, batch 4 added 26, batch 5 added 26,
         # batch 6 added 24, batch 7 added 22, batch 8 added 20, batch 9 added 17,
-        # batch 10 added 20. The lane cap is still 2 per core; the catalog is
-        # allowed to be larger than one claim.
-        self.assertEqual(len(LIBRARY), len(original) + 17 + 24 + 26 + 26 + 24 + 22 + 20 + 17 + 20)
+        # batch 10 added 20, batch 11 added 20. The lane cap is still 2 per core;
+        # the catalog is allowed to be larger than one claim.
+        self.assertEqual(len(LIBRARY), len(original) + 17 + 24 + 26 + 26 + 24 + 22 + 20 + 17 + 20 + 20)
         for s in LIBRARY:
             c = s.citation
             for text in (c.authors, c.title, c.venue, c.tested_rule, c.implemented_rule, c.differences):

@@ -140,9 +140,11 @@ def _prefix(bars: DailyBars, cut: int) -> DailyBars:
 
 class CatalogOrderTests(unittest.TestCase):
     def test_batch10_is_appended_after_the_first_hundred_ninety_one(self):
-        self.assertEqual(tuple(s.key for s in LIBRARY[BATCH9_END:]), NEW)
+        end = BATCH9_END + len(NEW)
+        self.assertEqual(tuple(s.key for s in LIBRARY[BATCH9_END:end]), NEW)
         self.assertEqual(LIBRARY[BATCH9_END - 1].key, "safezone")
-        self.assertEqual(len(LIBRARY), BATCH9_END + len(NEW))
+        self.assertEqual(LIBRARY[end].key, "park")
+        self.assertGreater(len(LIBRARY), end)
         for key, center in CENTERS.items():
             strategy = strategy_by_key(key)
             self.assertEqual(strategy.center, center)
