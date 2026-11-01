@@ -2409,3 +2409,90 @@ def intraday_momentum(open_: np.ndarray, close: np.ndarray, n: int) -> np.ndarra
     np.divide(100.0 * up, total, out=value, where=total > 0.0)
     out[n - 1 :] = value
     return out
+
+
+def signed_efficiency(close: np.ndarray, n: int) -> np.ndarray:
+    """Kaufman efficiency ratio with the sign of the net change kept. Finite at ``n``.
+
+    The numerator is the close minus the close ``n`` bars ago, not its
+    absolute value. A down window is negative. A window with no movement is 0.
+    """
+    close = np.asarray(close, dtype=np.float64)
+    out = _nan(close.shape[0])
+    n = int(n)
+    if n <= 0 or close.shape[0] <= n:
+        return out
+    change = np.abs(np.diff(close))
+    csum = np.concatenate(([0.0], np.cumsum(change)))
+    volatility = csum[n:] - csum[:-n]
+    direction = close[n:] - close[:-n]
+    ratio = np.zeros(direction.shape[0], dtype=np.float64)
+    np.divide(direction, volatility, out=ratio, where=volatility > 0.0)
+    out[n:] = ratio
+    return out
+
+
+def band_pass(close: np.ndarray, period: int, bandwidth: float = 0.3) -> np.ndarray:
+    """Ehlers band-pass filter. Finite from index 2.
+
+    ``bandwidth`` is the fraction of the center period that the passband
+    covers. The recursion is seeded at 0, which is no history, not a later
+    bar. A constant series has a zero second difference, so the filter stays 0.
+    """
+    close = np.asarray(close, dtype=np.float64)
+    out = _nan(close.shape[0])
+    period = int(period)
+    if period < 2 or close.shape[0] < 3 or not bool(np.all(np.isfinite(close))):
+        return out
+    beta = float(np.cos(2.0 * np.pi / period))
+    cosine = float(np.cos(2.0 * np.pi * float(bandwidth) / period))
+    if cosine == 0.0:
+        return out
+    gamma = 1.0 / cosine
+    disc = gamma * gamma - 1.0
+    if disc < 0.0:
+        return out
+    alpha = gamma - float(np.sqrt(disc))
+    prev2 = 0.0
+    prev1 = 0.0
+    for t in range(2, close.shape[0]):
+        value = (
+            0.5 * (1.0 - alpha) * (float(close[t]) - float(close[t - 2]))
+            + beta * (1.0 + alpha) * prev1
+            - alpha * prev2
+        )
+        out[t] = value
+        prev2 = prev1
+        prev1 = value
+    return out
+
+
+def safezone_stop(
+    close: np.ndarray, low: np.ndarray, lookback: int, downs: int = 10, multiple: float = 2.0,
+) -> np.ndarray:
+    """LeBeau SafeZone raw stop. Finite once ``lookback`` closes and ``downs`` down days exist.
+
+    A down day closed below the prior close. Its penetration is that prior
+    close minus the low. The raw stop is the highest close of the last
+    ``lookback`` days minus ``multiple`` times the average of the last
+    ``downs`` penetrations. The ratchet, which only rises while a book is
+    long, is applied by the signal. Nothing after ``t`` enters the value at ``t``.
+    """
+    close = np.asarray(close, dtype=np.float64)
+    low = np.asarray(low, dtype=np.float64)
+    out = _nan(close.shape[0])
+    lookback = int(lookback)
+    downs = int(downs)
+    if lookback < 1 or downs < 1 or close.shape[0] < 2:
+        return out
+    pens: list[float] = []
+    for t in range(1, close.shape[0]):
+        if close[t] < close[t - 1]:
+            pens.append(float(close[t - 1] - low[t]))
+            if len(pens) > downs:
+                del pens[0]
+        if len(pens) < downs or t < lookback - 1:
+            continue
+        high_close = float(np.max(close[t - lookback + 1 : t + 1]))
+        out[t] = high_close - float(multiple) * float(np.mean(pens))
+    return out
