@@ -85,7 +85,7 @@ def _prefix(bars: DailyBars, cut: int) -> DailyBars:
 class CatalogOrderTests(unittest.TestCase):
     def test_original_fifteen_are_unchanged_and_batch2_is_appended(self):
         self.assertEqual(tuple(s.key for s in LIBRARY[:15]), ORIGINAL)
-        self.assertEqual(tuple(s.key for s in LIBRARY[15:]), NEW)
+        self.assertEqual(tuple(s.key for s in LIBRARY[15:32]), NEW)
         for key, center in ORIGINAL_CENTERS.items():
             strategy = strategy_by_key(key)
             self.assertEqual(strategy.center, center)

@@ -32,12 +32,18 @@ from typing import Callable
 
 import numpy as np
 
-from hedge_fund.library.daily import DailyBars
+from hedge_fund.library.daily import DAY_MS, DailyBars
 from hedge_fund.trading.constants import LIBRARY_STOP_FRAC
 from hedge_fund.library.indicators import (
     adx_first_index,
     adx_wilder,
+    aroon,
     bollinger,
+    calendar_month,
+    cci,
+    connors_rsi,
+    day_of_month,
+    days_in_month,
     ema,
     hold_between,
     ibs,
@@ -45,14 +51,24 @@ from hedge_fund.library.indicators import (
     ichimoku_first_index,
     is_month_end,
     is_week_end,
+    kama,
     keltner,
+    lag,
     month_number,
+    parabolic_sar_long,
     prior_max,
     prior_min,
+    roc,
+    rolling_max,
     rsi_wilder,
     sma,
+    sma_tail,
+    smma,
+    stochastic_slow,
     supertrend_long,
+    vortex,
     week_number,
+    weekday,
     williams_r,
 )
 
@@ -364,6 +380,280 @@ def _willr(bars: DailyBars, p: dict) -> np.ndarray:
     return _stateful(enter, leave)
 
 
+def _prev(x: np.ndarray) -> np.ndarray:
+    """``x`` shifted forward one bar. Index 0 is NaN. No future bar is read."""
+    out = np.full(x.shape[0], np.nan, dtype=np.float64)
+    if x.shape[0] > 1:
+        out[1:] = x[:-1]
+    return out
+
+
+def _psar(bars: DailyBars, p: dict) -> np.ndarray:
+    """Wilder (1978): long while the parabolic SAR trend is up.
+
+    The acceleration step is the parameter in hundredths (2 = 0.02). The
+    cap stays 0.20, his published maximum.
+    """
+    step = int(p["af"]) / 100.0
+    return parabolic_sar_long(bars.high, bars.low, bars.close, step, 0.20)
+
+
+def _kama_trend(bars: DailyBars, p: dict) -> np.ndarray:
+    """Kaufman (1995): long while the close is above KAMA. Fast 2 and slow 30 stay fixed."""
+    return _finite_gt(bars.close, kama(bars.close, int(p["n"]), fast=2, slow=30))
+
+
+def _aroon_trend(bars: DailyBars, p: dict) -> np.ndarray:
+    """Chande (1995): long while Aroon up is above Aroon down."""
+    up, down = aroon(bars.high, bars.low, int(p["n"]))
+    return _finite_gt(up, down)
+
+
+def _cci_break(bars: DailyBars, p: dict) -> np.ndarray:
+    """Lambert (1980): long while CCI is above +100 (his trend threshold)."""
+    value = cci(bars.high, bars.low, bars.close, int(p["n"]))
+    with np.errstate(invalid="ignore"):
+        return np.isfinite(value) & (value > float(p["level"]))
+
+
+def _cci_revert(bars: DailyBars, p: dict) -> np.ndarray:
+    """Later textbook fade of Lambert's bands: buy below -100, exit at zero.
+
+    This is not Lambert's 1980 breakout. ``lib.cci100`` is that breakout.
+    """
+    value = cci(bars.high, bars.low, bars.close, int(p["n"]))
+    level = float(p["level"])
+    with np.errstate(invalid="ignore"):
+        enter = np.isfinite(value) & (value < -level)
+        leave = np.isfinite(value) & (value >= 0.0)
+    return _stateful(enter, leave)
+
+
+def _stoch(bars: DailyBars, p: dict) -> np.ndarray:
+    """Lane: slow %K crosses above %D below 20, and back below %D above 80.
+
+    The smoother is 3 and 3. The overbought line is 100 minus the oversold
+    line, so the pair stays symmetric. A cross uses %K and %D at ``t`` and
+    ``t - 1`` only.
+    """
+    slow_k, slow_d = stochastic_slow(bars.high, bars.low, bars.close, int(p["n"]), 3)
+    os = float(p["os"])
+    ob = 100.0 - os
+    k_prev = _prev(slow_k)
+    d_prev = _prev(slow_d)
+    with np.errstate(invalid="ignore"):
+        known = np.isfinite(slow_k) & np.isfinite(slow_d) & np.isfinite(k_prev) & np.isfinite(d_prev)
+        enter = known & (slow_k > slow_d) & (k_prev <= d_prev) & (slow_k < os)
+        leave = known & (slow_k < slow_d) & (k_prev >= d_prev) & (slow_k > ob)
+    return _stateful(enter, leave)
+
+
+def _crsi(bars: DailyBars, p: dict) -> np.ndarray:
+    """Connors CRSI(3, 2, rank): buy below the oversold line, exit above 90.
+
+    90 is his overbought zone and is not a grid axis. The three pieces are
+    RSI(3) of the close, RSI(2) of the up/down streak, and the percent rank
+    of today's one-day change against the previous ``rank`` changes.
+    """
+    value = connors_rsi(bars.close, int(p["rank"]))
+    with np.errstate(invalid="ignore"):
+        enter = np.isfinite(value) & (value < float(p["thr"]))
+        leave = np.isfinite(value) & (value > 90.0)
+    return _stateful(enter, leave)
+
+
+def _tomorrow(ts: np.ndarray) -> np.ndarray:
+    """The next UTC date. Known at today's close; the next bar is not read."""
+    return np.asarray(ts, dtype=np.int64) + DAY_MS
+
+
+def _tom(bars: DailyBars, p: dict) -> np.ndarray:
+    """McConnell & Xu (2008): long on the last ``last`` days and the first ``first`` days.
+
+    The signal at today's close is the position for tomorrow's open, so the
+    window is evaluated on tomorrow's calendar date.
+    """
+    when = _tomorrow(bars.ts)
+    dom = day_of_month(when)
+    dim = days_in_month(when)
+    last_n = int(p["last"])
+    first_n = int(p["first"])
+    return (dom <= first_n) | (dom > dim - last_n)
+
+
+def _halloween(bars: DailyBars, p: dict) -> np.ndarray:
+    """Bouman & Jacobsen (2002): long from ``entry`` month through ``exit`` month.
+
+    The published window is November through April. A month is included on
+    tomorrow's open, decided at today's close.
+    """
+    month = calendar_month(_tomorrow(bars.ts))
+    entry = int(p["entry"])
+    exit_m = int(p["exit"])
+    if entry > exit_m:
+        return (month >= entry) | (month <= exit_m)
+    return (month >= entry) & (month <= exit_m)
+
+
+def _weekend(bars: DailyBars, p: dict) -> np.ndarray:
+    """French (1980): flat across the weekend, long the other days.
+
+    ``span`` 1 is Sunday, 2 is Saturday and Sunday, 3 adds Friday. The
+    position is for tomorrow, so Friday's close sells into Saturday.
+    """
+    span = int(p["span"])
+    if span <= 1:
+        flat = {6}
+    elif span == 2:
+        flat = {5, 6}
+    else:
+        flat = {4, 5, 6}
+    tomorrow = weekday(_tomorrow(bars.ts))
+    return ~np.isin(tomorrow, list(flat))
+
+
+def _high52(bars: DailyBars, p: dict) -> np.ndarray:
+    """George & Hwang (2004): long while the close is within ``band`` percent of the high.
+
+    The high is the highest close of the last ``n`` days, today included.
+    ``band`` 0 requires a close at that high. 5 means within 5 percent.
+    """
+    high = rolling_max(bars.close, int(p["n"]))
+    floor = high * (1.0 - float(p["band"]) / 100.0)
+    with np.errstate(invalid="ignore"):
+        return np.isfinite(high) & (bars.close >= floor)
+
+
+def _bll_band(bars: DailyBars, p: dict) -> np.ndarray:
+    """Brock, Lakonishok & LeBaron (1992): the 1% band around the long SMA.
+
+    Buy only through the upper band, sell only through the lower band.
+    Inside the band the previous position stands. ``lib.sma200`` has no band.
+    """
+    ma = sma(bars.close, int(p["long"]))
+    width = float(p["band"]) / 100.0
+    with np.errstate(invalid="ignore"):
+        upper = ma * (1.0 + width)
+        lower = ma * (1.0 - width)
+        enter = np.isfinite(upper) & (bars.close > upper)
+        leave = np.isfinite(lower) & (bars.close < lower)
+    return _stateful(enter, leave)
+
+
+def _keltner_revert(bars: DailyBars, p: dict) -> np.ndarray:
+    """Buy a close through the lower Keltner band; exit at the EMA.
+
+    Same channel as ``lib.keltner20``. That name is the upside breakout.
+    """
+    mid, upper = keltner(
+        bars.high, bars.low, bars.close, int(p["ema"]), int(p["atr"]), float(p["width"]),
+    )
+    lower = 2.0 * mid - upper
+    with np.errstate(invalid="ignore"):
+        enter = np.isfinite(lower) & (bars.close < lower)
+        leave = np.isfinite(mid) & (bars.close >= mid)
+    return _stateful(enter, leave)
+
+
+def _rsi30(bars: DailyBars, p: dict) -> np.ndarray:
+    """Wilder (1978): buy RSI below the oversold line, exit above the symmetric line.
+
+    The exit is ``100 - os`` (30/70 at the center). ``lib.rsi14`` is the
+    centerline trend filter, not this reversal.
+    """
+    value = rsi_wilder(bars.close, int(p["n"]))
+    os = float(p["os"])
+    with np.errstate(invalid="ignore"):
+        enter = np.isfinite(value) & (value < os)
+        leave = np.isfinite(value) & (value > 100.0 - os)
+    return _stateful(enter, leave)
+
+
+def _vortex_trend(bars: DailyBars, p: dict) -> np.ndarray:
+    """Botes & Siepman (2010): long while VI+ is above VI-."""
+    plus, minus = vortex(bars.high, bars.low, bars.close, int(p["n"]))
+    return _finite_gt(plus, minus)
+
+
+def _trix(bars: DailyBars, p: dict) -> np.ndarray:
+    """Hutson (1983): long while the triple-smoothed EMA is rising (TRIX > 0)."""
+    n = int(p["n"])
+    third = ema(ema(ema(bars.close, n), n), n)
+    return _finite_gt(third, _prev(third))
+
+
+def _awesome(bars: DailyBars, p: dict) -> np.ndarray:
+    """Williams: long while the 5-bar SMA of the median is above the 34-bar SMA.
+
+    That difference is the awesome oscillator. Positive means the fast SMA
+    is above the slow one.
+    """
+    median = (bars.high + bars.low) / 2.0
+    return _finite_gt(sma(median, int(p["fast"])), sma(median, int(p["slow"])))
+
+
+def _kst(bars: DailyBars, p: dict) -> np.ndarray:
+    """Pring's daily KST above its signal SMA.
+
+    The four rates are fixed at the published daily set: ROC 10/15/20/30,
+    smoothed by SMA 10/10/10/15, weights 1/2/3/4. Only the signal length moves.
+    """
+    weights = ((10, 10, 1.0), (15, 10, 2.0), (20, 10, 3.0), (30, 15, 4.0))
+    line = np.zeros(len(bars), dtype=np.float64)
+    warm = np.ones(len(bars), dtype=bool)
+    for roc_n, sma_n, weight in weights:
+        piece = sma_tail(roc(bars.close, roc_n), sma_n)
+        line = line + weight * np.where(np.isfinite(piece), piece, 0.0)
+        warm &= np.isfinite(piece)
+    line = np.where(warm, line, np.nan)
+    signal = sma_tail(line, int(p["signal"]))
+    return _finite_gt(line, signal)
+
+
+def _nr7(bars: DailyBars, p: dict) -> np.ndarray:
+    """Crabel (1990): hold after a close through the high of an NR day.
+
+    Day ``t - 1`` is NR(``n``) when its high-low range is strictly the
+    narrowest of the ``n`` days ending that day. The position then stays
+    on for ``hold`` days, including the breakout day. Repeats during the
+    hold are ignored, as in the fixed-hold breakout already in the library.
+    """
+    n = int(p["n"])
+    hold = int(p["hold"])
+    span = bars.high - bars.low
+    out = np.zeros(len(bars), dtype=bool)
+    remaining = 0
+    for t in range(len(bars)):
+        if remaining > 0:
+            out[t] = True
+            remaining -= 1
+            continue
+        setup = t - 1
+        if setup < n - 1:
+            continue
+        window = span[setup - n + 1 : setup + 1]
+        if float(span[setup]) < float(np.min(window[:-1])) and bars.close[t] > bars.high[setup]:
+            out[t] = True
+            remaining = hold - 1
+    return out
+
+
+def _alligator(bars: DailyBars, p: dict) -> np.ndarray:
+    """Williams (1995): lips above teeth above jaw, using the lagged SMMA values.
+
+    Jaw is SMMA(13) read 8 bars later, teeth SMMA(8) read 5 later, lips
+    SMMA(5) read 3 later. The forward plot in the book is the value known
+    that many bars afterwards, so the reading at ``t`` uses no bar after ``t``.
+    Only the jaw length is a parameter; 8/5 and the three shifts stay put.
+    """
+    median = (bars.high + bars.low) / 2.0
+    jaw = lag(smma(median, int(p["jaw"])), 8)
+    teeth = lag(smma(median, 8), 5)
+    lips = lag(smma(median, 5), 3)
+    with np.errstate(invalid="ignore"):
+        return np.isfinite(jaw) & np.isfinite(teeth) & np.isfinite(lips) & (lips > teeth) & (teeth > jaw)
+
+
 def _ibs_revert(bars: DailyBars, p: dict) -> np.ndarray:
     """Pagonidis (2013) IBS, held until 0.80, and only entered above the 200-day SMA."""
     value = ibs(bars.high, bars.low, bars.close)
@@ -478,6 +768,50 @@ def signal_ready(strategy: LibraryStrategy, bars: DailyBars, params: dict) -> np
         return _defined_from(n, max(int(params["n"]) - 1, int(params["trend"]) - 1))
     if key == "ibs":
         return _defined_from(n, int(params["trend"]) - 1)
+    # Batch 3. Same rule as above: the first bar whose inputs all exist,
+    # and every bar after it. A calendar rule is known on the first close.
+    if key == "psar":
+        return _defined_from(n, 2)
+    if key == "kama":
+        # Seeded at index n (the close itself); the ER needs n changes.
+        return _defined_from(n, int(params["n"]))
+    if key == "aroon":
+        # n days back through today.
+        return _defined_from(n, int(params["n"]))
+    if key in ("cci100", "cci_revert"):
+        return _defined_from(n, int(params["n"]) - 1)
+    if key == "stoch":
+        # Fast %K at n-1, two SMA(3) smooths, then one prior bar for the cross.
+        # smooth is the fixed 3: (n - 1) + 2 * 2 + 1 = n + 4.
+        return _defined_from(n, int(params["n"]) + 4)
+    if key == "crsi":
+        # Percent rank of today's change vs the previous ``rank`` changes.
+        return _defined_from(n, int(params["rank"]) + 1)
+    if key in ("tom", "halloween", "weekend"):
+        return np.ones(n, dtype=bool)
+    if key == "high52":
+        return _defined_from(n, int(params["n"]) - 1)
+    if key == "bll_band":
+        return _defined_from(n, int(params["long"]) - 1)
+    if key == "keltner_revert":
+        return _defined_from(n, max(int(params["ema"]) - 1, int(params["atr"])))
+    if key == "rsi30":
+        return _defined_from(n, int(params["n"]))
+    if key == "vortex":
+        return _defined_from(n, int(params["n"]))
+    if key == "trix":
+        # Three EMA seeds, then one prior triple-smoothed value.
+        return _defined_from(n, 3 * int(params["n"]) - 2)
+    if key == "awesome":
+        return _defined_from(n, max(int(params["fast"]), int(params["slow"])) - 1)
+    if key == "kst":
+        # ROC(30) SMA(15) is finite at 44; the signal SMA needs ``signal`` of those.
+        return _defined_from(n, 43 + int(params["signal"]))
+    if key == "nr7":
+        return _defined_from(n, int(params["n"]))
+    if key == "alligator":
+        # SMMA(jaw) at jaw-1, then the 8-bar lag. Teeth and lips are shorter.
+        return _defined_from(n, int(params["jaw"]) - 1 + 8)
     raise ValueError(f"no warmup rule for {key}")
 
 
@@ -1396,6 +1730,635 @@ LIBRARY: tuple[LibraryStrategy, ...] = (
                 "long until IBS exceeds 0.80, and it enters only above the 200-day SMA. "
                 "The 0.80 exit is the symmetric high threshold and is not a grid axis. "
                 "Next-open fills instead of the signal close, BTC, fees."
+            ),
+        ),
+    ),
+    # Batch 3 (2026-11-01). Appended after batch 2. Claims walk this tuple
+    # in order, so these names are leased only once every name above is
+    # tested or on the book. Do not insert above ``ibs``.
+    LibraryStrategy(
+        key="psar",
+        title="Parabolic SAR uptrend (step 0.02, max 0.20)",
+        family="trend",
+        evaluation="daily",
+        params=(Param("af", 2, (1, 3), unit="hundredths"),),
+        signal=_psar,
+        citation=Citation(
+            authors="Wilder",
+            year=1978,
+            title="New Concepts in Technical Trading Systems",
+            venue="Practitioner book (parabolic time/price system)",
+            peer_reviewed=False,
+            tested_rule=(
+                "SAR starts at 0.02 and steps up by 0.02, capped at 0.20, whenever a new "
+                "extreme is made. The stop ratchets toward price and flips the trend when "
+                "price trades through it."
+            ),
+            implemented_rule=(
+                "Long while the SAR trend is up. The step is 0.02 and the cap stays 0.20. "
+                "A completed day's low or high is what flips the trend."
+            ),
+            differences=(
+                "Wilder flipped intrabar and traded both ways. This waits for the daily "
+                "close, then fills at the next open, long or flat, all-in. The first two "
+                "bars are not a position. Neighbours are steps of 0.01 and 0.03; the 0.20 "
+                "cap is not a grid axis."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="kama",
+        title="Close above KAMA(10, 2, 30)",
+        family="trend",
+        evaluation="daily",
+        params=(Param("n", 10, (8, 12)),),
+        signal=_kama_trend,
+        citation=Citation(
+            authors="Kaufman",
+            year=1995,
+            title="Smarter Trading",
+            venue="Practitioner book (McGraw-Hill)",
+            peer_reviewed=False,
+            tested_rule=(
+                "The adaptive moving average blends a fast and a slow EMA by the square of "
+                "the efficiency ratio. Kaufman's published constants are an ER of 10, a "
+                "fast EMA of 2 and a slow EMA of 30."
+            ),
+            implemented_rule=(
+                "Long when the daily close is above KAMA(10, 2, 30), flat otherwise."
+            ),
+            differences=(
+                "The fast and slow constants stay 2 and 30; only the ER length is a grid "
+                "axis. The seed at the ER length equals that close. Not an EMA cross "
+                "(lib.ema20x50, lib.ema50x200) and not a price-versus-SMA rule. Long or "
+                "flat, next-open fills, BTC."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="aroon",
+        title="Aroon(25) up above down",
+        family="trend",
+        evaluation="daily",
+        params=(Param("n", 25, (20, 30)),),
+        signal=_aroon_trend,
+        citation=Citation(
+            authors="Chande",
+            year=1995,
+            title="The Aroon Indicator",
+            venue="Technical Analysis of Stocks & Commodities, September 1995",
+            peer_reviewed=False,
+            tested_rule=(
+                "Aroon up is how recently the n-day high printed, Aroon down how recently "
+                "the n-day low printed, each scaled from 0 to 100. The published length is "
+                "25. Up above down is the bullish reading."
+            ),
+            implemented_rule=(
+                "Long while Aroon up(25) is above Aroon down(25). The window runs from "
+                "n days ago through today. A tie takes the most recent extreme."
+            ),
+            differences=(
+                "The oscillator crossing zero is the same comparison and is not a second "
+                "strategy. No published performance test is relied on. Long or flat, "
+                "next-open fills, BTC."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="cci100",
+        title="CCI(20) above +100",
+        family="trend",
+        evaluation="daily",
+        params=(
+            Param("n", 20, (16, 24)),
+            Param("level", 100, (80, 120), unit="CCI"),
+        ),
+        signal=_cci_break,
+        citation=Citation(
+            authors="Lambert",
+            year=1980,
+            title="Commodity Channel Index: Tool for Trading Cyclic Trends",
+            venue="Commodities magazine, October 1980",
+            peer_reviewed=False,
+            tested_rule=(
+                "CCI is the typical price's distance from its SMA in mean deviations, "
+                "scaled by 0.015 so that most values fall inside ±100. Lambert treated a "
+                "move through +100 as a new uptrend and a fall back through +100 as its end. "
+                "The length he used was 20."
+            ),
+            implemented_rule=(
+                "Long while CCI(20) is above +100, flat otherwise. The 0.015 constant is "
+                "not a parameter."
+            ),
+            differences=(
+                "This is the level, which is the state after his cross. lib.cci_revert is "
+                "the later fade of the lower band and is not this rule. Long or flat, "
+                "next-open fills, BTC. 20 and 100 are his pair, not fit here."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="cci_revert",
+        title="CCI(20) fade from -100 back to zero",
+        family="mean_reversion",
+        evaluation="daily",
+        params=(
+            Param("n", 20, (16, 24)),
+            Param("level", 100, (80, 120), unit="CCI"),
+        ),
+        signal=_cci_revert,
+        citation=Citation(
+            authors="Lambert",
+            year=1980,
+            title="Commodity Channel Index: Tool for Trading Cyclic Trends",
+            venue="Commodities magazine, October 1980; the fade is the later textbook use of his ±100 bands",
+            peer_reviewed=False,
+            tested_rule=(
+                "Lambert built ±100 as trend thresholds, not as levels to fade. Later "
+                "charting texts buy a CCI below -100 and sell the return to zero, the "
+                "mean-reversion reading of the same bands."
+            ),
+            implemented_rule=(
+                "Long after CCI(20) closes below -100; flat after it closes at or above 0."
+            ),
+            differences=(
+                "Not lib.cci100, which is Lambert's own above-+100 trend rule. The zero "
+                "exit is the center of the indicator and is not a grid axis. Long or flat, "
+                "next-open fills, BTC. No short side."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="stoch",
+        title="Slow stochastic 14, 3, 3 cross from 20",
+        family="mean_reversion",
+        evaluation="daily",
+        params=(
+            Param("n", 14, (10, 20)),
+            Param("os", 20, (15, 25), unit="percent"),
+        ),
+        signal=_stoch,
+        citation=Citation(
+            authors="Lane",
+            year=1984,
+            title="Lane's Stochastics",
+            venue="Technical Analysis of Stocks & Commodities (Investment Educators method)",
+            peer_reviewed=False,
+            tested_rule=(
+                "Stochastic %K places the close in the recent high-low range. Lane's "
+                "traded reading is a %K cross of %D. The textbook slow form is %K(14) "
+                "smoothed by 3, %D a further 3, with 20 oversold and 80 overbought."
+            ),
+            implemented_rule=(
+                "Long after slow %K crosses above %D while %K is below 20; flat after "
+                "slow %K crosses below %D while %K is above 80."
+            ),
+            differences=(
+                "The 3, 3 smoothers are fixed. The overbought line is 100 minus the "
+                "oversold line, so it is not a separate axis. A zero-range window is 50, "
+                "not a hole. Next-open fills, long only, BTC. 14 and 20 are the textbook "
+                "pair, not fit here."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="crsi",
+        title="Connors RSI(3, 2, 100) below 10",
+        family="mean_reversion",
+        evaluation="daily",
+        params=(
+            Param("thr", 10, (5, 15), unit="CRSI"),
+            Param("rank", 100, (80, 120)),
+        ),
+        signal=_crsi,
+        citation=Citation(
+            authors="Connors",
+            year=2014,
+            title="An Introduction to Connors RSI",
+            venue="Connors Research white paper",
+            peer_reviewed=False,
+            tested_rule=(
+                "CRSI is the average of RSI(3) of the close, a 2-period RSI of the "
+                "consecutive up/down streak, and the percent rank of today's one-day "
+                "return against the previous 100. Readings below 10 are the oversold zone "
+                "in the return tables; readings above 90 are the overbought zone."
+            ),
+            implemented_rule=(
+                "Long after CRSI(3, 2, 100) closes below 10; flat after it closes above 90."
+            ),
+            differences=(
+                "The white paper's tables mostly hold for a fixed number of days. This "
+                "exits at 90, which is not a grid axis. Not lib.rsi2 or lib.rsi2_10: those "
+                "are RSI(2) with a 200-day filter, not the three-piece composite, and this "
+                "rule has no trend filter. Next-open fills, BTC, long only."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="tom",
+        title="Turn of the month (last day and first three)",
+        family="seasonality",
+        evaluation="daily",
+        params=(
+            Param("last", 1, (2,), unit="days"),
+            Param("first", 3, (2, 4), unit="days"),
+        ),
+        signal=_tom,
+        citation=Citation(
+            authors="McConnell & Xu",
+            year=2008,
+            title="Equity Returns at the Turn of the Month",
+            venue="Financial Analysts Journal 64(2), 49-64",
+            peer_reviewed=True,
+            link="https://doi.org/10.2469/faj.v64.n2.11",
+            tested_rule=(
+                "The turn-of-the-month window is the last trading day of the month and the "
+                "first three trading days of the next month. Over 1926-2005 that window "
+                "accounted for the equity premium in the US and in most of the 35 countries "
+                "they checked."
+            ),
+            implemented_rule=(
+                "Long for the last UTC day of the month and the first three UTC days of "
+                "the next month. The decision is taken at the previous close, for the "
+                "next open."
+            ),
+            differences=(
+                "Their days are exchange sessions. BTC trades every UTC day, so the window "
+                "is calendar days, including weekends. Long or flat, all-in, next-open "
+                "fills, one asset. The position does not scale with the premium they measured."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="halloween",
+        title="Sell in May (long November through April)",
+        family="seasonality",
+        evaluation="daily",
+        params=(
+            Param("entry", 11, (10, 12), unit="month"),
+            Param("exit", 4, (3, 5), unit="month"),
+        ),
+        signal=_halloween,
+        citation=Citation(
+            authors="Bouman & Jacobsen",
+            year=2002,
+            title='The Halloween Indicator, "Sell in May and Go Away": Another Puzzle',
+            venue="American Economic Review 92(5), 1618-1635",
+            peer_reviewed=True,
+            link="https://doi.org/10.1257/000282802762024683",
+            tested_rule=(
+                "Stock returns over November-April beat May-October in 36 of 37 countries. "
+                "The Halloween rule they examine is long from the start of November through "
+                "April and out from May through October."
+            ),
+            implemented_rule=(
+                "Long on UTC days in November through April, flat in May through October. "
+                "The close before the month changes is what flips the position at the next open."
+            ),
+            differences=(
+                "They compared monthly index returns, not a traded BTC book. Long or flat, "
+                "all-in, next-open fills, fees charged. Neighbours slide the entry or exit "
+                "month by one. October is not in the center window."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="weekend",
+        title="Flat across the weekend",
+        family="seasonality",
+        evaluation="daily",
+        params=(Param("span", 2, (1, 3), unit="days"),),
+        signal=_weekend,
+        citation=Citation(
+            authors="French",
+            year=1980,
+            title="Stock returns and the weekend effect",
+            venue="Journal of Financial Economics 8(1), 55-69",
+            peer_reviewed=True,
+            link="https://doi.org/10.1016/0304-405X(80)90021-5",
+            tested_rule=(
+                "Monday returns on the S&P composite, 1953-1977, are negative. The negative "
+                "part is the Friday close to the Monday open, which he reads as a weekend effect."
+            ),
+            implemented_rule=(
+                "Flat on Saturday and Sunday UTC, long Monday through Friday. Friday's close "
+                "sells at Saturday's open; Sunday's close buys at Monday's open."
+            ),
+            differences=(
+                "Equities could not be sold on Saturday. BTC trades both weekend days, so "
+                "the flat is those two sessions rather than a Friday-close to Monday-open "
+                "gap. Span 1 drops only Sunday; span 3 adds Friday. Long or flat, all-in, "
+                "next-open fills, one asset."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="high52",
+        title="Within 5% of the 252-day high",
+        family="momentum",
+        evaluation="daily",
+        params=(
+            Param("n", 252, (200, 280)),
+            Param("band", 5, (0, 10), unit="percent"),
+        ),
+        signal=_high52,
+        citation=Citation(
+            authors="George & Hwang",
+            year=2004,
+            title="The 52-Week High and Momentum Investing",
+            venue="The Journal of Finance 59(5), 2145-2176",
+            peer_reviewed=True,
+            link="https://doi.org/10.1111/j.1540-6261.2004.00695.x",
+            tested_rule=(
+                "Each month, stocks are ranked by the ratio of the current price to the "
+                "highest price of the past 12 months (about 252 sessions). The top 30% is "
+                "the winner portfolio, held six months. Nearness to that high predicts "
+                "returns better than a past-return sort."
+            ),
+            implemented_rule=(
+                "Long while the daily close is within 5% of the highest close of the last "
+                "252 days, today included. A band of 0 requires the close to equal that high."
+            ),
+            differences=(
+                "The paper is a cross-sectional rank and a six-month hold, not a single-asset "
+                "timing rule. 5% is a stated nearness band, not a cutoff they tested; 0% and "
+                "10% are the neighbours. On this tape 252 bars are 252 UTC days, not 252 "
+                "equity sessions. Not a Donchian stay-long (lib.turtle55, lib.donchian20): "
+                "the position is off as soon as the close leaves the band. Long or flat, "
+                "next-open fills, BTC."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="bll_band",
+        title="200-day SMA with a 1% band",
+        family="trend",
+        evaluation="daily",
+        params=(
+            Param("long", 200, (150, 250)),
+            Param("band", 1, (2,), unit="percent"),
+        ),
+        signal=_bll_band,
+        citation=Citation(
+            **_BLL,
+            tested_rule=(
+                "The same VMA rules as their moving-average tests, plus a 1% band: buy when "
+                "price rises above the MA by 1%, sell when it falls below the MA by 1%. "
+                "Inside the band the previous signal stands. DJIA daily, 1897-1986."
+            ),
+            implemented_rule=(
+                "Long after the close is more than 1% above the 200-day SMA; flat after the "
+                "close is more than 1% below it. Between the bands the position is unchanged."
+            ),
+            differences=(
+                "lib.sma200 is their no-band 1-200 rule and flips every time price crosses "
+                "the average. This is the band they also tested. Long or flat, no short-day "
+                "book, BTC, next-open fills after fees. The 2% neighbour is a perturbation; "
+                "150 and 250 match the other VMA lengths already in the catalog."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="keltner_revert",
+        title="Keltner mean reversion (20, 2 × ATR(10))",
+        family="mean_reversion",
+        evaluation="daily",
+        params=(
+            Param("ema", 20, (16, 24)),
+            Param("atr", 10, (7, 14)),
+            Param("width", 2, (1, 3), unit="ATR"),
+        ),
+        signal=_keltner_revert,
+        citation=Citation(
+            authors="Keltner",
+            year=1960,
+            title="How to Make Money in Commodities",
+            venue="Practitioner book; the 20-day EMA and 2×ATR(10) channel is the later textbook form",
+            peer_reviewed=False,
+            tested_rule=(
+                "The channel is the same textbook form as lib.keltner20: a 20-period EMA of "
+                "typical price and bands at 2 times Wilder ATR(10). Buying the lower band "
+                "and selling the EMA is the mean-reversion use of that channel."
+            ),
+            implemented_rule=(
+                "Long after a close below the lower band; flat after a close at or above "
+                "the 20-day EMA of typical price."
+            ),
+            differences=(
+                "lib.keltner20 buys the upper band instead. Not the 1960 SMA-of-range "
+                "formula. Not lib.bb_revert: the width is ATR, not a standard deviation. "
+                "Long or flat, next-open fills, no short side, BTC."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="rsi30",
+        title="RSI(14) buy below 30, exit above 70",
+        family="mean_reversion",
+        evaluation="daily",
+        params=(
+            Param("n", 14, (10, 18)),
+            Param("os", 30, (25, 35), unit="RSI"),
+        ),
+        signal=_rsi30,
+        citation=Citation(
+            authors="Wilder",
+            year=1978,
+            title="New Concepts in Technical Trading Systems",
+            venue="Practitioner book",
+            peer_reviewed=False,
+            tested_rule=(
+                "Wilder's RSI defaults to 14. He marked 30 as oversold and 70 as overbought. "
+                "His own trades also asked for divergence or a failure swing; the mechanical "
+                "pair is the textbook system built from those two levels."
+            ),
+            implemented_rule=(
+                "Long after RSI(14) closes below 30; flat after it closes above 70. The "
+                "exit is 100 minus the entry level."
+            ),
+            differences=(
+                "lib.rsi14 is long while RSI is above 50 and is not this reversal. lib.rsi2 "
+                "is the 2-period Connors dip, not RSI(14). Divergence is not required. "
+                "Next-open fills, long only, BTC. 14, 30 and 70 are his levels, not fit here."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="vortex",
+        title="Vortex(14) VI+ above VI-",
+        family="trend",
+        evaluation="daily",
+        params=(Param("n", 14, (10, 20)),),
+        signal=_vortex_trend,
+        citation=Citation(
+            authors="Botes & Siepman",
+            year=2010,
+            title="The Vortex Indicator",
+            venue="Technical Analysis of Stocks & Commodities, January 2010",
+            peer_reviewed=False,
+            tested_rule=(
+                "VI+ is the sum of |high minus the prior low| over n bars, divided by the "
+                "sum of true range. VI- uses |low minus the prior high|. The bullish "
+                "reading is VI+ above VI-. The length in the article is 14."
+            ),
+            implemented_rule="Long while VI+(14) is above VI-(14), flat otherwise.",
+            differences=(
+                "A day with no true range contributes 0, not a missing lookback. No "
+                "published performance test is relied on. Long or flat, next-open fills, BTC."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="trix",
+        title="TRIX(15) above zero",
+        family="momentum",
+        evaluation="daily",
+        params=(Param("n", 15, (12, 18)),),
+        signal=_trix,
+        citation=Citation(
+            authors="Hutson",
+            year=1983,
+            title="Good TRIX",
+            venue="Technical Analysis of Stocks & Commodities, Volume 1:5",
+            peer_reviewed=False,
+            tested_rule=(
+                "TRIX is the one-day rate of change of a triple-smoothed EMA. Above zero "
+                "the smoothed trend is rising. The length used with the indicator since "
+                "that article is 15."
+            ),
+            implemented_rule=(
+                "Long while a triple 15-day EMA of the close is higher than its own prior "
+                "value, flat otherwise."
+            ),
+            differences=(
+                "Not lib.macd and not lib.ema12x26: those are a 12/26 pair, once with a "
+                "signal line and once as a zero line. EMAs are seeded with the SMA of "
+                "their first finite window. Long or flat, next-open fills, BTC."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="awesome",
+        title="Awesome oscillator (5, 34) above zero",
+        family="momentum",
+        evaluation="daily",
+        params=(
+            Param("fast", 5, (4, 6)),
+            Param("slow", 34, (28, 40)),
+        ),
+        signal=_awesome,
+        citation=Citation(
+            authors="Williams",
+            year=1998,
+            title="New Trading Dimensions",
+            venue="Practitioner book (Wiley); the awesome oscillator is SMA(5) minus SMA(34) of the median price",
+            peer_reviewed=False,
+            tested_rule=(
+                "The awesome oscillator is the 5-bar simple average of the median price "
+                "(high+low)/2 minus the 34-bar simple average. Above zero the fast average "
+                "is above the slow one."
+            ),
+            implemented_rule=(
+                "Long while the 5-day SMA of the median price is above the 34-day SMA, "
+                "flat otherwise."
+            ),
+            differences=(
+                "Not lib.ema12x26 (the 12/26 EMA of the close) and not lib.sma5x150. The "
+                "saucer and twin-peaks patterns are not required. Long or flat, next-open "
+                "fills, BTC. 5 and 34 are the published pair, not fit here."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="kst",
+        title="Know Sure Thing above its 9-day signal",
+        family="momentum",
+        evaluation="daily",
+        params=(Param("signal", 9, (7, 11)),),
+        signal=_kst,
+        citation=Citation(
+            authors="Pring",
+            year=1992,
+            title="Know Sure Thing (KST)",
+            venue="Practitioner; daily parameters published with the indicator",
+            peer_reviewed=False,
+            tested_rule=(
+                "Daily KST is a weighted sum of four smoothed rates of change: ROC 10, 15, "
+                "20 and 30, smoothed by SMA 10, 10, 10 and 15, weights 1, 2, 3 and 4. The "
+                "signal line is a 9-bar SMA of that sum. Bullish when KST is above the signal."
+            ),
+            implemented_rule=(
+                "Long while the daily KST is above its 9-day SMA. The four rates, smoothers "
+                "and weights stay at the published set."
+            ),
+            differences=(
+                "Not a single rate-of-change sign rule (those are the lib.tsmom names). "
+                "Only the signal length is a grid axis. Long or flat, next-open fills, BTC. "
+                "No published performance test of this exact daily book is relied on."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="nr7",
+        title="NR7 breakout, held one day",
+        family="breakout",
+        evaluation="daily",
+        params=(
+            Param("n", 7, (5, 9)),
+            Param("hold", 1, (2, 3), unit="days"),
+        ),
+        signal=_nr7,
+        citation=Citation(
+            authors="Crabel",
+            year=1990,
+            title="Day Trading With Short Term Price Patterns and Opening Range Breakout",
+            venue="Practitioner book (Traders Press)",
+            peer_reviewed=False,
+            tested_rule=(
+                "An NR7 day has the narrowest high-low range of the last 7 days. Crabel "
+                "bought a break of that day's high on the following session, as a short-term "
+                "opening-range trade."
+            ),
+            implemented_rule=(
+                "Long on a daily close above the high of an NR7 day, and flat again after "
+                "that one day. The NR day is the strict minimum of the 7 ranges ending that day."
+            ),
+            differences=(
+                "The book trades the next day's opening range intraday. This confirms the "
+                "break on the daily close and holds a fixed number of daily bars, the same "
+                "hold shape as lib.bll_trb50, which is a 50-day high rather than a narrow "
+                "range. Long or flat, next-open fills, BTC. 7 and a one-day hold are his "
+                "short-term pair, not fit here."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="alligator",
+        title="Williams Alligator lips above teeth above jaw",
+        family="trend",
+        evaluation="daily",
+        params=(Param("jaw", 13, (11, 15)),),
+        signal=_alligator,
+        citation=Citation(
+            authors="Williams",
+            year=1995,
+            title="Trading Chaos",
+            venue="Practitioner book; jaw 13 shifted 8, teeth 8 shifted 5, lips 5 shifted 3",
+            peer_reviewed=False,
+            tested_rule=(
+                "The alligator is three smoothed moving averages of the median price: the "
+                "jaw SMMA(13) plotted 8 bars ahead, the teeth SMMA(8) plotted 5 ahead, and "
+                "the lips SMMA(5) plotted 3 ahead. An uptrend is lips above teeth above jaw."
+            ),
+            implemented_rule=(
+                "Long while the lagged lips are above the lagged teeth and those are above "
+                "the lagged jaw. The value read at t is the SMMA from t minus the shift."
+            ),
+            differences=(
+                "The book's forward plot is applied as a lag, so the signal does not read "
+                "a bar that has not closed. Teeth, lips and the three shifts stay at 8, 5, "
+                "3 and 8, 5, 3. Not lib.golden_cross or lib.ema50x200. The sleeping-alligator "
+                "angle filter is not required. Long or flat, next-open fills, BTC."
             ),
         ),
     ),

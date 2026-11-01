@@ -139,6 +139,36 @@ def week_number(ts: np.ndarray) -> np.ndarray:
     return ((t // DAY_MS) + 3) // 7
 
 
+def weekday(ts: np.ndarray) -> np.ndarray:
+    """UTC weekday, Monday 0 through Sunday 6. 1970-01-01 was Thursday."""
+    t = np.asarray(ts, dtype=np.int64)
+    return ((t // DAY_MS) + 3) % 7
+
+
+def calendar_month(ts: np.ndarray) -> np.ndarray:
+    """Calendar month 1..12 of each UTC timestamp."""
+    t = np.asarray(ts, dtype=np.int64)
+    months = t.astype("datetime64[ms]").astype("datetime64[M]").astype(np.int64)
+    return (months % 12) + 1
+
+
+def day_of_month(ts: np.ndarray) -> np.ndarray:
+    """Day of the UTC month, 1..31."""
+    t = np.asarray(ts, dtype=np.int64)
+    days = t.astype("datetime64[ms]").astype("datetime64[D]")
+    start = days.astype("datetime64[M]").astype("datetime64[D]")
+    return (days - start).astype(np.int64) + 1
+
+
+def days_in_month(ts: np.ndarray) -> np.ndarray:
+    """Length of the UTC month containing each timestamp."""
+    t = np.asarray(ts, dtype=np.int64)
+    month = t.astype("datetime64[ms]").astype("datetime64[M]")
+    start = month.astype("datetime64[D]")
+    end = (month + np.timedelta64(1, "M")).astype("datetime64[D]")
+    return (end - start).astype(np.int64)
+
+
 def rolling_max(x: np.ndarray, n: int) -> np.ndarray:
     """Highest value of the last ``n`` observations, ``t`` included."""
     x = np.asarray(x, dtype=np.float64)
@@ -426,6 +456,303 @@ def ibs(high: np.ndarray, low: np.ndarray, close: np.ndarray) -> np.ndarray:
     with np.errstate(invalid="ignore", divide="ignore"):
         ok = np.isfinite(span) & (span > 0.0)
         out[ok] = (close[ok] - low[ok]) / span[ok]
+    return out
+
+
+def sma_tail(x: np.ndarray, n: int) -> np.ndarray:
+    """SMA that skips leading NaNs. The tail after the first finite value must be finite.
+
+    ``sma`` cannot be used on a ROC or an oscillator: one leading NaN poisons
+    the cumulative sum. This matches :func:`ema`, which seeds on the first
+    ``n`` finite values and then requires every later value to exist.
+    """
+    x = np.asarray(x, dtype=np.float64)
+    out = _nan(x.shape[0])
+    n = int(n)
+    finite = np.flatnonzero(np.isfinite(x))
+    if n <= 0 or finite.size == 0:
+        return out
+    first = int(finite[0])
+    if x.shape[0] - first < n or not bool(np.all(np.isfinite(x[first:]))):
+        return out
+    csum = np.concatenate(([0.0], np.cumsum(x[first:])))
+    out[first + n - 1 :] = (csum[n:] - csum[:-n]) / n
+    return out
+
+
+def smma(x: np.ndarray, n: int) -> np.ndarray:
+    """Wilder smoothed moving average. Seed at index ``n - 1`` is the mean of the first ``n`` values."""
+    x = np.asarray(x, dtype=np.float64)
+    out = _nan(x.shape[0])
+    n = int(n)
+    if n <= 0 or x.shape[0] < n or not bool(np.all(np.isfinite(x))):
+        return out
+    value = float(np.mean(x[:n]))
+    out[n - 1] = value
+    for i in range(n, x.shape[0]):
+        value = (value * (n - 1) + float(x[i])) / n
+        out[i] = value
+    return out
+
+
+def lag(x: np.ndarray, k: int) -> np.ndarray:
+    """Value of ``x`` from ``k`` bars earlier. Index ``t`` does not read past ``t``."""
+    x = np.asarray(x, dtype=np.float64)
+    k = int(k)
+    if k <= 0:
+        return np.array(x, dtype=np.float64, copy=True)
+    out = _nan(x.shape[0])
+    if x.shape[0] > k:
+        out[k:] = x[:-k]
+    return out
+
+
+def kama(close: np.ndarray, n: int, fast: int = 2, slow: int = 30) -> np.ndarray:
+    """Kaufman adaptive moving average.
+
+    The efficiency ratio at ``t`` is the ``n``-bar net change divided by the
+    sum of the absolute one-bar changes. The smoothing constant is the square
+    of the ER blend between the fast and slow EMAs (Kaufman 1995: 2 and 30).
+    The seed at index ``n`` equals the close. Later bars only use that seed
+    and closes through ``t``.
+    """
+    close = np.asarray(close, dtype=np.float64)
+    out = _nan(close.shape[0])
+    n = int(n)
+    if n <= 0 or close.shape[0] <= n or not bool(np.all(np.isfinite(close))):
+        return out
+    fast_sc = 2.0 / (int(fast) + 1.0)
+    slow_sc = 2.0 / (int(slow) + 1.0)
+    diff = np.abs(np.diff(close))
+    csum = np.concatenate(([0.0], np.cumsum(diff)))
+    value = float(close[n])
+    out[n] = value
+    for t in range(n + 1, close.shape[0]):
+        change = abs(float(close[t] - close[t - n]))
+        vol = float(csum[t] - csum[t - n])
+        er = 0.0 if vol == 0.0 else change / vol
+        sc = (er * (fast_sc - slow_sc) + slow_sc) ** 2
+        value = value + sc * (float(close[t]) - value)
+        out[t] = value
+    return out
+
+
+def parabolic_sar_long(
+    high: np.ndarray, low: np.ndarray, close: np.ndarray, af_step: float, af_max: float,
+) -> np.ndarray:
+    """True while Wilder's parabolic SAR trend is up.
+
+    The stop is updated from the prior extreme point and clamped to the prior
+    two bars, then the completed bar's low (uptrend) or high (downtrend) is
+    allowed to flip it. Nothing after the close of ``t`` is read. Output is
+    false before index 2, where the first update exists. The initial trend
+    follows the second close against the first; a tie starts down.
+    """
+    high = np.asarray(high, dtype=np.float64)
+    low = np.asarray(low, dtype=np.float64)
+    close = np.asarray(close, dtype=np.float64)
+    m = int(close.shape[0])
+    out = np.zeros(m, dtype=bool)
+    if m < 3 or not bool(np.all(np.isfinite(high)) and np.all(np.isfinite(low))):
+        return out
+    step = float(af_step)
+    cap = float(af_max)
+    up = bool(close[1] > close[0])
+    if up:
+        ep = float(high[1])
+        sar = float(low[0])
+    else:
+        ep = float(low[1])
+        sar = float(high[0])
+    af = step
+    for t in range(2, m):
+        sar = sar + af * (ep - sar)
+        if up:
+            sar = min(sar, float(low[t - 1]), float(low[t - 2]))
+            if float(low[t]) < sar:
+                up = False
+                sar = ep
+                ep = float(low[t])
+                af = step
+            elif float(high[t]) > ep:
+                ep = float(high[t])
+                af = min(af + step, cap)
+        else:
+            sar = max(sar, float(high[t - 1]), float(high[t - 2]))
+            if float(high[t]) > sar:
+                up = True
+                sar = ep
+                ep = float(high[t])
+                af = step
+            elif float(low[t]) < ep:
+                ep = float(low[t])
+                af = min(af + step, cap)
+        out[t] = up
+    return out
+
+
+def aroon(high: np.ndarray, low: np.ndarray, n: int) -> tuple[np.ndarray, np.ndarray]:
+    """Aroon up and down. Window is ``n`` days back through today (``n + 1`` bars).
+
+    A tie uses the most recent extreme, so a flat window is 100 and 100.
+    Chande's scaling: 100 when the extreme is today, 0 when it is ``n`` days ago.
+    """
+    high = np.asarray(high, dtype=np.float64)
+    low = np.asarray(low, dtype=np.float64)
+    up = _nan(high.shape[0])
+    down = _nan(high.shape[0])
+    n = int(n)
+    width = n + 1
+    if n <= 0 or high.shape[0] < width:
+        return up, down
+    hw = sliding_window_view(high, width)
+    lw = sliding_window_view(low, width)
+    # Reversed argmax/argmin: the rightmost tie is the most recent bar.
+    age_up = np.argmax(hw[:, ::-1], axis=1)
+    age_down = np.argmin(lw[:, ::-1], axis=1)
+    up[n:] = 100.0 * (n - age_up) / n
+    down[n:] = 100.0 * (n - age_down) / n
+    return up, down
+
+
+def cci(high: np.ndarray, low: np.ndarray, close: np.ndarray, n: int) -> np.ndarray:
+    """Lambert's commodity channel index. The 0.015 constant is his, not a fit.
+
+    Mean deviation is around the SMA of typical price. A window with no
+    deviation is 0, so a flat stretch stays defined.
+    """
+    high = np.asarray(high, dtype=np.float64)
+    low = np.asarray(low, dtype=np.float64)
+    close = np.asarray(close, dtype=np.float64)
+    out = _nan(close.shape[0])
+    n = int(n)
+    if n <= 1 or close.shape[0] < n:
+        return out
+    typical = (high + low + close) / 3.0
+    mid = sma(typical, n)
+    window = sliding_window_view(typical, n)
+    mad = np.mean(np.abs(window - mid[n - 1 :, None]), axis=1)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        raw = np.where(mad > 0.0, (typical[n - 1 :] - mid[n - 1 :]) / (0.015 * mad), 0.0)
+    out[n - 1 :] = raw
+    return out
+
+
+def stochastic_slow(
+    high: np.ndarray, low: np.ndarray, close: np.ndarray, n: int, smooth: int = 3,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Slow %K and %D. A zero-range window is 50 so the smoother stays defined.
+
+    Fast %K uses the last ``n`` highs and lows, today included. Slow %K is
+    the ``smooth`` SMA of that, and %D is the ``smooth`` SMA of slow %K.
+    Lane's textbook triple is 14, 3, 3.
+    """
+    high = np.asarray(high, dtype=np.float64)
+    low = np.asarray(low, dtype=np.float64)
+    close = np.asarray(close, dtype=np.float64)
+    hh = rolling_max(high, n)
+    ll = rolling_min(low, n)
+    fast = _nan(close.shape[0])
+    span = hh - ll
+    with np.errstate(invalid="ignore", divide="ignore"):
+        ok = np.isfinite(span) & np.isfinite(close)
+        fast = np.where(ok & (span > 0.0), 100.0 * (close - ll) / span, fast)
+        fast = np.where(ok & (span == 0.0), 50.0, fast)
+    slow_k = sma_tail(fast, smooth)
+    slow_d = sma_tail(slow_k, smooth)
+    return slow_k, slow_d
+
+
+def close_streak(close: np.ndarray) -> np.ndarray:
+    """Connors up/down streak. Unchanged close resets to 0. Index 0 is 0."""
+    close = np.asarray(close, dtype=np.float64)
+    out = np.zeros(close.shape[0], dtype=np.float64)
+    for t in range(1, close.shape[0]):
+        if close[t] > close[t - 1]:
+            out[t] = out[t - 1] + 1.0 if out[t - 1] > 0.0 else 1.0
+        elif close[t] < close[t - 1]:
+            out[t] = out[t - 1] - 1.0 if out[t - 1] < 0.0 else -1.0
+    return out
+
+
+def percent_rank(close: np.ndarray, n: int) -> np.ndarray:
+    """Percent of the previous ``n`` one-day changes strictly below today's.
+
+    Today's change is not inside the window. The first value is at index
+    ``n + 1`` (the change at bar 1, then ``n`` changes before today).
+    """
+    close = np.asarray(close, dtype=np.float64)
+    out = _nan(close.shape[0])
+    n = int(n)
+    if n <= 0 or close.shape[0] <= n + 1:
+        return out
+    rets = np.diff(close)
+    window = sliding_window_view(rets, n)
+    # window[j] is rets[j:j+n], the n changes before rets[j+n].
+    # rets[j+n] belongs to bar (j+n+1). j runs through len(window)-1.
+    rows = window.shape[0] - 1
+    if rows <= 0:
+        return out
+    today = rets[n : n + rows]
+    count = np.sum(window[:rows] < today[:, None], axis=1)
+    out[n + 1 : n + 1 + rows] = 100.0 * count / n
+    return out
+
+
+def connors_rsi(close: np.ndarray, rank: int) -> np.ndarray:
+    """CRSI(3, 2, rank): mean of RSI(3), RSI(2) of the streak, and percent rank."""
+    close = np.asarray(close, dtype=np.float64)
+    price = rsi_wilder(close, 3)
+    streak = rsi_wilder(close_streak(close), 2)
+    rank_v = percent_rank(close, rank)
+    with np.errstate(invalid="ignore"):
+        return (price + streak + rank_v) / 3.0
+
+
+def vortex(high: np.ndarray, low: np.ndarray, close: np.ndarray, n: int) -> tuple[np.ndarray, np.ndarray]:
+    """Vortex VI+ and VI-. A zero true-range sum is 0, not a missing value.
+
+    VM starts at index 1 (it needs the previous bar). The first sum of ``n``
+    such moves ends at index ``n``.
+    """
+    high = np.asarray(high, dtype=np.float64)
+    low = np.asarray(low, dtype=np.float64)
+    close = np.asarray(close, dtype=np.float64)
+    m = int(close.shape[0])
+    plus = _nan(m)
+    minus = _nan(m)
+    n = int(n)
+    if n <= 0 or m <= n:
+        return plus, minus
+    tr = true_range(high, low, close)
+    vmp = np.zeros(m, dtype=np.float64)
+    vmm = np.zeros(m, dtype=np.float64)
+    vmp[1:] = np.abs(high[1:] - low[:-1])
+    vmm[1:] = np.abs(low[1:] - high[:-1])
+    c_tr = np.concatenate(([0.0], np.cumsum(tr)))
+    c_p = np.concatenate(([0.0], np.cumsum(vmp)))
+    c_m = np.concatenate(([0.0], np.cumsum(vmm)))
+    t = np.arange(n, m)
+    sum_tr = c_tr[t + 1] - c_tr[t - n + 1]
+    sum_p = c_p[t + 1] - c_p[t - n + 1]
+    sum_m = c_m[t + 1] - c_m[t - n + 1]
+    with np.errstate(invalid="ignore", divide="ignore"):
+        plus[n:] = np.where(sum_tr > 0.0, sum_p / sum_tr, 0.0)
+        minus[n:] = np.where(sum_tr > 0.0, sum_m / sum_tr, 0.0)
+    return plus, minus
+
+
+def roc(close: np.ndarray, n: int) -> np.ndarray:
+    """Close-to-close rate of change versus ``n`` bars ago. Finite from index ``n``."""
+    close = np.asarray(close, dtype=np.float64)
+    out = _nan(close.shape[0])
+    n = int(n)
+    if n <= 0 or close.shape[0] <= n:
+        return out
+    base = close[:-n]
+    with np.errstate(invalid="ignore", divide="ignore"):
+        good = np.isfinite(base) & (base != 0.0) & np.isfinite(close[n:])
+        out[n:] = np.where(good, close[n:] / base - 1.0, np.nan)
     return out
 
 
