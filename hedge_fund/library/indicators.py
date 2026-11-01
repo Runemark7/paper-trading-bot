@@ -2249,3 +2249,163 @@ def mesa_adaptive(
             mama[t] = mama_v
             phase[t] = phase_v[t]
     return mama, phase
+
+
+def center_of_gravity(close: np.ndarray, n: int) -> np.ndarray:
+    """Ehlers center of gravity of the last ``n`` closes. Finite at ``n - 1``.
+
+    The newest close has weight 1 and the oldest has weight ``n``. The
+    ratio is negated, so the value rises when the later closes get heavier.
+    A window that sums to zero is left undefined. A flat window sits at
+    ``-(n + 1) / 2``.
+    """
+    close = np.asarray(close, dtype=np.float64)
+    out = _nan(close.shape[0])
+    n = int(n)
+    if n <= 1 or close.shape[0] < n:
+        return out
+    weights = np.arange(n, 0, -1, dtype=np.float64)
+    window = sliding_window_view(close, n)
+    numer = window @ weights
+    denom = window.sum(axis=1)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        ok = np.isfinite(denom) & (denom != 0.0)
+        out[n - 1 :][ok] = -numer[ok] / denom[ok]
+    return out
+
+
+def roofing_filter(close: np.ndarray, highpass: int, lowpass: int = 10) -> np.ndarray:
+    """Ehlers roofing filter: a high-pass, then a super smoother. Finite from index 2.
+
+    The high-pass length is the cutoff. The smoother length stays at the
+    call site. Both recursions are seeded at 0, which is "no history", not
+    a later bar. A straight line has a zero second difference, so the
+    filter stays at 0.
+    """
+    close = np.asarray(close, dtype=np.float64)
+    out = _nan(close.shape[0])
+    hp_n = int(highpass)
+    lp = int(lowpass)
+    if hp_n < 2 or lp < 1 or close.shape[0] < 3 or not bool(np.all(np.isfinite(close))):
+        return out
+    angle = 0.707 * 2.0 * np.pi / hp_n
+    cosine = float(np.cos(angle))
+    if cosine == 0.0:
+        return out
+    alpha = (cosine + float(np.sin(angle)) - 1.0) / cosine
+    decay = 1.0 - alpha
+    lead = (1.0 - alpha / 2.0) ** 2
+    hp_prev2 = 0.0
+    hp_prev1 = 0.0
+    a1 = float(np.exp(-np.sqrt(2.0) * np.pi / lp))
+    b1 = float(2.0 * a1 * np.cos(np.sqrt(2.0) * np.pi / lp))
+    c2 = b1
+    c3 = -a1 * a1
+    c1 = 1.0 - c2 - c3
+    filt_prev2 = 0.0
+    filt_prev1 = 0.0
+    hp_prev = 0.0
+    for t in range(2, close.shape[0]):
+        hp = (
+            lead * (float(close[t]) - 2.0 * float(close[t - 1]) + float(close[t - 2]))
+            + 2.0 * decay * hp_prev1
+            - decay * decay * hp_prev2
+        )
+        filt = c1 * (hp + hp_prev) / 2.0 + c2 * filt_prev1 + c3 * filt_prev2
+        out[t] = filt
+        hp_prev2 = hp_prev1
+        hp_prev1 = hp
+        hp_prev = hp
+        filt_prev2 = filt_prev1
+        filt_prev1 = filt
+    return out
+
+
+def _average_ranks(values: np.ndarray) -> np.ndarray:
+    """Average ranks of one window. The smallest value has rank 0."""
+    order = np.argsort(values, kind="mergesort")
+    ranks = np.empty(values.shape[0], dtype=np.float64)
+    ordered = values[order]
+    start = 0
+    n = int(values.shape[0])
+    while start < n:
+        stop = start + 1
+        while stop < n and ordered[stop] == ordered[start]:
+            stop += 1
+        ranks[order[start:stop]] = 0.5 * (start + (stop - 1))
+        start = stop
+    return ranks
+
+
+def spearman_rho(close: np.ndarray, n: int) -> np.ndarray:
+    """Spearman correlation of the last ``n`` closes with time. Finite at ``n - 1``.
+
+    Time runs oldest to newest. Ties share the average rank. A constant
+    window has no price rank to compare and is 0, which is not a long.
+    """
+    close = np.asarray(close, dtype=np.float64)
+    out = _nan(close.shape[0])
+    n = int(n)
+    if n < 3 or close.shape[0] < n:
+        return out
+    time = np.arange(n, dtype=np.float64)
+    time = time - time.mean()
+    time_ss = float(np.dot(time, time))
+    windows = sliding_window_view(close, n)
+    for i in range(windows.shape[0]):
+        ranks = _average_ranks(windows[i])
+        ranks = ranks - ranks.mean()
+        price_ss = float(np.dot(ranks, ranks))
+        if price_ss <= 0.0 or time_ss <= 0.0:
+            out[n - 1 + i] = 0.0
+        else:
+            out[n - 1 + i] = float(np.dot(ranks, time) / np.sqrt(price_ss * time_ss))
+    return out
+
+
+def theil_sen_slope(close: np.ndarray, n: int) -> np.ndarray:
+    """Median of the pairwise slopes of the last ``n`` closes. Finite at ``n - 1``.
+
+    Each pair of closes contributes ``(later - earlier) / bars between``.
+    A flat window has median 0, which is not a long.
+    """
+    close = np.asarray(close, dtype=np.float64)
+    out = _nan(close.shape[0])
+    n = int(n)
+    if n < 2 or close.shape[0] < n:
+        return out
+    window = sliding_window_view(close, n)
+    slopes = [
+        (window[:, j] - window[:, i]) / float(j - i)
+        for i in range(n)
+        for j in range(i + 1, n)
+    ]
+    out[n - 1 :] = np.median(np.stack(slopes, axis=1), axis=1)
+    return out
+
+
+def intraday_momentum(open_: np.ndarray, close: np.ndarray, n: int) -> np.ndarray:
+    """Chande intraday momentum index. Finite at ``n - 1``.
+
+    Gains are close minus open when the close is higher. Losses are the
+    other way. The index is 100 times the gains over gains plus losses.
+    A window with no body is 50, the same reading as a flat RSI.
+    """
+    open_ = np.asarray(open_, dtype=np.float64)
+    close = np.asarray(close, dtype=np.float64)
+    out = _nan(close.shape[0])
+    n = int(n)
+    if n <= 0 or close.shape[0] < n:
+        return out
+    gain = np.maximum(close - open_, 0.0)
+    loss = np.maximum(open_ - close, 0.0)
+    sum_gain = np.concatenate(([0.0], np.cumsum(gain)))
+    sum_loss = np.concatenate(([0.0], np.cumsum(loss)))
+    idx = np.arange(n - 1, close.shape[0])
+    up = sum_gain[idx + 1] - sum_gain[idx + 1 - n]
+    down = sum_loss[idx + 1] - sum_loss[idx + 1 - n]
+    total = up + down
+    value = np.full(idx.shape[0], 50.0, dtype=np.float64)
+    np.divide(100.0 * up, total, out=value, where=total > 0.0)
+    out[n - 1 :] = value
+    return out
