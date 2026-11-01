@@ -1,62 +1,68 @@
-# Library backlog (batch 11 and after)
+# Library backlog (batch 12 and after)
 
 Paper only. BTC only. Daily bars, long or flat, next-open fills, the
 pre-registered 20% stop. These are candidates for a later catalog append.
 They are not registered, and discovery will not claim them until they are
-added to `LIBRARY` the same way batch 10 was.
+added to `LIBRARY` the same way batch 11 was.
 
-Batch 10 appended 20 names after the existing 191. It did not change those
-191, and it did not requeue them. The random farm stays paused.
+Batch 11 appended 20 names after the existing 211. It did not change those
+211, and it did not requeue them. The random farm stays paused.
 
-Do not add a near-duplicate of a name already in the catalog. Batch 10
+Do not add a near-duplicate of a name already in the catalog. Batch 11
 skipped, on purpose:
 
-- The thrusting line. A white candle that opens under the prior black close
-  and closes inside that body, but below its midpoint, is the failed half
-  of `lib.pierce`. Only the midpoint threshold differs.
-- The Ichimoku cloud twist. Span A above span B is already
-  `lib.ichimoku_cloud`. `lib.ichimoku` is the close versus that cloud, and
-  `lib.ichimoku_tk` is the tenkan/kijun cross.
-- Donchian, turtle, Bollinger, Keltner, the SMA band, MACD and its histogram,
-  the impulse system, RSI and its signal line and its failure swing, the
-  slow stochastic, the fast stochastic above 50, ConnorsRSI, the double
-  seven, three lower closes, three white soldiers, the engulfing, the
-  piercing line, the harami, the three inside up, the three outside up, the
-  morning star, the hammer, the inverted hammer, the three-line strike, the
-  belt hold, the matching low, the meeting lines, the separating lines, the
-  stick sandwich, the breakaway, rising three methods, the two-bar reversal,
-  the key reversal, the 80-20 bar, the hook, the outside close, Williams %R,
-  the stochastic cross, the stochastic pop, the stochastic momentum index,
-  IBS, the oops reversal, Supertrend, the chandelier, the SafeZone stop, the
-  Kase DevStop, ADX, the directional cross, the holy grail, Aroon and the
-  70/30 strong-trend reading, CCI, Vortex, choppiness, the random walk index,
-  VHF, the Gopalakrishnan range index, TRIX and its signal line, TSI and its
-  signal line, the Chande oscillator and its signal line, the intraday
-  momentum index, the momentum pinball, DeMarker and its signal line, Qstick
-  and its signal line, the detrended price oscillator and its signal line,
-  balance of power and its signal line, the psychological line and its
-  signal line, the trend intensity index, Elder bull power, Elder bear power,
-  the range expansion index, TD setup, TD countdown, TD Combo, the awesome
-  oscillator, its slope, and its saucer, the accelerator, the alligator, the
-  gator and its awakening, VIDYA, FRAMA and its slope, MAMA and its slope,
-  the zero-lag EMA and its slope, the super smoother and its slope, the
-  instantaneous trendline and its slope, the cyber cycle and its zero line,
-  the sine wave, the Fisher transform and its zero line, the center of
-  gravity, the roofing filter, the band-pass, the homodyne dominant-cycle
-  lag, the Laguerre RSI, the Laguerre filter, T3 and its slope, ALMA and its
-  slope, the McGinley dynamic, KAMA, the efficiency ratio and the signed
-  ratio, the Hull average and the close versus that average, Heikin-Ashi,
-  DEMA, the cloud and the tenkan/kijun cross, the three-line break, kagi,
-  renko, the point-and-figure double top, time-series momentum, the variance
-  ratio, the intermediate window, the regression slope, r-squared, the
+- The regression slope rising. `lib.linreg` is already the sign of the
+  20-day least-squares slope. Requiring that slope to also stand above its
+  previous value is the rising-line reading this library stopped adding.
+- The on-neck line. A white close within 5 percent of the prior five ranges
+  of the prior black low does not occur on the 2017-2026 tape, so the
+  center would have no round-trip.
+- Donchian, turtle, Bollinger and its bandwidth and the squeeze, Keltner,
+  the SMA band, MACD and its histogram, the impulse system, RSI and its
+  signal line and its failure swing, the slow stochastic, the fast
+  stochastic above 50, ConnorsRSI, the double seven, three lower closes,
+  the end of a five-day losing streak, three white soldiers, three higher
+  lows, the engulfing, the piercing line, the harami, the three inside up,
+  the three outside up, the morning star, the hammer, the inverted hammer,
+  the three-line strike, the belt hold, the matching low, the meeting
+  lines, the separating lines, the stick sandwich, bullish kicking, the
+  breakaway, rising three methods, the two-bar reversal, the key reversal,
+  the 80-20 bar, the hook, the outside close, Williams %R, the stochastic
+  cross, the stochastic pop, the stochastic momentum index, IBS, the close
+  location value, the oops reversal, Supertrend, the chandelier, the
+  SafeZone stop, the Kase DevStop, the Chande Kroll stop, ADX, the
+  directional cross, the holy grail, Aroon and the 70/30 strong-trend
+  reading, CCI, Vortex, choppiness, the random walk index, VHF, the
+  Gopalakrishnan range index, TRIX and its signal line, TSI and its signal
+  line, the Chande oscillator and its signal line, the intraday momentum
+  index, the momentum pinball, DeMarker and its signal line, Qstick and its
+  signal line, the detrended price oscillator and its signal line, balance
+  of power and its signal line, the psychological line and its signal line,
+  the trend intensity index, Elder bull power, Elder bear power, the range
+  expansion index, TD setup, TD countdown, TD Combo, the awesome oscillator,
+  its slope, and its saucer, the accelerator, the alligator, the gator and
+  its awakening, VIDYA, FRAMA and its slope, the fractal dimension, MAMA
+  and its slope, the zero-lag EMA and its slope, the super smoother and its
+  slope, the instantaneous trendline and its slope, the cyber cycle and its
+  zero line, the sine wave, the Fisher transform and its zero line, the
+  center of gravity, the roofing filter, the band-pass, the homodyne
+  dominant-cycle lag, the Laguerre RSI, the Laguerre filter, T3 and its
+  slope, ALMA and its slope, the McGinley dynamic, KAMA, the efficiency
+  ratio and the signed ratio, the Hull average and the close versus that
+  average, Heikin-Ashi, DEMA, the cloud and the tenkan/kijun cross, the
+  three-line break, kagi, renko, the point-and-figure double top,
+  time-series momentum, the variance ratio, lag-1 autocorrelation, the run
+  count, the intermediate window, the regression slope, r-squared, the
   Spearman rank correlation, the Theil-Sen slope, the regression value, the
-  standard-error band, the percentile channel, the Fibonacci hold, Woodie's
-  pivot, the floor pivot, the DeMark pivot, Camarilla, Garman-Klass,
-  Rogers-Satchell, Yang-Zhang, Chaikin volatility, the Schaff cross and the
-  Schaff midline, the relative vigor index and its zero line, the first half
-  of the month, expiration week, the weekend, Monday, the turn of the month,
-  and the Halloween window. Those are already seated or tested names.
-  Batch 10 did not add a neighbour of any of them as a new key.
+  standard-error band, the percentile channel, the Donchian midpoint, the
+  Fibonacci hold, Woodie's pivot, the floor pivot, the DeMark pivot,
+  Camarilla, Garman-Klass, Rogers-Satchell, Yang-Zhang, Parkinson,
+  downside deviation, realized skewness, realized kurtosis, the MAX filter,
+  Chaikin volatility, the Schaff cross and the Schaff midline, the relative
+  vigor index and its zero line, the same-calendar-month sign, the first
+  half of the month, expiration week, the weekend, Monday, the turn of the
+  month, and the Halloween window. Those are already seated or tested
+  names. Batch 11 did not add a neighbour of any of them as a new key.
 - Inverse-volatility position sizing is still not a signal. The book is
   all-in or flat.
 
@@ -85,6 +91,7 @@ These need a data or engine change this batch did not make.
 | On-chain value (MVRV, SOPR, stock-to-flow) | Coin-metrics style valuation | Not on the OHLC tape. |
 | Cross-sectional momentum, pairs, or Antonacci's relative leg | Jegadeesh and Titman, *Journal of Finance* (1993); Antonacci, *Dual Momentum Investing* (2014) | One asset. BTC only. Absolute momentum is already `lib.tsmom12m` / `lib.tsmom12_1` / `lib.mom_mid`. |
 | ZigZag / repainting swings | Chart practice | A swing that is rewritten after later bars is look-ahead. Do not add it. |
+| On-neck line | Nison, *Japanese Candlestick Charting Techniques* (1991) | The 5 percent equal-band of the prior black low never prints on this tape. Zero round-trips. |
 
 ## Ready for a later batch
 
@@ -93,28 +100,28 @@ Lookbacks stay inside the 2017-08-17 warm-up so the score start can remain
 2018-12-01. Neighbours stay one-at-a-time, as in the catalog. None of these
 is a parameter neighbour of a name already registered.
 
-1. **Parkinson quiet uptrend.** Parkinson, "The Extreme Value Method for Estimating the Variance of the Rate of Return", *Journal of Business* (1980). One day is `ln(H/L)^2 / (4 ln 2)`. Long while the 20-day mean is below its 100-day median and the close is above the 200-day SMA. The median length stays 100. Not `lib.gk` (that subtracts an open-close term), not `lib.rsvol`, and not `lib.yz`.
-2. **Realized skewness.** Amaya, Christoffersen, Jacobs, and Vasquez, "Does realized skewness predict the cross-section of equity returns?", *Journal of Financial Economics* (2015). The skewness of the last 20 daily log returns, long while it is below zero and the close is above the 200-day SMA. The zero stays fixed. Not a variance median.
-3. **Realized kurtosis.** The same paper measures the fourth moment. Long while the excess kurtosis of the last 20 daily log returns is below its 100-day median and the close is above the 200-day SMA. The median length stays 100. Not the skewness rule and not `lib.yz`.
-4. **Lag-1 autocorrelation.** Lo and MacKinlay, "Stock Market Prices Do Not Follow Random Walks", *Review of Financial Studies* (1988). Long while the autocorrelation of the last 20 daily log returns at lag 1 is positive. Not `lib.vratio`, which is a ratio of variances, and not `lib.tsmom30d`, which is the sign of the total return.
-5. **MAX-effect filter.** Bali, Cakici, and Whitelaw, "Maxing out: Stocks as lotteries and the cross-section of expected returns", *Journal of Financial Economics* (2011). Long while the largest one-day simple return of the prior 21 sessions is below its 100-day median and the close is above the 200-day SMA. Today is outside the 21-day window. The median length stays 100. Not `lib.rev1m`.
-6. **Downside-deviation quiet uptrend.** Sortino and van der Meer, "Downside Risk", *Journal of Portfolio Management* (1991). The root mean square of the negative daily log returns over 20 days, zeros included for the up days. Long while that deviation is below its 100-day median and the close is above the 200-day SMA. The median length stays 100. Not total variance.
-7. **Fractal-dimension trend.** Ehlers, "FRAMA", *Technical Analysis of Stocks & Commodities*. The fractal dimension of the last 16 bars, long while it is below 1.4 and the close is above the 200-day SMA. The 1.4 stays fixed. Not `lib.frama`, which folds the dimension into an average.
-8. **Chande Kroll stop.** Chande and Kroll, *The New Technical Trader* (1994). The preliminary long stop is the lowest low of 10 days plus 1 ATR(10). The stop used is the lowest of that preliminary stop over the last 9 days. Long while the close is above it. The 1 and the 9 stay fixed. The ATR length is the grid. Not `lib.chandelier`, not `lib.kase`, and not `lib.safezone`.
-9. **Completed-week rising swing.** Rhea, *The Dow Theory* (1932). A UTC week ends on Sunday. Long while the just-completed week's high and low are both above the prior completed week's high and low. The decision uses only finished weeks. Not `lib.tsmom1w` and not a rolling five-day Donchian.
-10. **Inside-week break.** A completed UTC week whose high and low sit inside the prior completed week, then long on a later daily close above that inside week's high, above the 200-day SMA. The long is the break close. Not `lib.inside_day`.
-11. **Prior-week high break.** Long while the daily close is above the high of the prior completed UTC week and above the 200-day SMA. The week is calendar-aligned, not a rolling five-day window. Not `lib.donchian20`.
-12. **Donchian midline.** The midpoint of the prior 20-day high and low. Long while the close is above that midpoint. Today is outside the window. Not the channel break (`lib.donchian20`) and not the 61.8 percent hold (`lib.fibhold`).
-13. **Fewer runs, up window.** Mood, "The Distribution Theory of Runs", *Annals of Mathematical Statistics* (1940). A run is a streak of up or down closes. Long while the number of runs in the last 20 closes is below 10 and the close is above the close 20 days ago. The 10 stays fixed. Not `lib.eratio`, which is the net change over the path length.
-14. **Same-calendar-month seasonality.** Heston and Sadka, "Seasonality in the Cross-Section of Expected Stock Returns", *Journal of Financial Economics* (2008). Long on each day of a UTC month when that same month last year had a positive close-to-close return. Not `lib.halloween` and not `lib.tom`. A month is not one trade a year.
-15. **Close-location trend.** Arms' close location value, `(2 * close - high - low) / (high - low)`, averaged over 10 days. Long while that average is above zero. The zero stays fixed. Not `lib.ibs`, which buys a low IBS and sells a high one.
-16. **On-neck line.** Nison, *Japanese Candlestick Charting Techniques* (1991). A white candle closes at the prior black candle's low, within the same 5 percent equal-band `lib.matchlow` uses, above the 200-day SMA. Not `lib.pierce` and not `lib.meet`.
-17. **Bullish kicking.** Nison, same book. A black marubozu followed by a white marubozu. Use the long-body and very-short-shadow ratios already used by `lib.belt`, because an exact open-at-extreme does not clear this tape. The long is the white close, above the 200-day SMA. Not `lib.belt` and not `lib.separate`.
-18. **Regression slope rising.** The 20-day least-squares slope is positive and above its previous value. Not `lib.linreg`, which is the sign alone, and not `lib.rsquared`.
-19. **End of a five-day losing streak.** Jegadeesh, "Evidence of Predictable Behavior of Security Returns", *Journal of Finance* (1990), the daily form of the short-horizon reversal. Five lower closes, then a higher close, above the 200-day SMA. The 5 stays fixed. The long is that higher close. Not `lib.three_dn`, which holds during the decline, and not `lib.rev1m`, which is the 21-day sign.
-20. **ATR-quiet Donchian break.** Wilder ATR(14) below its 100-day median and the close above the prior 20-day high. The 14, the 100, and the break window stay as the center; the ATR length is the grid. Not `lib.bb_squeeze`, which is a Bollinger band inside a Keltner band, and not `lib.donchian20` alone.
-21. **Three rising lows.** Rhea, *The Dow Theory*. Three consecutive higher lows and a close above the 200-day SMA. The long is that third close. Not `lib.fractal` and not `lib.soldiers`.
-22. **Bollinger bandwidth expansion.** Bollinger, *Bollinger on Bollinger Bands*. The bandwidth is `(upper - lower) / middle` of the 20-day, 2-standard-deviation bands. Long while that bandwidth's 10-day rate of change is above zero and the close is above the 200-day SMA. The 2 and the 10 stay fixed. The band length is the grid. Not `lib.cv`, which is the raw high-low range, and not `lib.bb_squeeze`.
+1. **Hampel MAD quiet uptrend.** Hampel, "The Influence Curve and its Role in Robust Estimation", *Journal of the American Statistical Association* (1974). The median absolute deviation of the last 20 log returns, scaled by 1.4826, long while it is below its 100-day median and the close is above the 200-day SMA. The scale and the median length stay fixed. Not the standard deviation inside `lib.vol_trend` and not `lib.ddev`.
+2. **Semi-variance share.** Markowitz, *Portfolio Selection* (1959). Downside variance divided by total variance of the last 20 log returns. Long while that share is below its 100-day median and the close is above the 200-day SMA. The median length stays 100. Not `lib.ddev`, which is the level of the downside deviation.
+3. **Rescaled-range Hurst.** Hurst, "Long-Term Storage Capacity of Reservoirs", *Transactions of the American Society of Civil Engineers* (1951); the R/S statistic as in Mandelbrot and Wallis, *Water Resources Research* (1969). The Hurst exponent of the last 64 log returns, long while it is above one half and the close is above the 200-day SMA. The one half stays fixed. Not `lib.fdim`.
+4. **Volatility ratio.** Schwager, *Schwager on Futures: Technical Analysis* (1996). The 10-day standard deviation of log returns divided by the 100-day standard deviation. Long while the ratio is below 1 and the close is above the 200-day SMA. The 1 and the 100 stay fixed. The short window is the grid. Not `lib.vol_trend`.
+5. **STARC upper band.** Manning Stoller. Long while the close is above the n-day SMA plus one Wilder ATR(n). The 1 stays fixed. Not `lib.keltner20` and not `lib.wilder_vol`.
+6. **Bollinger percent b.** Bollinger, *Bollinger on Bollinger Bands* (2001). `%b = (close - lower) / (upper - lower)` of the 20-day, 2-deviation bands. Long while `%b` is above 0.8. The 0.8 and the 2 stay fixed. The band length is the grid. Not `lib.bb_break` and not `lib.pctile`.
+7. **Corwin-Schultz spread, quiet.** Corwin and Schultz, "A Simple Way to Estimate Bid-Ask Spreads from Daily High and Low Prices", *Journal of Finance* (2012). The high-low spread over 20 days, long while it is below its 100-day median and the close is above the 200-day SMA. No volume. Not `lib.park`.
+8. **Roll spread, quiet.** Roll, "A Simple Implicit Measure of the Effective Bid-Ask Spread in an Efficient Market", *Journal of Finance* (1984). Twice the square root of the negative lag-1 autocovariance of price changes over 20 days. A positive autocovariance is a zero spread. Long while the spread is below its 100-day median and the close is above the 200-day SMA. Not `lib.ac1`, which trades the sign of the correlation.
+9. **Partial autocorrelation at lag 2.** Box and Jenkins, *Time Series Analysis: Forecasting and Control* (1970). The lag-2 partial autocorrelation of the last 30 log returns, long while it is positive. Lag 1 is removed before the lag-2 coefficient. Not `lib.ac1`.
+10. **Fewer turning points.** Kendall, *Time-Series* (1973). A turning point is a close above both neighbours or below both. Long while the last 20 closes contain fewer than 12 turning points and the close is above the close 20 days ago. The 12 stays fixed. Not `lib.runs`.
+11. **Overnight drift.** Lou, Polk, and Skouras, "A Tug of War: Overnight Versus Intraday Expected Returns", *Journal of Financial Economics* (2019). Long while the sum of the last 20 close-to-open log returns is positive. Today's open is known before today's close. Not `lib.tsmom30d`.
+12. **One-sided CUSUM.** Page, "Continuous Inspection Schemes", *Biometrika* (1954). `S = max(0, S + r - k)` where `k` is the mean of the prior 50 log returns and `r` is today's log return. Long while `S` is above 0. The 50 stays fixed. The allowance is that prior mean, not a future mean.
+13. **Advance block.** Nison, *Japanese Candlestick Charting Techniques* (1991). Three white candles whose upper shadows get longer, above the 200-day SMA. The long is the third close. Not `lib.soldiers`.
+14. **Tower bottom.** Nison, same book. A long black candle, two smaller bodies, then a long white close through the black midpoint, above the 200-day SMA. The long-body test is the one `lib.belt` already uses. Not `lib.morning` and not `lib.engulf`.
+15. **Upper-half close count.** Arms' close location, counted rather than averaged. Long while at least 6 of the last 10 bars closed in the upper half of their own high-low range. The 6 stays fixed. Not `lib.clv` and not `lib.psych`.
+16. **True-range imbalance.** Wilder, *New Concepts in Technical Trading Systems* (1978). Over 20 days, the average true range on up closes minus the average true range on down closes. Long while that difference is positive and the close is above the 200-day SMA. Not `lib.qdon` and not `lib.di_cross`.
+17. **Parkinson below the close-to-close variance.** Parkinson, *Journal of Business* (1980). Long while the 20-day Parkinson variance is below the 20-day variance of log closes and the close is above the 200-day SMA. Not `lib.park`, which compares Parkinson with its own median.
+18. **Wide-range up day.** Crabel, *Day Trading with Short Term Price Patterns and Opening Range Breakout* (1990). Today's high-low range is above the average range of the prior 10 bars, the close is above the open, and the close is above the 200-day SMA. The long is that close. Not `lib.nr7` and not `lib.outclose`.
+19. **Three higher highs.** Rhea, *The Dow Theory* (1932). Three consecutive higher highs and a close above the 200-day SMA. The long is that third close. Not `lib.lows3` and not `lib.soldiers`.
+20. **Durbin-Watson of the regression residual.** Durbin and Watson, "Testing for Serial Correlation in Least Squares Regression", *Biometrika* (1950). The Durbin-Watson statistic of the last 20 regression residuals, long while it is below 2 and the close is above the 200-day SMA. The 2 stays fixed. Not `lib.ac1` and not `lib.rsquared`.
+21. **Open-to-close skewness.** Amaya, Christoffersen, Jacobs, and Vasquez, *Journal of Financial Economics* (2015), applied to the session return rather than the close-to-close return. The skewness of the last 20 open-to-close log returns, long while it is below zero and the close is above the 200-day SMA. The zero stays fixed. Not `lib.skew`.
+22. **Window maximum drawdown, quiet.** Grossman and Zhou, "Optimal Investment Strategies for Controlling Drawdowns", *Mathematical Finance* (1993). The worst peak-to-trough decline of the close inside 20 days, long while that drawdown is below its 100-day median and the close is above the 200-day SMA. The median length stays 100. Not `lib.ulcer`, which is the root-mean-square drawdown.
 
 Twenty-two of these can be coded on the current OHLC bars. None of them
 is a one-trade-a-year calendar.

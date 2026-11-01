@@ -2629,3 +2629,227 @@ def prior_percentile(close: np.ndarray, n: int, q: float) -> np.ndarray:
     windows = sliding_window_view(close, n)
     out[n:] = np.percentile(windows[:-1], float(q), axis=1, method="linear")
     return out
+
+
+def _log_returns(close: np.ndarray) -> np.ndarray:
+    """One-day log returns. Index 0 is NaN. A non-positive close leaves the series undefined."""
+    close = np.asarray(close, dtype=np.float64)
+    out = _nan(close.shape[0])
+    if close.shape[0] < 2 or not bool(np.all(close > 0.0)):
+        return out
+    out[1:] = np.log(close[1:] / close[:-1])
+    return out
+
+
+def parkinson(high: np.ndarray, low: np.ndarray, n: int) -> np.ndarray:
+    """Mean of the last ``n`` Parkinson terms. Finite at index ``n - 1``.
+
+    One day is ``ln(H/L)^2 / (4 ln 2)``. A non-positive price leaves that
+    day undefined. A high equal to the low contributes 0.
+    """
+    high = np.asarray(high, dtype=np.float64)
+    low = np.asarray(low, dtype=np.float64)
+    raw = _nan(high.shape[0])
+    with np.errstate(divide="ignore", invalid="ignore"):
+        ok = (high > 0.0) & (low > 0.0) & (high >= low)
+        hl = np.log(high[ok] / low[ok])
+        raw[ok] = (hl * hl) / (4.0 * np.log(2.0))
+    return sma_skip_leading(raw, n)
+
+
+def realized_skewness(close: np.ndarray, n: int) -> np.ndarray:
+    """Population central skewness of the last ``n`` log returns. Finite at index ``n``.
+
+    A window whose second moment is at the noise floor is 0, which is not
+    a negative-skew reading. Nothing after ``t`` enters the value at ``t``.
+    """
+    close = np.asarray(close, dtype=np.float64)
+    out = _nan(close.shape[0])
+    n = int(n)
+    rets = _log_returns(close)
+    if n < 3 or close.shape[0] <= n or not bool(np.all(np.isfinite(rets[1:]))):
+        return out
+    windows = sliding_window_view(rets[1:], n)
+    dev = windows - windows.mean(axis=1)[:, None]
+    m2 = np.mean(dev * dev, axis=1)
+    m3 = np.mean(dev * dev * dev, axis=1)
+    skew = np.zeros(m2.shape[0], dtype=np.float64)
+    ok = m2 > 1e-18
+    skew[ok] = m3[ok] / np.power(m2[ok], 1.5)
+    out[n : n + skew.shape[0]] = skew
+    return out
+
+
+def realized_excess_kurtosis(close: np.ndarray, n: int) -> np.ndarray:
+    """Excess kurtosis of the last ``n`` log returns. Finite at index ``n``.
+
+    The raw fourth moment is divided by the squared second moment, then 3
+    is subtracted. A window whose second moment is at the noise floor is 0.
+    """
+    close = np.asarray(close, dtype=np.float64)
+    out = _nan(close.shape[0])
+    n = int(n)
+    rets = _log_returns(close)
+    if n < 3 or close.shape[0] <= n or not bool(np.all(np.isfinite(rets[1:]))):
+        return out
+    windows = sliding_window_view(rets[1:], n)
+    dev = windows - windows.mean(axis=1)[:, None]
+    m2 = np.mean(dev * dev, axis=1)
+    m4 = np.mean(dev * dev * dev * dev, axis=1)
+    excess = np.zeros(m2.shape[0], dtype=np.float64)
+    ok = m2 > 1e-18
+    excess[ok] = m4[ok] / (m2[ok] * m2[ok]) - 3.0
+    out[n : n + excess.shape[0]] = excess
+    return out
+
+
+def lag1_autocorr(close: np.ndarray, n: int) -> np.ndarray:
+    """Pearson autocorrelation at lag 1 of the last ``n`` log returns.
+
+    Finite at index ``n``. The two legs of each pair keep their own means.
+    A leg with no variation is 0, which is not a positive reading.
+    """
+    close = np.asarray(close, dtype=np.float64)
+    out = _nan(close.shape[0])
+    n = int(n)
+    rets = _log_returns(close)
+    if n < 3 or close.shape[0] <= n or not bool(np.all(np.isfinite(rets[1:]))):
+        return out
+    windows = sliding_window_view(rets[1:], n)
+    left = windows[:, :-1]
+    right = windows[:, 1:]
+    left_dev = left - left.mean(axis=1)[:, None]
+    right_dev = right - right.mean(axis=1)[:, None]
+    num = np.sum(left_dev * right_dev, axis=1)
+    den = np.sqrt(np.sum(left_dev * left_dev, axis=1) * np.sum(right_dev * right_dev, axis=1))
+    rho = np.zeros(num.shape[0], dtype=np.float64)
+    ok = den > 1e-18
+    rho[ok] = num[ok] / den[ok]
+    out[n : n + rho.shape[0]] = rho
+    return out
+
+
+def prior_max_return(close: np.ndarray, n: int) -> np.ndarray:
+    """Largest one-day simple return among the ``n`` sessions before today.
+
+    Finite at index ``n + 1``. Today is outside the window. A non-positive
+    close leaves the series undefined.
+    """
+    close = np.asarray(close, dtype=np.float64)
+    out = _nan(close.shape[0])
+    n = int(n)
+    m = int(close.shape[0])
+    if n < 1 or m <= n + 1 or not bool(np.all(close > 0.0)):
+        return out
+    simple = _nan(m)
+    simple[1:] = close[1:] / close[:-1] - 1.0
+    view = sliding_window_view(simple, n)
+    chunk = view[1 : m - n]
+    out[n + 1 : n + 1 + chunk.shape[0]] = chunk.max(axis=1)
+    return out
+
+
+def downside_deviation(close: np.ndarray, n: int) -> np.ndarray:
+    """Root mean square of the negative log returns over ``n`` days.
+
+    An up day contributes 0, so it still sits in the average. Finite at
+    index ``n``. A window of only up days is 0.
+    """
+    close = np.asarray(close, dtype=np.float64)
+    out = _nan(close.shape[0])
+    n = int(n)
+    rets = _log_returns(close)
+    if n < 1 or close.shape[0] <= n or not bool(np.all(np.isfinite(rets[1:]))):
+        return out
+    windows = sliding_window_view(rets[1:], n)
+    negative = np.minimum(windows, 0.0)
+    out[n : n + windows.shape[0]] = np.sqrt(np.mean(negative * negative, axis=1))
+    return out
+
+
+def fractal_dimension(close: np.ndarray, n: int) -> np.ndarray:
+    """Ehlers fractal dimension of the last ``n`` closes. Finite at index ``n - 1``.
+
+    Each half-range and the full range are divided by their lengths. The
+    dimension is ``(log(N1 + N2) - log(N3)) / log(2)``. A zero full range
+    is a line, so the dimension is 1. A zero half uses the other half in
+    the same ratio. Nothing after ``t`` enters the value at ``t``.
+    """
+    close = np.asarray(close, dtype=np.float64)
+    out = _nan(close.shape[0])
+    n = int(n)
+    half = n // 2
+    if half < 1 or close.shape[0] < n:
+        return out
+    log2 = float(np.log(2.0))
+    for t in range(n - 1, close.shape[0]):
+        recent = close[t - half + 1 : t + 1]
+        older = close[t - n + 1 : t - half + 1]
+        full = close[t - n + 1 : t + 1]
+        n1 = (float(np.max(recent)) - float(np.min(recent))) / half
+        n2 = (float(np.max(older)) - float(np.min(older))) / max(int(older.shape[0]), 1)
+        n3 = (float(np.max(full)) - float(np.min(full))) / n
+        if n3 <= 0.0 or n1 + n2 <= 0.0:
+            out[t] = 1.0
+            continue
+        out[t] = (float(np.log(n1 + n2)) - float(np.log(n3))) / log2
+    return out
+
+
+def chande_kroll_stop(
+    high: np.ndarray, low: np.ndarray, close: np.ndarray, n: int, smooth: int = 9, multiple: float = 1.0,
+) -> np.ndarray:
+    """Chande-Kroll long stop. Finite at index ``n + smooth - 1``.
+
+    The preliminary stop is the lowest low of ``n`` days plus ``multiple``
+    times Wilder ATR(``n``). The stop is the lowest of those preliminary
+    stops over ``smooth`` days. It does not ratchet with the trade.
+    """
+    n = int(n)
+    atr = atr_wilder(high, low, close, n)
+    floor = rolling_min(np.asarray(low, dtype=np.float64), n)
+    prelim = _nan(np.asarray(close).shape[0])
+    ok = np.isfinite(atr) & np.isfinite(floor)
+    prelim[ok] = floor[ok] + float(multiple) * atr[ok]
+    return rolling_min_skip_leading(prelim, int(smooth))
+
+
+def close_location(high: np.ndarray, low: np.ndarray, close: np.ndarray, n: int) -> np.ndarray:
+    """SMA of Arms' close location value. Finite at index ``n - 1``.
+
+    One bar is ``(2 * close - high - low) / (high - low)``. A zero range
+    contributes 0. The average above zero means closes finished in the
+    upper half of their ranges.
+    """
+    high = np.asarray(high, dtype=np.float64)
+    low = np.asarray(low, dtype=np.float64)
+    close = np.asarray(close, dtype=np.float64)
+    span = high - low
+    raw = np.zeros(close.shape[0], dtype=np.float64)
+    ok = span > 0.0
+    raw[ok] = (2.0 * close[ok] - high[ok] - low[ok]) / span[ok]
+    return sma(raw, int(n))
+
+
+def run_count(close: np.ndarray, n: int) -> np.ndarray:
+    """Number of up/down runs in the last ``n`` closes. Finite at index ``n - 1``.
+
+    A close above the prior close is an up step. Anything else is a down
+    step. A run is a streak of the same step. The first close of the window
+    only starts the first run. A tie does not count as an up step.
+    """
+    close = np.asarray(close, dtype=np.float64)
+    out = _nan(close.shape[0])
+    n = int(n)
+    m = int(close.shape[0])
+    if n < 2 or m < n:
+        return out
+    signs = (close[1:] > close[:-1]).astype(np.int8)
+    windows = sliding_window_view(signs, n - 1)
+    if n == 2:
+        runs = np.ones(windows.shape[0], dtype=np.float64)
+    else:
+        changes = np.sum(windows[:, 1:] != windows[:, :-1], axis=1)
+        runs = 1.0 + changes.astype(np.float64)
+    out[n - 1 : n - 1 + runs.shape[0]] = runs
+    return out
