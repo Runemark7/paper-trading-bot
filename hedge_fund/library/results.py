@@ -226,7 +226,7 @@ def library_table_payload(*, tested: set[str] | None = None, leased: set[str] | 
             "fees and slippage is positive on the warmed out-of-sample book and on the "
             "sealed holdout, including at 2× fees + 5 bps, with at least 8 out-of-sample "
             "round-trips and 2 holdout trades. DSR, PBO, Sharpe, neighbours, sma_stack, "
-            "and buy-and-hold are warnings. A pass is proposed, awaiting approval; it is "
-            "not seated."
+            "and buy-and-hold are warnings. A canonical lib.* pass is seated as a "
+            "paper forward-test champion. A fail is not."
         ),
     }

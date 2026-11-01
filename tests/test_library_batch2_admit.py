@@ -33,7 +33,12 @@ def _seed_seated(root: Path) -> None:
         pool["champions"].append({"name": name, "source": "library_qualification", "qualified": True, "engine": ENGINE_ID})
     (root / "champions.json").write_text(json.dumps(pool))
     (root / "approved_admits.json").write_text(json.dumps({
-        "applied": ["rules-v3-admit-20261009", "lib-sma100-forward-test-20261029", BATCH1],
+        "applied": [
+            "rules-v3-admit-20261009",
+            "lib-sma100-forward-test-20261029",
+            BATCH1,
+            "lib-ten-passes-v7b-20261101",
+        ],
         "batches": [],
         "paper_only": True,
     }))
@@ -76,7 +81,10 @@ class Batch2Tests(unittest.TestCase):
 
         self.assertEqual(LIBRARY_APPROVED_BATCH_2, BATCH2)
         self.assertEqual([r["name"] for r in LIBRARY_APPROVED_ADMITS_2], NEW)
-        self.assertEqual([b for b, _ in LIBRARY_APPROVED_BATCHES], [BATCH1, BATCH2])
+        self.assertEqual(
+            [b for b, _ in LIBRARY_APPROVED_BATCHES],
+            [BATCH1, BATCH2, "lib-ten-passes-v7b-20261101"],
+        )
         for r in LIBRARY_APPROVED_ADMITS_2:
             self.assertEqual(r["approved_by"], "Alexander")
             self.assertEqual(r["approved_at"], "2026-10-30T09:59+01:00")

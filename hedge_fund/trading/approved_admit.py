@@ -23,6 +23,12 @@ one-per-family rule.
 is a pass under the current ``GATE_RULES``. Warnings and ``approved_by``
 are stored on the champion row. ``qualified`` stays true. ``lib.sma100``
 stays on its unproven forward-test batch and is not rewritten.
+
+Alexander, 2026-11-01 17:05 CET: a canonical ``lib.*`` evaluation that
+passes gate v7b is seated on ingest. The ten passes that were still
+unseated are the batch ``lib-ten-passes-v7b-20261101``, from each name's
+center params. A retired name is not put back from an old row. A new
+passing evaluation of that name is. The random farm is not seated here.
 """
 from __future__ import annotations
 
@@ -99,10 +105,39 @@ LIBRARY_APPROVED_ADMITS_2: tuple[dict, ...] = tuple(
     }
     for name in ("lib.ichimoku", "lib.rsi14", "lib.tsmom180d", "lib.rsi2_10")
 )
+# Alexander, 2026-11-01 17:05 CET: seat the ten canonical library passes
+# that were still unseated. Same qualified path. Each name is the center
+# variant: evaluate_library_record stores that center on the passing row.
+# Paper only. No champion cap. Later lib.* passes seat themselves on ingest.
+LIBRARY_APPROVED_BATCH_3 = "lib-ten-passes-v7b-20261101"
+LIBRARY_AUTO_ADMIT_AT = "2026-11-01T17:05+01:00"
+LIBRARY_AUTO_ADMIT = "library_auto_admit"
+_UNSEATED_PASSES = (
+    "lib.kst",
+    "lib.schaff",
+    "lib.rsi2_cum",
+    "lib.stochrsi",
+    "lib.sma200_band",
+    "lib.rmi",
+    "lib.awesome",
+    "lib.vidya",
+    "lib.chop",
+    "lib.three_dn",
+)
+LIBRARY_APPROVED_ADMITS_3: tuple[dict, ...] = tuple(
+    {
+        "name": name,
+        "approved_by": "Alexander",
+        "approved_at": LIBRARY_AUTO_ADMIT_AT,
+        "note": "qualified paper forward-test; gate v7b profit pass (unseated library passes)",
+    }
+    for name in _UNSEATED_PASSES
+)
 # Qualified library batches, applied in this order.
 LIBRARY_APPROVED_BATCHES: tuple[tuple[str, tuple[dict, ...]], ...] = (
     (LIBRARY_APPROVED_BATCH, LIBRARY_APPROVED_ADMITS),
     (LIBRARY_APPROVED_BATCH_2, LIBRARY_APPROVED_ADMITS_2),
+    (LIBRARY_APPROVED_BATCH_3, LIBRARY_APPROVED_ADMITS_3),
 )
 _GATE_V4_KEYS = (
     "passed",
@@ -325,6 +360,139 @@ def _label_qualified_library(
     }
 
 
+def library_pass_record(record: object) -> bool:
+    """True when ``record`` is a canonical ``lib.*`` pass on the current gate.
+
+    Neighbour spellings are not claim names. A 5m row is not a library pass.
+    The gate thresholds are not re-read here: ingest already required the
+    v7b attestation, and this check is the same qualified-tag test the
+    approved batches use.
+    """
+    if not isinstance(record, dict):
+        return False
+    name = record.get("strategy")
+    from hedge_fund.library.catalog import claim_names, is_library_name
+
+    if not is_library_name(name) or name not in claim_names():
+        return False
+    return _library_verdict_qualified(record, str(name))
+
+
+def with_center_params(record: dict) -> dict:
+    """Pin ``library.params`` to the canonical center stored for that name.
+
+    A passing evaluation of ``lib.<key>`` stores ``strategy.center``. A
+    missing or drifted block is replaced with that center so the live book
+    does not run a neighbour. The discovery log is not rewritten.
+    """
+    from hedge_fund.library.catalog import parse_variant
+
+    out = dict(record)
+    strategy, center = parse_variant(out["strategy"])
+    lib = dict(out.get("library") or {})
+    stored = lib.get("params")
+    lib["params"] = dict(stored) if stored == center else dict(center)
+    lib["key"] = strategy.key
+    lib.setdefault("title", strategy.title)
+    if "safety_stop_pct" not in lib:
+        lib["safety_stop_pct"] = (
+            round(strategy.stop_frac * 100.0, 2) if strategy.stop_frac else None
+        )
+    out["library"] = lib
+    return out
+
+
+def _label_auto_library(row: dict, record: dict, stamp: str) -> None:
+    """Record an automatic library seat. ``qualified`` stays true."""
+    warnings = _warning_lines(record)
+    row["qualified"] = True
+    row["warnings"] = warnings
+    row["auto_admitted_at"] = stamp
+    row["admitted_at"] = stamp
+    row["champion_since"] = stamp
+    params = (row.get("library") or {}).get("params")
+    row["provenance"] = {
+        "admit": LIBRARY_AUTO_ADMIT,
+        "admitted_at": stamp,
+        "gate_rules": record.get("gate_rules") or GATE_RULES,
+        "approved_by": "Alexander",
+        "approved_at": LIBRARY_AUTO_ADMIT_AT,
+        "note": "automatic paper forward-test; gate v7b pass",
+        "params": dict(params) if isinstance(params, dict) else {},
+        "warnings": warnings,
+    }
+
+
+def _release_retired_unlocked(name: str) -> None:
+    """Drop ``name`` from the retire archive. Caller holds the discovery lock."""
+    from hedge_fund.trading.families import save_retired_state
+
+    state = load_retired_state()
+    retired = state.get("retired")
+    if not isinstance(retired, dict) or name not in retired:
+        return
+    retired.pop(name, None)
+    save_retired_state(state)
+
+
+def load_retired_state() -> dict:
+    from hedge_fund.trading.champions import load_retired
+
+    return load_retired()
+
+
+def seat_library_passes_unlocked(
+    st: dict,
+    existing: set[str],
+    records: list[dict],
+    *,
+    reevaluated: set[str],
+    now: datetime | None = None,
+) -> list[str]:
+    """Seat canonical ``lib.*`` gate-v7b passes. Caller holds the discovery lock.
+
+    A name already in the pool or graduated is left alone. A retired name
+    is seated only when this ingest wrote a new pass (``reevaluated``), and
+    that name is then removed from ``retired.json``. A stored pass that is
+    replayed is not a re-evaluation. ``force_admit`` is not called. The
+    discovery log is not rewritten. Sizing stays the library all-in book
+    (``signal_exit``); this does not read a champion cap.
+    """
+    from hedge_fund.trading.ingest import _admit_qualified
+
+    stamp = (now or datetime.now(timezone.utc)).astimezone(timezone.utc).isoformat()
+    pooled = {c.get("name") for c in (st.get("champions") or []) if isinstance(c, dict)}
+    graduated = {g.get("name") for g in load_graduated() if isinstance(g, dict)}
+    retired = retired_names()
+    admitted: list[str] = []
+    for raw in records:
+        if not library_pass_record(raw):
+            continue
+        name = str(raw["strategy"])
+        if name in pooled or name in graduated:
+            continue
+        if name in retired and name not in reevaluated:
+            continue
+        record = with_center_params(raw)
+        if name in retired:
+            existing.discard(name)
+        if not _admit_qualified(st, record, existing):
+            continue
+        if name in retired:
+            _release_retired_unlocked(name)
+            retired.discard(name)
+        _label_auto_library(st["champions"][-1], record, stamp)
+        pooled.add(name)
+        admitted.append(name)
+        log.info(
+            "library auto-admit: seated %s at %s gate %s",
+            name,
+            stamp,
+            record.get("gate_rules") or GATE_RULES,
+        )
+    return admitted
+
+
 def _apply_requalify_unlocked(now: datetime, marker: dict) -> dict | None:
     """Seat ``APPROVED_ADMIT_BATCH`` once. Caller holds the discovery lock.
 
@@ -510,10 +678,12 @@ def _apply_library_approved_unlocked(
 
     admitted: list[str] = []
     for spec, record in pending:
-        if not _admit_qualified(st, dict(record), existing):
+        # The canonical name's passing evaluation stores the center.
+        seated_record = with_center_params(dict(record))
+        if not _admit_qualified(st, seated_record, existing):
             skipped.append({"strategy": spec["name"], "reason": "not_seated"})
             continue
-        _label_qualified_library(st["champions"][-1], spec, record, batch_id)
+        _label_qualified_library(st["champions"][-1], spec, seated_record, batch_id)
         admitted.append(spec["name"])
     if admitted:
         save_pool(st)

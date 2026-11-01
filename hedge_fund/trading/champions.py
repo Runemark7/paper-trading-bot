@@ -113,8 +113,9 @@ def load_retired() -> dict:
     """Archive of retired champions / graduated rows. Never deleted.
 
     ``{"retired": {name: row}, "applied": [batch_id], "batches": [...]}``.
-    A retired name is off the live book and blocked from auto re-admit and
-    re-mint, the same way a pooled or graduated name is.
+    A retired name is off the live book. An old pass does not put it back.
+    A new passing ``lib.*`` evaluation does. Re-mint treats it as blocked,
+    the same way a pooled or graduated name is.
     """
     path = _retired_file()
     empty = {"retired": {}, "applied": [], "batches": []}

@@ -362,7 +362,7 @@ class LibraryClaimTests(_LibraryMode):
 
 
 class LibraryIngestTests(_LibraryMode):
-    def test_valid_row_is_stored_and_not_seated(self):
+    def test_valid_row_is_stored_and_a_pass_is_seated_once(self):
         from hedge_fund.library.results import library_table_payload
         from hedge_fund.trading.champions import load_pool
         from hedge_fund.trading.discovery import load_discovery_log
@@ -375,13 +375,18 @@ class LibraryIngestTests(_LibraryMode):
         self.assertEqual(fail["ingested"], ["lib.sma200"])
         self.assertEqual(fail["proposed"], [])
         self.assertEqual(fail["admitted"], [])
+        self.assertEqual(fail["auto_admitted"], [])
         self.assertEqual(passed["ingested"], ["lib.golden_cross"])
         self.assertEqual(passed["proposed"], ["lib.golden_cross"])
-        self.assertEqual(passed["admitted"], [])
-        self.assertEqual(passed["admission"], "manual")
-        names = {c.get("name") for c in load_pool().get("champions") or []}
+        self.assertEqual(passed["admitted"], ["lib.golden_cross"])
+        self.assertEqual(passed["auto_admitted"], ["lib.golden_cross"])
+        self.assertEqual(passed["admission"], "auto")
+        again = ingest_discovery_payload({"evaluations": [_row("lib.golden_cross", qualified=True)]})
+        self.assertEqual(again["admitted"], [])
+        self.assertEqual(again["auto_admitted"], [])
+        names = [c.get("name") for c in load_pool().get("champions") or []]
         self.assertNotIn("lib.sma200", names)
-        self.assertNotIn("lib.golden_cross", names)
+        self.assertEqual(names, ["lib.golden_cross"])
         logged = {row["strategy"] for row in load_discovery_log()}
         self.assertEqual(logged, {"lib.sma200", "lib.golden_cross"})
         census = trial_census()
@@ -437,7 +442,9 @@ class LibraryIngestTests(_LibraryMode):
 
         row = _row("lib.sma200", qualified=True)
         body = ingest_discovery_payload({"evaluations": [row], "force_admit": ["lib.sma200"], "source": "owner"})
-        self.assertEqual(body["force_admitted"], ["lib.sma200"])
+        self.assertEqual(body["auto_admitted"], ["lib.sma200"])
+        self.assertEqual(body["force_admitted"], [])
+        self.assertEqual(body["admitted"], ["lib.sma200"])
         champs = load_pool()["champions"]
         self.assertEqual(len(champs), 1)
         seated = champs[0]

@@ -273,7 +273,7 @@ class ProposeTests(unittest.TestCase):
         self._env.stop()
         self._tmp.cleanup()
 
-    def test_a_pass_with_dsr_and_pbo_warnings_is_proposed_not_seated(self):
+    def test_a_pass_with_dsr_and_pbo_warnings_is_seated(self):
         from hedge_fund.trading.champions import load_pool
         from hedge_fund.trading.ingest import ingest_discovery_payload
 
@@ -306,9 +306,13 @@ class ProposeTests(unittest.TestCase):
         body = ingest_discovery_payload({"evaluations": [row]})
         self.assertEqual(body["ingested"], ["lib.sma100"])
         self.assertEqual(body["proposed"], ["lib.sma100"])
-        self.assertEqual(body["admitted"], [])
-        self.assertEqual(body["admission"], "manual")
-        self.assertEqual(load_pool().get("champions"), [])
+        self.assertEqual(body["admitted"], ["lib.sma100"])
+        self.assertEqual(body["auto_admitted"], ["lib.sma100"])
+        self.assertEqual(body["admission"], "auto")
+        champs = load_pool().get("champions") or []
+        self.assertEqual([c["name"] for c in champs], ["lib.sma100"])
+        self.assertEqual(champs[0]["provenance"]["gate_rules"], GATE_RULES)
+        self.assertEqual(champs[0]["provenance"]["admit"], "library_auto_admit")
 
     def test_a_neighbour_warning_still_proposes(self):
         from hedge_fund.trading.ingest import ingest_discovery_payload
@@ -339,7 +343,8 @@ class ProposeTests(unittest.TestCase):
         self.assertTrue(library_attestation_ok(row))
         body = ingest_discovery_payload({"evaluations": [row]})
         self.assertEqual(body["proposed"], ["lib.sma200"])
-        self.assertEqual(body["admitted"], [])
+        self.assertEqual(body["admitted"], ["lib.sma200"])
+        self.assertEqual(body["auto_admitted"], ["lib.sma200"])
 
     def test_v6_worker_gets_stale_rules(self):
         from hedge_fund.trading.leases import claim_discovery_batch

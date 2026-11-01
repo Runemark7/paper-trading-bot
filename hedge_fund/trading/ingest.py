@@ -5,14 +5,19 @@ Fail-once: a name that already has any discovery_log row is skipped
 (``requeue_v4_bh``) and one pending library-gate retest
 (``requeue_library_gate``). A library retest of a name that is already
 seated appends the discovery-log row and does not rewrite the champion
-or the paper account. A qualified pass is logged and proposed. It is not
-seated. On ingest, parked rows that now pass on stored aggregates
-(Sharpe / trades / sma) are flipped the same way and stay proposals.
-Buy-and-hold is not a fail reason. Seating is the explicit
-``force_admit`` list (token gated) or ``promote_candidates``. Neither
+or the paper account. A 5m qualified pass is logged and proposed. It is not seated. A
+canonical ``lib.*`` pass under gate v7b is seated on this ingest
+(``seat_library_passes_unlocked``). That seat is idempotent: a name
+already in the pool or graduated is not written again, and a retired
+name comes back only when this ingest is a new passing evaluation.
+On ingest, parked rows that now pass on stored aggregates
+(Sharpe / trades / sma) are flipped the same way and stay proposals
+unless they are a library pass, which is seated by the same rule.
+Buy-and-hold is not a fail reason. ``force_admit`` (token gated) and
+``promote_candidates`` remain the explicit seats for a 5m row. Neither
 refuses because of how many champions are active. Champions are only removed by the
 one-per-family rule (``families.py``): a twin is parked to
-``retired.json``. Paper only.
+``retired.json``. Paper only. The random farm is unchanged.
 """
 from __future__ import annotations
 
@@ -335,12 +340,17 @@ def _timing(started: float, phases: dict) -> dict:
 def ingest_discovery_payload(payload: dict) -> dict:
     """Apply a worker batch. Caller must already have checked the ingest token.
 
-    Returns counts. A qualified pass is listed under ``proposed`` and is
-    not seated. ``force_admit`` is the explicit seat and does not refuse
-    because of how many champions are active. Parks family twins of names
-    that were seated (families.py); never deletes. May flip a parked log
-    row to qualified when stored aggregates now pass (all-windows veto
-    dropped). That flip is also a proposal and does not seat.
+    Returns counts. A 5m qualified pass is listed under ``proposed`` and
+    is not seated. A canonical ``lib.*`` pass under the current gate is
+    seated (``auto_admitted``) and also listed under ``proposed``. A
+    second ingest of that name does not add another champion. A retired
+    library name is seated only when this payload is a new passing
+    evaluation. ``force_admit`` remains the explicit seat for a row this
+    path did not seat, and it does not refuse because of how many
+    champions are active. Parks family twins of names that were seated
+    (families.py); never deletes. May flip a parked 5m log row to
+    qualified when stored aggregates now pass (all-windows veto dropped).
+    That flip stays a proposal.
     """
     if not isinstance(payload, dict):
         raise ValueError("payload must be an object")
@@ -385,6 +395,7 @@ def ingest_discovery_payload(payload: dict) -> dict:
             "skipped": [],
             "admitted": [],
             "proposed": [],
+            "auto_admitted": [],
             "admission": "manual",
             "requalified": [],
             "requalify_recorded": [],
@@ -398,6 +409,8 @@ def ingest_discovery_payload(payload: dict) -> dict:
 
     to_append: list[tuple[dict, str | None]] = []
     library_retests: set[str] = set()
+    written: list[dict] = []
+    auto_admitted: list[str] = []
     with paper_state_lock("discovery"):
         requal_state = load_requalify_state() if requalify_path().exists() else None
         # Fail-once is the index union the display log (including the delta).
@@ -421,8 +434,9 @@ def ingest_discovery_payload(payload: dict) -> dict:
                 continue
             name = rec["strategy"]
             # Library gate retest, including a name that is already seated.
-            # One fresh log row. The champion row and the paper account stay.
-            # A pass is proposed, not seated.
+            # One fresh log row. A name that is already seated keeps its
+            # champion row and its paper account. A pass for a name that
+            # is not seated, including a retired name, is seated below.
             lib_entry = library_retest_entry(name)
             if lib_entry is not None:
                 stamp_library_retest_result(rec, lib_entry)
@@ -515,7 +529,9 @@ def ingest_discovery_payload(payload: dict) -> dict:
             if name in proposed:
                 proposed.remove(name)
             skipped.append({"strategy": name, "reason": "already_tested"})
-        elif isinstance(rec.get("library"), dict):
+            continue
+        written.append(rec)
+        if isinstance(rec.get("library"), dict):
             from hedge_fund.library.results import save_library_result
 
             save_library_result(rec)
@@ -533,11 +549,31 @@ def ingest_discovery_payload(payload: dict) -> dict:
             requal_rows, requal_names = [], []
         mark("park_scan", t_scan)
         if requal_names:
-            # The flip is a proposal. It does not seat.
+            # The 5m flip is a proposal. It does not seat. Library rows
+            # are not flipped by this scan.
             for rec in requal_rows:
                 requalified.append(rec["strategy"])
                 if rec["strategy"] not in proposed:
                     proposed.append(rec["strategy"])
+
+        from hedge_fund.trading.approved_admit import seat_library_passes_unlocked
+
+        # A row written by this ingest is a new evaluation. Replaying a
+        # stored pass does not land in ``written``, so a retired name is
+        # not put back from the old row.
+        auto_admitted = seat_library_passes_unlocked(
+            st,
+            existing,
+            written,
+            reevaluated={
+                rec["strategy"]
+                for rec in written
+                if isinstance(rec.get("strategy"), str)
+            },
+        )
+        for name in auto_admitted:
+            if name not in admitted:
+                admitted.append(name)
 
         if raw_force:
             if log is None:
@@ -592,7 +628,8 @@ def ingest_discovery_payload(payload: dict) -> dict:
         "skipped": skipped,
         "admitted": admitted,
         "proposed": proposed,
-        "admission": "manual",
+        "auto_admitted": auto_admitted,
+        "admission": "auto" if auto_admitted else "manual",
         "requalified": requalified,
         "requalify_recorded": requalify_recorded,
         "force_admitted": force_admitted,

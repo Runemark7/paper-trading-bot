@@ -204,7 +204,7 @@ No database credentials and no `crypto_history_5m.json` placeholder.
    lease. Nginx already proxies `/api/`.
 5. On SIGINT/exit or Stop, `POST /api/discovery/release` drops this worker's
    leases. Prod appends `discovery_log.json`. A name that **qualified** is
-   proposed, awaiting approval. It is not written to `champions.json`.
+   proposed, awaiting approval, unless it is a canonical `lib.*` pass under gate v7b, which is written to `champions.json` once. A 5m pass is not written to `champions.json`.
    Existing champions are never removed. Fail-once: a tested name is never
    leased again, except one admin-queued v4 discovery-window buy-and-hold
    retest. Same-token optional `force_admit` (e.g. `["dbl_bot_120"]`)

@@ -31,7 +31,8 @@ A small, dependency-free HTTP server (stdlib only) that exposes:
   GET /api/discovery/library/daily -> BTC daily bars from 2017-08-17 (ingest token).
                                 The cycle writes the npz. This process sends that
                                 file (ETag / If-Modified-Since). It does not resample.
-  POST /api/discovery/ingest -> Windows worker: append evals. A pass is proposed,
+  POST /api/discovery/ingest -> Windows worker: append evals. A lib.* gate
+                                v7b pass is seated. A 5m pass is proposed,
                                 not seated. force_admit seats (shared secret)
   POST /api/discovery/claim -> lease never-tested names (same ingest token)
   POST /api/discovery/release -> drop this worker's leases (same ingest token)
