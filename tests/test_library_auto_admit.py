@@ -180,16 +180,26 @@ class BatchTests(unittest.TestCase):
         self.assertEqual(marker["applied"].count(BATCH), 1)
         self.assertEqual(marker["applied"][:4], EARLIER)
 
-    def test_one_unqualified_name_seats_nobody(self):
-        before = (self.root / "champions.json").read_bytes()
-        before_marker = (self.root / "approved_admits.json").read_bytes()
+    def test_one_unqualified_name_is_skipped_and_the_rest_seat(self):
+        before = json.loads((self.root / "champions.json").read_text())
         records = {name: _pass(name) for name in NEW}
         records["lib.three_dn"] = _record("lib.three_dn", qualified=False)
-        out, ev = self._run(records)
-        self.assertIsNone(out)
+        with self.assertLogs("hedge_fund.trading.approved_admit", level="INFO") as logs:
+            out, ev = self._run(records)
+        seated = [name for name in NEW if name != "lib.three_dn"]
+        self.assertEqual(out["batch_id"], BATCH)
+        self.assertEqual(out["admitted"], seated)
+        self.assertEqual(out["skipped"], [{"strategy": "lib.three_dn", "reason": "not_qualified"}])
         self.assertEqual(ev.call_count, 10)
-        self.assertEqual((self.root / "champions.json").read_bytes(), before)
-        self.assertEqual((self.root / "approved_admits.json").read_bytes(), before_marker)
+        self.assertTrue(any("skipped lib.three_dn" in line and GATE_RULES in line for line in logs.output))
+        pool = json.loads((self.root / "champions.json").read_text())
+        self.assertEqual([c["name"] for c in pool["champions"]], [A, B, *seated])
+        self.assertEqual(pool["champions"][:2], before["champions"])
+        marker = json.loads((self.root / "approved_admits.json").read_text())
+        self.assertEqual(marker["applied"].count(BATCH), 1)
+        again, ev2 = self._run(records)
+        self.assertIsNone(again)
+        self.assertEqual(ev2.call_count, 0)
 
 
 class IngestTests(unittest.TestCase):
@@ -321,6 +331,137 @@ class IngestTests(unittest.TestCase):
         third = self._ingest([fresh])
         self.assertEqual(third["auto_admitted"], [])
         self.assertEqual([c["name"] for c in self._pool()], [name])
+
+
+class BackfillTests(unittest.TestCase):
+    """Passes ingested before this code deploys are seated on startup."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        (self.root / "champions.json").write_text(json.dumps({
+            "champions": [{"name": A, "source": "5m_qualification_filter", "risk_policy": "rm_v1"}],
+            "synced_until": "",
+        }))
+        (self.root / "graduated.json").write_text("[]")
+        (self.root / "retired.json").write_text(json.dumps({"retired": {}, "applied": [], "batches": []}))
+        (self.root / "approved_admits.json").write_text(json.dumps({
+            "applied": [*EARLIER, BATCH],
+            "batches": [],
+            "paper_only": True,
+        }))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _run(self):
+        from hedge_fund.trading.approved_admit import run_approved_admits
+
+        with _env(self.root):
+            return run_approved_admits()
+
+    def _names(self) -> list[str]:
+        return [c["name"] for c in json.loads((self.root / "champions.json").read_text())["champions"]]
+
+    def test_stored_pass_seats_once_and_a_fail_does_not(self):
+        from hedge_fund.library.catalog import strategy_by_key
+
+        passed = _pass("lib.demarker", params=dict(strategy_by_key("demarker").center))
+        passed["tested_at"] = "2026-11-01T15:00:00+00:00"
+        failed = _pass("lib.expiry", params={"n": 1})
+        failed["qualified"] = False
+        failed["gate_v4"] = {"passed": False, "rules": GATE_RULES}
+        failed["tested_at"] = "2026-11-01T15:00:00+00:00"
+        # Newest row wins. An older pass under a later fail stays unseated.
+        older_pass = _pass("lib.expiry", params={"n": 1})
+        older_pass["tested_at"] = "2026-11-01T14:00:00+00:00"
+        (self.root / "discovery_log.json").write_text(json.dumps([passed, failed, older_pass]))
+        with self.assertLogs("hedge_fund.trading.approved_admit", level="INFO") as logs:
+            first = self._run()
+            second = self._run()
+        self.assertIsNone(first)
+        self.assertIsNone(second)
+        self.assertEqual(self._names(), [A, "lib.demarker"])
+        row = json.loads((self.root / "champions.json").read_text())["champions"][1]
+        self.assertEqual(row["library"]["params"], strategy_by_key("demarker").center)
+        self.assertEqual(row["provenance"]["gate_rules"], GATE_RULES)
+        self.assertEqual(row["provenance"]["admit"], "library_auto_admit")
+        self.assertIn("T", row["auto_admitted_at"])
+        self.assertEqual(row["risk_policy"], RISK_POLICY)
+        self.assertTrue(any("seated lib.demarker" in line and GATE_RULES in line and "backfill" in line for line in logs.output))
+        self.assertEqual(sum("seated lib.demarker" in line for line in logs.output), 1)
+
+    def test_library_results_pass_is_seated_when_the_log_has_no_row(self):
+        from hedge_fund.library.catalog import strategy_by_key
+
+        row = _pass("lib.gk", params=dict(strategy_by_key("gk").center))
+        (self.root / "library_results.json").write_text(json.dumps({
+            "paper_only": True,
+            "results": {"lib.gk": row},
+        }))
+        self._run()
+        self._run()
+        self.assertEqual(self._names(), [A, "lib.gk"])
+        seated = json.loads((self.root / "champions.json").read_text())["champions"][1]
+        self.assertEqual(seated["library"]["params"], strategy_by_key("gk").center)
+
+    def test_graduated_and_already_seated_are_not_duplicated(self):
+        seated = _pass("lib.kst")
+        (self.root / "champions.json").write_text(json.dumps({
+            "champions": [
+                {"name": A, "source": "5m_qualification_filter"},
+                {"name": "lib.kst", "source": "library_qualification", "qualified": True},
+            ],
+            "synced_until": "",
+        }))
+        (self.root / "graduated.json").write_text(json.dumps([
+            {"name": "lib.vidya", "source": "library_qualification"},
+        ]))
+        (self.root / "discovery_log.json").write_text(json.dumps([seated, _pass("lib.vidya")]))
+        before = (self.root / "champions.json").read_bytes()
+        self._run()
+        self.assertEqual((self.root / "champions.json").read_bytes(), before)
+
+    def test_retired_after_the_pass_stays_retired(self):
+        row = _pass("lib.chop")
+        row["tested_at"] = "2026-11-01T12:00:00+00:00"
+        (self.root / "discovery_log.json").write_text(json.dumps([row]))
+        (self.root / "retired.json").write_text(json.dumps({
+            "retired": {
+                "lib.chop": {
+                    "name": "lib.chop",
+                    "role": "champion",
+                    "retired_at": "2026-11-01T18:00:00+00:00",
+                },
+            },
+            "applied": [],
+            "batches": [],
+        }))
+        self._run()
+        self.assertEqual(self._names(), [A])
+        self.assertIn("lib.chop", json.loads((self.root / "retired.json").read_text())["retired"])
+
+    def test_pass_after_retirement_is_seated(self):
+        row = _pass("lib.awesome", params={"fast": 3, "slow": 34})
+        row["tested_at"] = "2026-11-01T18:00:00+00:00"
+        (self.root / "discovery_log.json").write_text(json.dumps([row]))
+        (self.root / "retired.json").write_text(json.dumps({
+            "retired": {
+                "lib.awesome": {
+                    "name": "lib.awesome",
+                    "role": "champion",
+                    "retired_at": "2026-11-01T12:00:00+00:00",
+                },
+            },
+            "applied": [],
+            "batches": [],
+        }))
+        self._run()
+        self.assertEqual(self._names(), [A, "lib.awesome"])
+        seated = json.loads((self.root / "champions.json").read_text())["champions"][1]
+        self.assertEqual(seated["library"]["params"], CENTERS["lib.awesome"])
+        self.assertEqual(seated["provenance"]["gate_rules"], GATE_RULES)
+        self.assertNotIn("lib.awesome", json.loads((self.root / "retired.json").read_text())["retired"])
 
 
 class AttestationTests(unittest.TestCase):
