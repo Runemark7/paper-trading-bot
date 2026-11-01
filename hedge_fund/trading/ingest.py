@@ -2,12 +2,17 @@
 
 Fail-once: a name that already has any discovery_log row is skipped
 (no second walk-forward), except one pending v4 buy-and-hold retest
-(``requeue_v4_bh``) and one pending library-gate retest
-(``requeue_library_gate``). A library retest of a name that is already
+(``requeue_v4_bh``), one pending library-gate retest
+(``requeue_library_gate``), and one corrected-signal retest
+(``requeue_library_signal``) for ``lib.td_cd``, ``lib.pierce``, and
+``lib.soldiers`` until the newest row carries ``signal_revision``.
+A library retest of a name that is already
 seated appends the discovery-log row and does not rewrite the champion
-or the paper account. A 5m qualified pass is logged and proposed. It is not seated. A
+or the paper account. The corrected-signal retest also leaves the old
+row in place. A 5m qualified pass is logged and proposed. It is not seated. A
 canonical ``lib.*`` pass under gate v7b is seated on this ingest
-(``seat_library_passes_unlocked``). That seat is idempotent: a name
+(``seat_library_passes_unlocked``), including a corrected-signal pass
+that this ingest actually wrote. That seat is idempotent: a name
 already in the pool or graduated is not written again, and a retired
 name comes back only when this ingest is a new passing evaluation.
 On ingest, parked rows that now pass on stored aggregates
@@ -48,6 +53,12 @@ from hedge_fund.trading.requeue_library_gate import (
     complete_library_retest_unlocked,
     library_retest_entry,
     stamp_library_retest_result,
+)
+from hedge_fund.trading.requeue_library_signal import (
+    REVISION as SIGNAL_REVISION,
+    is_signal_correction,
+    signal_correction_pending,
+    stamp_signal_correction,
 )
 from hedge_fund.trading.requeue_v4_bh import (
     complete_retest_unlocked,
@@ -409,6 +420,7 @@ def ingest_discovery_payload(payload: dict) -> dict:
 
     to_append: list[tuple[dict, str | None]] = []
     library_retests: set[str] = set()
+    signal_corrections: set[str] = set()
     written: list[dict] = []
     auto_admitted: list[str] = []
     with paper_state_lock("discovery"):
@@ -440,7 +452,23 @@ def ingest_discovery_payload(payload: dict) -> dict:
             lib_entry = library_retest_entry(name)
             if lib_entry is not None:
                 stamp_library_retest_result(rec, lib_entry)
+                if is_signal_correction(name):
+                    rec["signal_revision"] = SIGNAL_REVISION
                 library_retests.add(name)
+                to_append.append((rec, name))
+                ingested.append(name)
+                if rec["qualified"]:
+                    proposed.append(name)
+                continue
+            # Corrected signal. The old fail stays in the log. One new row
+            # is enough, and only while the newest stored row lacks the
+            # revision. A first test of the name is not this branch: it is
+            # untested, and the revision is stamped on the way in.
+            if is_signal_correction(name):
+                rec["signal_revision"] = SIGNAL_REVISION
+            if is_signal_correction(name) and signal_correction_pending(name):
+                stamp_signal_correction(rec)
+                signal_corrections.add(name)
                 to_append.append((rec, name))
                 ingested.append(name)
                 if rec["qualified"]:
@@ -511,6 +539,12 @@ def ingest_discovery_payload(payload: dict) -> dict:
             wrote = append_discovery_evaluation(
                 rec, after_commit=_close_library, still_valid=_still_library
             )
+        elif retest_name in signal_corrections:
+
+            def _still_correction(name=retest_name):
+                return signal_correction_pending(name)
+
+            wrote = append_discovery_evaluation(rec, still_valid=_still_correction)
         else:
             tested_at = rec.get("tested_at")
 
@@ -530,6 +564,8 @@ def ingest_discovery_payload(payload: dict) -> dict:
                 proposed.remove(name)
             skipped.append({"strategy": name, "reason": "already_tested"})
             continue
+        # A corrected-signal row is in this list only when the append
+        # landed. A pass here is seated below, the same as any other lib.* pass.
         written.append(rec)
         if isinstance(rec.get("library"), dict):
             from hedge_fund.library.results import save_library_result

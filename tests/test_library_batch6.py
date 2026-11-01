@@ -48,7 +48,7 @@ NEW = (
 CALENDAR = ("expiry",)
 CENTERS = {
     "demarker": {"n": 14},
-    "td_cd": {"setup": 9, "count": 13, "trend": 200},
+    "td_cd": {"setup": 9, "count": 13},
     "trix_sig": {"signal": 9},
     "stoch_slow": {"k": 14, "d": 3},
     "zlema": {"n": 20},
@@ -78,7 +78,7 @@ def _ready_index(key: str, params: dict) -> int:
     if key == "demarker":
         return params["n"]
     if key == "td_cd":
-        return max(4, params["trend"] - 1)
+        return 4
     if key == "trix_sig":
         return 3 * (15 - 1) + params["signal"]
     if key == "stoch_slow":
@@ -169,9 +169,11 @@ def _geo(n: int, growth: float) -> DailyBars:
 
 class CatalogOrderTests(unittest.TestCase):
     def test_batch6_is_appended_after_the_first_hundred_eight(self):
-        self.assertEqual(tuple(s.key for s in LIBRARY[BATCH5_END:]), NEW)
+        end = BATCH5_END + len(NEW)
+        self.assertEqual(tuple(s.key for s in LIBRARY[BATCH5_END:end]), NEW)
         self.assertEqual(LIBRARY[BATCH5_END - 1].key, "three_dn")
-        self.assertEqual(len(LIBRARY), BATCH5_END + len(NEW))
+        self.assertEqual(LIBRARY[end].key, "smi")
+        self.assertGreater(len(LIBRARY), end)
         for key, center in CENTERS.items():
             strategy = strategy_by_key(key)
             self.assertEqual(strategy.center, center)
@@ -460,6 +462,16 @@ class OnOffTests(unittest.TestCase):
         engulfed = make_bars(open_, close)
         self.assertFalse(bool(strategy_by_key("pierce").signal(engulfed, {"trend": 5})[-1]))
         self.assertTrue(bool(strategy_by_key("engulf").signal(engulfed, {"trend": 5})[-1]))
+        # The open sits on the prior close, so it is not below the prior low.
+        # The low still breaks that low and the close still pierces the midpoint.
+        open_[-1] = 100.0
+        close[-1] = 106.0
+        low = np.minimum(open_, close).copy()
+        low[-1] = 99.0
+        high = np.maximum(open_, close)
+        gapless = make_bars(open_, close, high, low)
+        self.assertFalse(gapless.open[-1] < gapless.low[-2])
+        self.assertTrue(bool(strategy_by_key("pierce").signal(gapless, {"trend": 5})[-1]))
 
     def test_three_white_soldiers_need_three_bodies(self):
         n = 30
@@ -476,6 +488,12 @@ class OnOffTests(unittest.TestCase):
         self.assertFalse(bool(signal[28]))
         self.assertTrue(bool(signal[29]))
         self.assertGreater(float(close[29]), float(sma(close, 10)[29]))
+        # Each open is the prior close, the top of that white body.
+        edge_o = np.array([90.0, 96.0, 100.0, 104.0, 108.0], dtype=np.float64)
+        edge_c = np.array([96.0, 100.0, 104.0, 108.0, 112.0], dtype=np.float64)
+        edge = make_bars(edge_o, edge_c, edge_c + 0.2, edge_o - 0.2)
+        edge_sig = strategy_by_key("soldiers").signal(edge, {"trend": 3})
+        self.assertTrue(bool(edge_sig[4]))
         lower = strategy_by_key("three_dn").signal(bars, {"n": 3, "trend": 10, "exit_ma": 5})
         self.assertFalse(bool(lower[29]))
 

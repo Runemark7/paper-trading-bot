@@ -556,12 +556,18 @@ def _drop_expired_and_tested(state: dict, now: datetime, tested: set[str]) -> in
     in the tested index, and fail-once is lifted only until one fresh
     result is stored. A pending library-gate retest stays leased for
     the same reason, including when the name is already on the book.
+    A corrected-signal retest stays leased until one new row is stored.
     Returns how many expired (not tested) leases were dropped.
     """
     from hedge_fund.trading.requeue_library_gate import pending_library_retest_names
+    from hedge_fund.trading.requeue_library_signal import pending_signal_correction_names
     from hedge_fund.trading.requeue_v4_bh import pending_retest_names
 
-    keep_tested = set(pending_retest_names()) | set(pending_library_retest_names())
+    keep_tested = (
+        set(pending_retest_names())
+        | set(pending_library_retest_names())
+        | set(pending_signal_correction_names())
+    )
     leases: dict = state["leases"]
     expired = 0
     for name in list(leases):
@@ -1012,16 +1018,22 @@ def _take_library_retests(
     expires: datetime,
     now: datetime,
 ) -> list[str]:
-    """Lease pending library-gate retests, including names already on the book.
+    """Lease pending library retests, including names already on the book.
 
-    Tested-name membership does not block these. A name that already has
-    a lease stays with that worker. Random mode does not call this.
+    Gate-tag retests come first, then corrected signals whose newest log
+    row predates the revision. Tested-name membership does not block
+    these. A name that already has a lease stays with that worker.
+    Random mode does not call this.
     """
     if n <= 0:
         return []
     from hedge_fund.trading.requeue_library_gate import pending_library_retest_names
+    from hedge_fund.trading.requeue_library_signal import pending_signal_correction_names
 
-    pending = pending_library_retest_names()
+    pending = list(pending_library_retest_names())
+    for name in pending_signal_correction_names():
+        if name not in pending:
+            pending.append(name)
     if not pending:
         return []
     leases: dict = state["leases"]
@@ -1052,11 +1064,12 @@ def _claim_library_unlocked(
     ttl: int,
     tested: set[str],
 ) -> dict:
-    """Library mode: canonical library names, plus one pending gate retest.
+    """Library mode: canonical library names, plus pending retests.
 
     No requalify lane, no buy-and-hold retests, no leftovers, no mint,
-    no lift. A library-gate retest is leased even when the name is
-    already tested or already seated. The seat itself is not touched.
+    no lift. A library-gate retest, and a corrected-signal retest, are
+    leased even when the name is already tested or already seated.
+    The seat itself is not touched.
     """
     from hedge_fund.library.catalog import library_trial_count
 
