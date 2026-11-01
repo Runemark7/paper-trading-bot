@@ -1232,3 +1232,453 @@ def hold_between(eval_mask: np.ndarray, value: np.ndarray) -> np.ndarray:
             state = bool(np.isfinite(v) and v > 0.0)
         out[i] = state
     return out
+
+
+def smma(x: np.ndarray, n: int) -> np.ndarray:
+    """Smoothed moving average. Seeded by the SMA, then ``(prev * (n - 1) + x) / n``.
+
+    Finite at index ``n - 1``. This is the average Williams uses for the
+    alligator, not an EMA.
+    """
+    x = np.asarray(x, dtype=np.float64)
+    out = _nan(x.shape[0])
+    n = int(n)
+    if n <= 0 or x.shape[0] < n or not bool(np.all(np.isfinite(x))):
+        return out
+    value = float(np.mean(x[:n]))
+    out[n - 1] = value
+    for i in range(n, x.shape[0]):
+        value = (value * (n - 1) + float(x[i])) / n
+        out[i] = value
+    return out
+
+
+def macd_histogram(close: np.ndarray, fast: int, slow: int, signal: int) -> np.ndarray:
+    """MACD line minus its signal EMA. NaN until the signal average exists."""
+    close = np.asarray(close, dtype=np.float64)
+    line = ema(close, int(fast)) - ema(close, int(slow))
+    sig = ema(line, int(signal))
+    out = _nan(close.shape[0])
+    ok = np.isfinite(line) & np.isfinite(sig)
+    out[ok] = line[ok] - sig[ok]
+    return out
+
+
+def true_strength_index(close: np.ndarray, long: int, short: int) -> np.ndarray:
+    """Blau TSI: 100 times double-smoothed momentum over double-smoothed absolute momentum.
+
+    The first smoothing is ``long`` (25 in the article) and the second is
+    ``short`` (13). Momentum is the one-day change. A flat window is 0.
+    Finite at index ``long + short - 1``.
+    """
+    close = np.asarray(close, dtype=np.float64)
+    out = _nan(close.shape[0])
+    long, short = int(long), int(short)
+    if long <= 0 or short <= 0 or close.shape[0] <= long + short:
+        return out
+    mom = _nan(close.shape[0])
+    mom[1:] = np.diff(close)
+    num = ema(ema(mom, long), short)
+    den = ema(ema(np.abs(mom), long), short)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        ok = np.isfinite(num) & np.isfinite(den) & (den > 0.0)
+        flat = np.isfinite(num) & np.isfinite(den) & (den == 0.0)
+        out[ok] = 100.0 * num[ok] / den[ok]
+        out[flat] = 0.0
+    return out
+
+
+def awesome_oscillator(high: np.ndarray, low: np.ndarray, fast: int, slow: int) -> np.ndarray:
+    """Williams: SMA of the median price, fast minus slow. Median is (high + low) / 2."""
+    median = (np.asarray(high, dtype=np.float64) + np.asarray(low, dtype=np.float64)) / 2.0
+    fast_ma = sma(median, int(fast))
+    slow_ma = sma(median, int(slow))
+    out = _nan(median.shape[0])
+    ok = np.isfinite(fast_ma) & np.isfinite(slow_ma)
+    out[ok] = fast_ma[ok] - slow_ma[ok]
+    return out
+
+
+def balance_of_power(
+    open_: np.ndarray, high: np.ndarray, low: np.ndarray, close: np.ndarray, n: int,
+) -> np.ndarray:
+    """SMA of (close - open) / (high - low). A zero-range bar contributes 0."""
+    high = np.asarray(high, dtype=np.float64)
+    low = np.asarray(low, dtype=np.float64)
+    span = high - low
+    raw = np.zeros(span.shape[0], dtype=np.float64)
+    ok = span > 0.0
+    raw[ok] = (
+        np.asarray(close, dtype=np.float64)[ok] - np.asarray(open_, dtype=np.float64)[ok]
+    ) / span[ok]
+    return sma(raw, int(n))
+
+
+def psychological_line(close: np.ndarray, n: int) -> np.ndarray:
+    """Percent of the last ``n`` sessions that closed strictly above the prior close.
+
+    The first ``n`` one-day comparisons end at index ``n``. A tie is not an up day.
+    """
+    close = np.asarray(close, dtype=np.float64)
+    out = _nan(close.shape[0])
+    n = int(n)
+    if n <= 0 or close.shape[0] <= n:
+        return out
+    up = np.zeros(close.shape[0], dtype=np.float64)
+    up[1:] = close[1:] > close[:-1]
+    csum = np.concatenate(([0.0], np.cumsum(up)))
+    idx = np.arange(n, close.shape[0])
+    out[idx] = 100.0 * (csum[idx + 1] - csum[idx + 1 - n]) / n
+    return out
+
+
+def choppiness_index(high: np.ndarray, low: np.ndarray, close: np.ndarray, n: int) -> np.ndarray:
+    """Dreiss choppiness index, 0 to 100. Low means the path was directional.
+
+    ``100 * log10(sum of n true ranges / n-bar high-low range) / log10(n)``.
+    A zero range is NaN, not a low reading. Finite at index ``n - 1``.
+    """
+    high = np.asarray(high, dtype=np.float64)
+    low = np.asarray(low, dtype=np.float64)
+    close = np.asarray(close, dtype=np.float64)
+    out = _nan(close.shape[0])
+    n = int(n)
+    if n <= 1 or close.shape[0] < n:
+        return out
+    tr = true_range(high, low, close)
+    csum = np.concatenate(([0.0], np.cumsum(tr)))
+    sum_tr = csum[n:] - csum[:-n]
+    span = rolling_max(high, n)[n - 1 :] - rolling_min(low, n)[n - 1 :]
+    with np.errstate(invalid="ignore", divide="ignore"):
+        ratio = sum_tr / span
+        ci = 100.0 * np.log10(ratio) / np.log10(float(n))
+    ok = np.isfinite(ci) & (span > 0.0) & (sum_tr > 0.0)
+    out[n - 1 :][ok] = ci[ok]
+    return out
+
+
+def random_walk_index(
+    high: np.ndarray, low: np.ndarray, close: np.ndarray, n: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Poulos RWI of the highs and of the lows. Each is the max ratio over lengths 2..n.
+
+    The length-``i`` ratio divides the ``i``-bar range by ``ATR(i) * sqrt(i)``.
+    Both series are finite at index ``n`` once every shorter ATR exists.
+    """
+    high = np.asarray(high, dtype=np.float64)
+    low = np.asarray(low, dtype=np.float64)
+    close = np.asarray(close, dtype=np.float64)
+    m = int(close.shape[0])
+    up = _nan(m)
+    down = _nan(m)
+    n = int(n)
+    if n < 2 or m <= n:
+        return up, down
+    tr = true_range(high, low, close)
+    atrs = [wilder_smooth(tr, i) for i in range(n + 1)]
+    root = np.sqrt(np.arange(n + 1, dtype=np.float64))
+    for t in range(n, m):
+        best_up = -np.inf
+        best_down = -np.inf
+        got = False
+        for i in range(2, n + 1):
+            atr = float(atrs[i][t])
+            if not np.isfinite(atr) or atr <= 0.0:
+                continue
+            scale = atr * float(root[i])
+            up_i = (float(high[t]) - float(low[t - i])) / scale
+            down_i = (float(high[t - i]) - float(low[t])) / scale
+            if up_i > best_up:
+                best_up = up_i
+            if down_i > best_down:
+                best_down = down_i
+            got = True
+        if got:
+            up[t] = best_up
+            down[t] = best_down
+    return up, down
+
+
+def swing_index(
+    open_: np.ndarray, high: np.ndarray, low: np.ndarray, close: np.ndarray, limit_frac: float = 0.5,
+) -> np.ndarray:
+    """Wilder swing index. Index 0 is NaN. Later bars use only the previous bar.
+
+    ``limit_frac`` times the previous close stands in for the futures limit
+    move, which BTC does not have. The factor is positive, so it scales the
+    index and does not change its sign. A bar with no range and no gap is 0.
+    """
+    open_ = np.asarray(open_, dtype=np.float64)
+    high = np.asarray(high, dtype=np.float64)
+    low = np.asarray(low, dtype=np.float64)
+    close = np.asarray(close, dtype=np.float64)
+    out = _nan(close.shape[0])
+    if close.shape[0] < 2:
+        return out
+    prev_c = close[:-1]
+    prev_o = open_[:-1]
+    cur_o = open_[1:]
+    cur_h = high[1:]
+    cur_l = low[1:]
+    cur_c = close[1:]
+    a = np.abs(cur_h - prev_c)
+    b = np.abs(cur_l - prev_c)
+    c = np.abs(cur_h - cur_l)
+    d = np.abs(prev_c - prev_o)
+    k = np.maximum(a, b)
+    a_largest = (a >= b) & (a >= c)
+    b_largest = (b > a) & (b >= c)
+    r = np.where(
+        a_largest,
+        a + 0.5 * b + 0.25 * d,
+        np.where(b_largest, b + 0.5 * a + 0.25 * d, c + 0.25 * d),
+    )
+    num = (cur_c - prev_c) + 0.5 * (cur_c - cur_o) + 0.25 * (prev_c - prev_o)
+    limit = float(limit_frac) * prev_c
+    si = np.zeros(cur_c.shape[0], dtype=np.float64)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        ok = (r > 0.0) & (limit > 0.0) & np.isfinite(num) & np.isfinite(k)
+        si[ok] = 50.0 * num[ok] / r[ok] * k[ok] / limit[ok]
+    out[1:] = si
+    return out
+
+
+def range_expansion_index(high: np.ndarray, low: np.ndarray, n: int) -> np.ndarray:
+    """DeMark range expansion index.
+
+    Each bar adds (high - high two bars ago) + (low - low two bars ago), and
+    the same absolute sum, but only when the bar overlaps the range of the
+    bars five and six days back. Otherwise that bar adds zero. The index is
+    100 times the n-bar sum of the signed terms over the sum of the absolute
+    terms. A zero denominator is 0. Finite at index ``n + 5``.
+    """
+    high = np.asarray(high, dtype=np.float64)
+    low = np.asarray(low, dtype=np.float64)
+    out = _nan(high.shape[0])
+    n = int(n)
+    if n <= 0 or high.shape[0] <= n + 5:
+        return out
+    h2 = shift_previous(high, 2)
+    l2 = shift_previous(low, 2)
+    h5 = shift_previous(high, 5)
+    l5 = shift_previous(low, 5)
+    h6 = shift_previous(high, 6)
+    l6 = shift_previous(low, 6)
+    defined = (
+        np.isfinite(h2) & np.isfinite(l2) & np.isfinite(h5)
+        & np.isfinite(l5) & np.isfinite(h6) & np.isfinite(l6)
+    )
+    cond = ((high >= l5) | (high >= l6)) & ((low <= h5) | (low <= h6))
+    dh = high - h2
+    dl = low - l2
+    num = np.where(defined & cond, dh + dl, np.where(defined, 0.0, np.nan))
+    den = np.where(defined & cond, np.abs(dh) + np.abs(dl), np.where(defined, 0.0, np.nan))
+    s_num = sum_skip_leading(num, n)
+    s_den = sum_skip_leading(den, n)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        ok = np.isfinite(s_num) & np.isfinite(s_den) & (s_den > 0.0)
+        flat = np.isfinite(s_num) & np.isfinite(s_den) & (s_den == 0.0)
+        out[ok] = 100.0 * s_num[ok] / s_den[ok]
+        out[flat] = 0.0
+    return out
+
+
+def linreg_slope(close: np.ndarray, n: int) -> np.ndarray:
+    """Least-squares slope of the last ``n`` closes, older bar at x = 0.
+
+    Finite at index ``n - 1``. A positive slope means the fitted line rises
+    toward the current bar.
+    """
+    close = np.asarray(close, dtype=np.float64)
+    out = _nan(close.shape[0])
+    n = int(n)
+    if n <= 1 or close.shape[0] < n:
+        return out
+    x = np.arange(n, dtype=np.float64)
+    sum_x = float(x.sum())
+    sum_x2 = float(x @ x)
+    denom = n * sum_x2 - sum_x * sum_x
+    if denom == 0.0:
+        return out
+    window = sliding_window_view(close, n)
+    sum_y = window.sum(axis=1)
+    sum_xy = window @ x
+    out[n - 1 :] = (n * sum_xy - sum_x * sum_y) / denom
+    return out
+
+
+def laguerre_rsi(close: np.ndarray, gamma: float) -> np.ndarray:
+    """Ehlers Laguerre RSI, on 0..1. Seeded by the first close. Finite from index 1.
+
+    ``gamma`` is the damping constant (he uses 0.5). Four Laguerre poles, then
+    the share of the up-moves among the three adjacent differences.
+    """
+    close = np.asarray(close, dtype=np.float64)
+    out = _nan(close.shape[0])
+    if close.shape[0] == 0 or not np.isfinite(close[0]):
+        return out
+    g = float(gamma)
+    l0 = l1 = l2 = l3 = float(close[0])
+    for i in range(1, close.shape[0]):
+        price = float(close[i])
+        prev0, prev1, prev2 = l0, l1, l2
+        l0 = (1.0 - g) * price + g * l0
+        l1 = -g * l0 + prev0 + g * l1
+        l2 = -g * l1 + prev1 + g * l2
+        l3 = -g * l2 + prev2 + g * l3
+        cu = 0.0
+        cd = 0.0
+        if l0 >= l1:
+            cu += l0 - l1
+        else:
+            cd += l1 - l0
+        if l1 >= l2:
+            cu += l1 - l2
+        else:
+            cd += l2 - l1
+        if l2 >= l3:
+            cu += l2 - l3
+        else:
+            cd += l3 - l2
+        total = cu + cd
+        out[i] = cu / total if total > 0.0 else 0.0
+    return out
+
+
+def vidya(close: np.ndarray, n: int) -> np.ndarray:
+    """Chande VIDYA. The smoothing weight is the absolute CMO of the same length.
+
+    Seeded with the close on the first CMO bar (index ``n``).
+    ``alpha = 2 / (n + 1)``, times ``|CMO| / 100``.
+    """
+    close = np.asarray(close, dtype=np.float64)
+    out = _nan(close.shape[0])
+    n = int(n)
+    if n <= 0 or close.shape[0] <= n:
+        return out
+    cmo = chande_momentum(close, n)
+    if not np.isfinite(cmo[n]):
+        return out
+    alpha = 2.0 / (n + 1.0)
+    value = float(close[n])
+    out[n] = value
+    for i in range(n + 1, close.shape[0]):
+        k = abs(float(cmo[i])) / 100.0
+        value = alpha * k * float(close[i]) + (1.0 - alpha * k) * value
+        out[i] = value
+    return out
+
+
+def tillson_t3(close: np.ndarray, n: int, volume_factor: float) -> np.ndarray:
+    """Tillson T3. Six EMAs, then the cubic coefficients of the volume factor.
+
+    Finite when the sixth EMA is finite, at index ``6 * (n - 1)``. The volume
+    factor is Tillson's constant, not traded volume.
+    """
+    close = np.asarray(close, dtype=np.float64)
+    out = _nan(close.shape[0])
+    n = int(n)
+    if n <= 0:
+        return out
+    e1 = ema(close, n)
+    e2 = ema(e1, n)
+    e3 = ema(e2, n)
+    e4 = ema(e3, n)
+    e5 = ema(e4, n)
+    e6 = ema(e5, n)
+    a = float(volume_factor)
+    a2 = a * a
+    a3 = a2 * a
+    c1 = -a3
+    c2 = 3.0 * a2 + 3.0 * a3
+    c3 = -6.0 * a2 - 3.0 * a - 3.0 * a3
+    c4 = 1.0 + 3.0 * a + a3 + 3.0 * a2
+    ok = np.isfinite(e3) & np.isfinite(e4) & np.isfinite(e5) & np.isfinite(e6)
+    out[ok] = c1 * e6[ok] + c2 * e5[ok] + c3 * e4[ok] + c4 * e3[ok]
+    return out
+
+
+def relative_momentum_index(close: np.ndarray, momentum: int, n: int) -> np.ndarray:
+    """Altman RMI. Wilder RSI built on an ``momentum``-day price change, smoothed ``n``.
+
+    Finite at index ``momentum + n - 1``. A window with no losses is 100, and
+    a window with no movement is 50, matching :func:`rsi_wilder`.
+    """
+    close = np.asarray(close, dtype=np.float64)
+    out = _nan(close.shape[0])
+    momentum, n = int(momentum), int(n)
+    if momentum <= 0 or n <= 0 or close.shape[0] <= momentum + n - 1:
+        return out
+    change = np.zeros(close.shape[0], dtype=np.float64)
+    change[momentum:] = close[momentum:] - close[:-momentum]
+    gains = np.where(change > 0.0, change, 0.0)
+    losses = np.where(change < 0.0, -change, 0.0)
+    first = momentum + n - 1
+    avg_gain = float(np.mean(gains[momentum : momentum + n]))
+    avg_loss = float(np.mean(losses[momentum : momentum + n]))
+
+    def value(g: float, lo: float) -> float:
+        if lo == 0.0:
+            return 50.0 if g == 0.0 else 100.0
+        return 100.0 - 100.0 / (1.0 + g / lo)
+
+    out[first] = value(avg_gain, avg_loss)
+    for i in range(first + 1, close.shape[0]):
+        avg_gain = (avg_gain * (n - 1) + float(gains[i])) / n
+        avg_loss = (avg_loss * (n - 1) + float(losses[i])) / n
+        out[i] = value(avg_gain, avg_loss)
+    return out
+
+
+def mcginley_dynamic(close: np.ndarray, n: int) -> np.ndarray:
+    """McGinley dynamic average. Seeded by the SMA at index ``n - 1``.
+
+    ``MD + (close - MD) / (n * (close / MD) ** 4)``. The adjustment uses the
+    close relative to the running average, so a fast market catches up sooner
+    than an EMA of the same length.
+    """
+    close = np.asarray(close, dtype=np.float64)
+    out = _nan(close.shape[0])
+    n = int(n)
+    if n <= 0 or close.shape[0] < n or not bool(np.all(np.isfinite(close))):
+        return out
+    value = float(np.mean(close[:n]))
+    out[n - 1] = value
+    for i in range(n, close.shape[0]):
+        price = float(close[i])
+        if value <= 0.0 or price <= 0.0:
+            out[i] = value
+            continue
+        adj = n * (price / value) ** 4
+        if adj == 0.0:
+            out[i] = value
+            continue
+        value = value + (price - value) / adj
+        out[i] = value
+    return out
+
+
+def ichimoku_spans(
+    high: np.ndarray, low: np.ndarray, conv: int, base: int, span: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Senkou span A and span B plotted on day ``t``.
+
+    Same displacement as :func:`ichimoku_cloud_top`: both spans are the values
+    computed through day ``t - base``. A missing span stays NaN.
+    """
+    high = np.asarray(high, dtype=np.float64)
+    low = np.asarray(low, dtype=np.float64)
+    tenkan = (rolling_max(high, conv) + rolling_min(low, conv)) / 2.0
+    kijun = (rolling_max(high, base) + rolling_min(low, base)) / 2.0
+    span_a = (tenkan + kijun) / 2.0
+    span_b = (rolling_max(high, span) + rolling_min(low, span)) / 2.0
+    disp = int(base)
+    cloud_a = _nan(high.shape[0])
+    cloud_b = _nan(high.shape[0])
+    if disp > 0 and high.shape[0] > disp:
+        cloud_a[disp:] = span_a[:-disp]
+        cloud_b[disp:] = span_b[:-disp]
+    elif disp <= 0:
+        cloud_a = span_a
+        cloud_b = span_b
+    return cloud_a, cloud_b
