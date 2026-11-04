@@ -9,6 +9,7 @@ Uses public Binance endpoints, no API key required for klines.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Literal
 
@@ -48,9 +49,17 @@ class CcxtSource:
 
     def __init__(self, exchange_id: str = "binance", sandbox: bool = False) -> None:
         ex_cls = getattr(ccxt, exchange_id)
-        self.exchange = ex_cls(
-            {"enableRateLimit": True, "options": {"defaultType": "spot"}}
-        )
+        options: dict = {"defaultType": "spot"}
+        cfg: dict = {"enableRateLimit": True, "options": options}
+        # api.binance.com returns HTTP 451 from some regions. Binance's public
+        # market-data mirror serves the same spot klines and tickers. Opt in
+        # with PAPER_BINANCE_PUBLIC_URL=https://data-api.binance.vision/api/v3.
+        # Spot only: that host does not serve futures exchangeInfo.
+        public = os.environ.get("PAPER_BINANCE_PUBLIC_URL", "").strip().rstrip("/")
+        if public and exchange_id == "binance":
+            options["fetchMarkets"] = ["spot"]
+            cfg["urls"] = {"api": {"public": public, "private": public}}
+        self.exchange = ex_cls(cfg)
         if sandbox:
             self.exchange.set_sandbox_mode(True)
         self._last_ts: dict[tuple[str, str], int] = {}
