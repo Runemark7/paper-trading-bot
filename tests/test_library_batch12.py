@@ -153,9 +153,10 @@ def _quiet(value: np.ndarray, close: np.ndarray, trend_n: int) -> np.ndarray:
 
 class CatalogOrderTests(unittest.TestCase):
     def test_batch12_is_appended_after_the_first_two_hundred_thirty_one(self):
-        self.assertEqual(tuple(s.key for s in LIBRARY[BATCH11_END:]), NEW)
+        end = BATCH11_END + len(NEW)
+        self.assertEqual(tuple(s.key for s in LIBRARY[BATCH11_END:end]), NEW)
         self.assertEqual(LIBRARY[BATCH11_END - 1].key, "bbw")
-        self.assertEqual(len(LIBRARY), BATCH11_END + len(NEW))
+        self.assertGreater(len(LIBRARY), end)
         for key, center in CENTERS.items():
             strategy = strategy_by_key(key)
             self.assertEqual(strategy.center, center)
@@ -170,7 +171,7 @@ class CatalogOrderTests(unittest.TestCase):
     def test_skipped_near_copies_are_not_keys(self):
         keys = {s.key for s in LIBRARY}
         for skipped in (
-            "cusum", "tower", "dw", "onight", "onneck", "on_neck",
+            "cusum", "dw", "onight", "onneck", "on_neck",
             "coppock", "obv", "cmf", "vwap", "sma200w",
         ):
             self.assertNotIn(skipped, keys)

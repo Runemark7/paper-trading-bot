@@ -164,6 +164,18 @@ from hedge_fund.library.indicators import (
     close_to_close_variance,
     open_close_skewness,
     window_max_drawdown,
+    sign_entropy,
+    abs_return_autocorr,
+    hodges_lehmann,
+    return_iqr,
+    prior_range_log_width,
+    yang_zhang_gap,
+    parkinson_vol_of_vol,
+    median_run_count,
+    cusum_squares_reset,
+    lower_shadow_imbalance,
+    bipower_jump_share,
+    cox_stuart_share,
 )
 
 NAME_PREFIX = "lib."
@@ -3691,6 +3703,290 @@ def _mdd_quiet(bars: DailyBars, p: dict) -> np.ndarray:
     return _quiet_below_median(value, bars.close, int(p["trend"]))
 
 
+def _loud_above_median(value: np.ndarray, close: np.ndarray, trend_n: int) -> np.ndarray:
+    """``value`` above its 100-day median and the close above the trend SMA.
+
+    The median length is fixed. A missing value is not the loud side.
+    """
+    med = rolling_median_skip_leading(value, 100)
+    trend = sma(close, int(trend_n))
+    with np.errstate(invalid="ignore"):
+        loud = np.isfinite(value) & np.isfinite(med) & (value > med)
+        return loud & np.isfinite(trend) & (close > trend)
+
+
+def _setup_break(bars: DailyBars, setup: np.ndarray, trend: np.ndarray) -> np.ndarray:
+    """Long on the first later close above a setup bar's high, above the trend SMA.
+
+    A close through the setup bar's low drops it. A newer setup replaces it.
+    The setup bar itself is never the break. The long is that one close.
+    """
+    out = np.zeros(len(bars), dtype=bool)
+    ref_high = np.nan
+    ref_low = np.nan
+    for t in range(len(bars)):
+        if np.isfinite(ref_high):
+            if bars.close[t] > ref_high and _above_trend(bars.close, trend, t):
+                out[t] = True
+                ref_high = np.nan
+                ref_low = np.nan
+            elif bars.close[t] < ref_low:
+                ref_high = np.nan
+                ref_low = np.nan
+        if bool(setup[t]):
+            ref_high = float(bars.high[t])
+            ref_low = float(bars.low[t])
+    return out
+
+
+def _tower_bottom(bars: DailyBars, p: dict) -> np.ndarray:
+    """Long black, two smaller bodies, then a long white close through the black midpoint.
+
+    A long body is longer than the average real body of the prior ten bars,
+    the test ``lib.belt`` uses. The long is the white close, and only above
+    the trend SMA.
+    """
+    o = bars.open
+    c = bars.close
+    body = np.abs(c - o)
+    floor = _prior_mean(body, 10)
+    trend = sma(c, int(p["trend"]))
+    out = np.zeros(len(bars), dtype=bool)
+    for t in range(3, len(bars)):
+        black = o[t - 3] - c[t - 3]
+        if black <= 0.0 or not np.isfinite(floor[t - 3]) or black <= floor[t - 3]:
+            continue
+        if not (body[t - 2] < black and body[t - 1] < black):
+            continue
+        midpoint = (o[t - 3] + c[t - 3]) / 2.0
+        real = c[t] - o[t]
+        if (
+            real > 0.0
+            and np.isfinite(floor[t])
+            and real > floor[t]
+            and c[t] > midpoint
+            and _above_trend(c, trend, t)
+        ):
+            out[t] = True
+    return out
+
+
+def _entropy_quiet(bars: DailyBars, p: dict) -> np.ndarray:
+    """Sign entropy below its 100-day median and the close above the close ``n`` days ago."""
+    n = int(p["n"])
+    value = sign_entropy(bars.close, n)
+    med = rolling_median_skip_leading(value, 100)
+    earlier = shift_previous(bars.close, n)
+    with np.errstate(invalid="ignore"):
+        calm = np.isfinite(value) & np.isfinite(med) & (value < med)
+        return calm & np.isfinite(earlier) & (bars.close > earlier)
+
+
+def _abs_autocorr_loud(bars: DailyBars, p: dict) -> np.ndarray:
+    """Absolute-return autocorrelation above its 100-day median and the close above the trend SMA."""
+    value = abs_return_autocorr(bars.close, int(p["n"]))
+    return _loud_above_median(value, bars.close, int(p["trend"]))
+
+
+def _hl_positive(bars: DailyBars, p: dict) -> np.ndarray:
+    """Long while the Hodges-Lehmann location of the last ``n`` log returns is positive."""
+    value = hodges_lehmann(bars.close, int(p["n"]))
+    with np.errstate(invalid="ignore"):
+        return np.isfinite(value) & (value > 0.0)
+
+
+def _iqr_quiet(bars: DailyBars, p: dict) -> np.ndarray:
+    """Return IQR below its 100-day median and the close above the trend SMA."""
+    value = return_iqr(bars.close, int(p["n"]))
+    return _quiet_below_median(value, bars.close, int(p["trend"]))
+
+
+def _donchian_width_quiet(bars: DailyBars, p: dict) -> np.ndarray:
+    """Prior-range width below its 100-day median and the close above that range's midpoint.
+
+    Today is outside the window. The width is the log of the prior high over
+    the prior low.
+    """
+    n = int(p["n"])
+    width = prior_range_log_width(bars.high, bars.low, n)
+    mid = (prior_max(bars.high, n) + prior_min(bars.low, n)) / 2.0
+    med = rolling_median_skip_leading(width, 100)
+    with np.errstate(invalid="ignore"):
+        calm = np.isfinite(width) & np.isfinite(med) & (width < med)
+        return calm & np.isfinite(mid) & (bars.close > mid)
+
+
+def _two_inside_days(bars: DailyBars, p: dict) -> np.ndarray:
+    """Long on a close above the second of two consecutive inside bars, above the trend SMA."""
+    inside = np.zeros(len(bars), dtype=bool)
+    if len(bars) > 1:
+        inside[1:] = (bars.high[1:] < bars.high[:-1]) & (bars.low[1:] > bars.low[:-1])
+    setup = np.zeros(len(bars), dtype=bool)
+    setup[1:] = inside[1:] & inside[:-1]
+    return _setup_break(bars, setup, sma(bars.close, int(p["trend"])))
+
+
+def _yz_gap_quiet(bars: DailyBars, p: dict) -> np.ndarray:
+    """Yang-Zhang less close-to-close variance below its 100-day median, above the trend SMA."""
+    value = yang_zhang_gap(bars.open, bars.high, bars.low, bars.close, int(p["n"]))
+    return _quiet_below_median(value, bars.close, int(p["trend"]))
+
+
+def _rs_below_park(bars: DailyBars, p: dict) -> np.ndarray:
+    """Rogers-Satchell variance below Parkinson variance, and the close above the trend SMA."""
+    n = int(p["n"])
+    rs = rogers_satchell(bars.open, bars.high, bars.low, bars.close, n)
+    park = parkinson(bars.high, bars.low, n)
+    trend = sma(bars.close, int(p["trend"]))
+    with np.errstate(invalid="ignore"):
+        lower = np.isfinite(rs) & np.isfinite(park) & (rs < park)
+        return lower & np.isfinite(trend) & (bars.close > trend)
+
+
+def _vol_of_vol_quiet(bars: DailyBars, p: dict) -> np.ndarray:
+    """Standard deviation of the Parkinson terms below its 100-day median, above the trend SMA."""
+    value = parkinson_vol_of_vol(bars.high, bars.low, int(p["n"]))
+    return _quiet_below_median(value, bars.close, int(p["trend"]))
+
+
+def _prior_week_mid(bars: DailyBars, p: dict) -> np.ndarray:
+    """Long while the close is above the prior completed week's midpoint and the trend SMA.
+
+    The week is the Monday-Sunday UTC week that has already ended. On the
+    Sunday it ends the midpoint includes that day. A week in progress is not
+    the reference.
+    """
+    trend = sma(bars.close, int(p["trend"]))
+    ends = _complete_sundays(bars.ts)
+    out = np.zeros(len(bars), dtype=bool)
+    level = np.nan
+    cursor = 0
+    for t in range(len(bars)):
+        if cursor < len(ends) and ends[cursor] == t:
+            high, low = _week_span(bars.high, bars.low, t)
+            level = (high + low) / 2.0
+            cursor += 1
+        if np.isfinite(level) and bars.close[t] > level and _above_trend(bars.close, trend, t):
+            out[t] = True
+    return out
+
+
+def _median_runs(bars: DailyBars, p: dict) -> np.ndarray:
+    """Fewer than 10 runs about the window median, and the close above that median.
+
+    The 10 stays fixed. A close on the median is dropped from the runs.
+    """
+    n = int(p["n"])
+    count = median_run_count(bars.close, n)
+    med = np.full(len(bars), np.nan)
+    if n >= 3 and len(bars) >= n and bool(np.all(np.isfinite(bars.close))):
+        med[n - 1 :] = np.median(sliding_window_view(bars.close, n), axis=1)
+    with np.errstate(invalid="ignore"):
+        few = np.isfinite(count) & (count < 10.0)
+        return few & np.isfinite(med) & (bars.close > med)
+
+
+def _cusum_squares(bars: DailyBars, p: dict) -> np.ndarray:
+    """The reset CUSUM of squares is at or below the prior mean shock, above the trend SMA.
+
+    The 50 stays fixed.
+    """
+    level, mean = cusum_squares_reset(bars.close, 50)
+    trend = sma(bars.close, int(p["trend"]))
+    with np.errstate(invalid="ignore"):
+        calm = np.isfinite(level) & np.isfinite(mean) & (level <= mean)
+        return calm & np.isfinite(trend) & (bars.close > trend)
+
+
+def _complete_month_spans(ts: np.ndarray) -> list[tuple[int, int]]:
+    """``(first, last)`` indexes of each calendar month whose every UTC day is on the tape."""
+    month = month_number(ts)
+    ends = is_month_end(ts)
+    out: list[tuple[int, int]] = []
+    start = 0
+    for t in range(len(ts)):
+        if t > 0 and month[t] != month[t - 1]:
+            start = t
+        if not bool(ends[t]):
+            continue
+        starts_on_first = int(month_number(ts[start : start + 1] - DAY_MS)[0]) != int(month[start])
+        contiguous = (int(ts[t]) - int(ts[start])) // DAY_MS == t - start
+        if starts_on_first and contiguous:
+            out.append((start, t))
+    return out
+
+
+def _prior_month_high(bars: DailyBars, p: dict) -> np.ndarray:
+    """Long while the close is above the prior completed month's high and the trend SMA.
+
+    A month is complete once its first and last UTC days are both on the
+    tape. On the month-end close the high includes that day, so that close is
+    not above it. A month in progress is not the reference.
+    """
+    trend = sma(bars.close, int(p["trend"]))
+    firsts = {last: first for first, last in _complete_month_spans(bars.ts)}
+    out = np.zeros(len(bars), dtype=bool)
+    level = np.nan
+    for t in range(len(bars)):
+        if t in firsts:
+            level = float(np.max(bars.high[firsts[t] : t + 1]))
+        if np.isfinite(level) and bars.close[t] > level and _above_trend(bars.close, trend, t):
+            out[t] = True
+    return out
+
+
+def _lower_shadow_up(bars: DailyBars, p: dict) -> np.ndarray:
+    """Mean shadow imbalance positive and the close above the trend SMA. The zero stays fixed."""
+    value = lower_shadow_imbalance(bars.open, bars.high, bars.low, bars.close, int(p["n"]))
+    trend = sma(bars.close, int(p["trend"]))
+    with np.errstate(invalid="ignore"):
+        positive = np.isfinite(value) & (value > 0.0)
+        return positive & np.isfinite(trend) & (bars.close > trend)
+
+
+def _cox_stuart_up(bars: DailyBars, p: dict) -> np.ndarray:
+    """At least 80 percent of the later-half closes sit above their earlier-half pair. The 80 stays fixed."""
+    value = cox_stuart_share(bars.close, int(p["n"]))
+    with np.errstate(invalid="ignore"):
+        return np.isfinite(value) & (value >= 0.8)
+
+
+def _jump_quiet(bars: DailyBars, p: dict) -> np.ndarray:
+    """Bipower jump share below its 100-day median and the close above the trend SMA."""
+    value = bipower_jump_share(bars.close, int(p["n"]))
+    return _quiet_below_median(value, bars.close, int(p["trend"]))
+
+
+def _volatility_breakout(bars: DailyBars, p: dict) -> np.ndarray:
+    """The close is above today's open plus ``k`` percent of yesterday's high-low range.
+
+    Today's open and close are both known at the close. The long is that close.
+    """
+    prior_range = shift_previous(bars.high - bars.low, 1)
+    with np.errstate(invalid="ignore"):
+        trigger = bars.open + (float(p["k"]) / 100.0) * prior_range
+        return np.isfinite(trigger) & (bars.close > trigger)
+
+
+def _smash_day_break(bars: DailyBars, p: dict) -> np.ndarray:
+    """Long on a close above the high of a smash day, above the trend SMA.
+
+    A smash day closes below the prior day's low. A close through the smash
+    day's own low drops the setup. A newer smash day replaces it.
+    """
+    prior_low = shift_previous(bars.low, 1)
+    with np.errstate(invalid="ignore"):
+        setup = np.isfinite(prior_low) & (bars.close < prior_low)
+    return _setup_break(bars, setup, sma(bars.close, int(p["trend"])))
+
+
+def _three_ten_oscillator(bars: DailyBars, p: dict) -> np.ndarray:
+    """The fast-minus-slow SMA gap is above its 16-day SMA. The 16 stays fixed."""
+    gap = sma(bars.close, int(p["fast"])) - sma(bars.close, int(p["slow"]))
+    line = sma_skip_leading(gap, 16)
+    return _finite_gt(gap, line)
+
+
 def _defined_from(n: int, first: int) -> np.ndarray:
     out = np.zeros(int(n), dtype=bool)
     if 0 <= int(first) < int(n):
@@ -4330,6 +4626,50 @@ def signal_ready(strategy: LibraryStrategy, bars: DailyBars, params: dict) -> np
     if key == "mdd":
         # The drawdown is finite at n - 1. A 100-day median needs 99 further bars.
         return _defined_from(n, max(int(params["n"]) + 98, int(params["trend"]) - 1))
+    if key in ("tower",):
+        # The long-black test uses a ten-bar prior mean, finite at index 10, three bars back.
+        return _defined_from(n, max(13, int(params["trend"]) - 1))
+    if key == "sentropy":
+        # n steps end at index n. A 100-day median needs 99 further bars.
+        return _defined_from(n, int(params["n"]) + 99)
+    if key in ("absac", "iqr", "yzgap", "bpv"):
+        return _defined_from(n, max(int(params["n"]) + 99, int(params["trend"]) - 1))
+    if key == "hlloc":
+        return _defined_from(n, int(params["n"]))
+    if key == "dwid":
+        # The prior window is finite at n. A 100-day median needs 99 further bars.
+        return _defined_from(n, int(params["n"]) + 99)
+    if key == "inside2":
+        return _defined_from(n, max(2, int(params["trend"]) - 1))
+    if key == "coxstu":
+        return _defined_from(n, int(params["n"]) - 1)
+    if key == "smash":
+        return _defined_from(n, max(1, int(params["trend"]) - 1))
+    if key == "rspk":
+        return _defined_from(n, max(int(params["n"]) - 1, int(params["trend"]) - 1))
+    if key == "volvol":
+        # The spread is finite at n - 1. A 100-day median needs 99 further bars.
+        return _defined_from(n, max(int(params["n"]) + 98, int(params["trend"]) - 1))
+    if key == "pwmid":
+        sundays = _complete_sundays(bars.ts)
+        first = sundays[0] if sundays else n
+        return _defined_from(n, max(first, int(params["trend"]) - 1))
+    if key == "pmhigh":
+        spans = _complete_month_spans(bars.ts)
+        first = spans[0][1] if spans else n
+        return _defined_from(n, max(first, int(params["trend"]) - 1))
+    if key == "medruns":
+        return _defined_from(n, int(params["n"]) - 1)
+    if key == "cusumsq":
+        # 50 returns, 50 shocks, then the first shock: finite from index 101.
+        return _defined_from(n, max(101, int(params["trend"]) - 1))
+    if key == "lshadow":
+        return _defined_from(n, max(int(params["n"]) - 1, int(params["trend"]) - 1))
+    if key == "wvb":
+        return _defined_from(n, 1)
+    if key == "r310":
+        # The slow SMA exists at slow - 1. Its 16-day average needs 15 further bars.
+        return _defined_from(n, int(params["slow"]) + 14)
     raise ValueError(f"no warmup rule for {key}")
 
 
@@ -12287,6 +12627,704 @@ LIBRARY: tuple[LibraryStrategy, ...] = (
                 "drawdown is the long side. lib.ulcer is the root-mean-square "
                 "of the drawdown from the window high, not the single worst "
                 "running decline. Next-open fills, BTC."
+            ),
+        ),
+    ),
+    # Batch 13 (2026-11-22). Appended after the batch-12 twenty. Claims
+    # walk this tuple in order, so these names are leased only once the
+    # names above are tested or on the book. Do not insert above ``mdd``.
+    # Not keys: gap and go, whose open never clears yesterday's high on a
+    # 24-hour tape; the intraday drift sum and the session semi-variance,
+    # which are the sign of ``lib.cmo`` and the signal of ``lib.ddev`` on
+    # every scored day; the failed break of two lows, which sits inside
+    # ``lib.keyrev``; and the NR4 break, which contains the registered
+    # ``lib.nr7`` neighbour at n = 4 and agrees with it on 98 percent of days.
+    LibraryStrategy(
+        key="tower",
+        title="Tower bottom close through the black midpoint, above the 200-day SMA",
+        family="mean_reversion",
+        evaluation="daily",
+        params=(Param("trend", 200, (150, 250)),),
+        signal=_tower_bottom,
+        citation=Citation(
+            authors="Nison",
+            year=1991,
+            title="Japanese Candlestick Charting Techniques",
+            venue="Practitioner book (the tower bottom)",
+            peer_reviewed=False,
+            tested_rule=(
+                "A tower bottom is a long black candle, then a few small bodies, "
+                "then a long white candle. The long white candle closes the "
+                "reversal. He reads it as the end of the decline."
+            ),
+            implemented_rule=(
+                "A long black candle, two bodies smaller than it, then a long "
+                "white candle that closes above the black candle's midpoint, "
+                "with the close above the 200-day SMA. A long body is longer "
+                "than the mean real body of the prior ten bars, the test "
+                "lib.belt uses. The long is that white close."
+            ),
+            differences=(
+                "The count of small bodies is fixed at two. Shadows and gaps "
+                "are not tested, as in lib.morning. It needs four bars and a "
+                "long black bar first, so it fires far less often than "
+                "lib.morning or lib.engulf; the on-days overlap them by under "
+                "10 percent on this tape. Next-open fills, BTC."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="sentropy",
+        title="Quiet sign entropy and the close above the close n days ago",
+        family="momentum",
+        evaluation="daily",
+        params=(Param("n", 20, (15, 30)),),
+        signal=_entropy_quiet,
+        citation=Citation(
+            authors="Shannon",
+            year=1948,
+            title="A Mathematical Theory of Communication",
+            venue="Bell System Technical Journal 27(3), 379-423",
+            peer_reviewed=True,
+            link="https://doi.org/10.1002/j.1538-7305.1948.tb01338.x",
+            tested_rule=(
+                "The entropy of a source is the average information of its "
+                "symbols. For two symbols with shares p and 1 - p it is "
+                "-p log2 p - (1 - p) log2 (1 - p), largest at one half. He "
+                "wrote about communication channels, not prices."
+            ),
+            implemented_rule=(
+                "Long while the binary entropy of up versus down closes over "
+                "the last n close-to-close steps is below its 100-day median "
+                "and the close is above the close n days ago. A tie is a down "
+                "step. The median length stays 100."
+            ),
+            differences=(
+                "Low entropy means the steps lean one way; the return sign "
+                "picks the up side. lib.turns counts turning points and "
+                "lib.runs counts runs of steps, not the up share. Next-open "
+                "fills, BTC."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="absac",
+        title="Absolute-return autocorrelation above its median, above the 200-day SMA",
+        family="trend",
+        evaluation="daily",
+        params=(
+            Param("n", 20, (15, 30)),
+            Param("trend", 200, (150, 250)),
+        ),
+        signal=_abs_autocorr_loud,
+        citation=Citation(
+            authors="Ding, Granger & Engle",
+            year=1993,
+            title="A long memory property of stock market returns and a new model",
+            venue="Journal of Empirical Finance 1(1), 83-106",
+            peer_reviewed=True,
+            link="https://doi.org/10.1016/0927-5398(93)90006-D",
+            tested_rule=(
+                "The autocorrelations of absolute returns, and of their powers, "
+                "are positive and decay slowly at long lags. The paper uses "
+                "that memory to build the asymmetric power ARCH model. It does "
+                "not publish a timing rule."
+            ),
+            implemented_rule=(
+                "Long while the lag-1 autocorrelation of the last n absolute "
+                "log returns is above its 100-day median and the close is "
+                "above the 200-day SMA. The legs keep their own means. The "
+                "median length stays 100."
+            ),
+            differences=(
+                "The paper fits a model on long samples; this is a short-window "
+                "volatility-clustering switch. lib.ac1 is the autocorrelation "
+                "of signed returns and lib.volr is a volatility ratio. "
+                "Next-open fills, BTC."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="hlloc",
+        title="Hodges-Lehmann location of the log returns above zero",
+        family="momentum",
+        evaluation="daily",
+        params=(Param("n", 20, (15, 30)),),
+        signal=_hl_positive,
+        citation=Citation(
+            authors="Hodges & Lehmann",
+            year=1963,
+            title="Estimates of Location Based on Rank Tests",
+            venue="Annals of Mathematical Statistics 34(2), 598-611",
+            peer_reviewed=True,
+            link="https://doi.org/10.1214/aoms/1177704172",
+            tested_rule=(
+                "Inverting the Wilcoxon signed-rank test gives a location "
+                "estimate: the median of the pairwise averages (Walsh "
+                "averages) of the sample. It is robust to outliers and has "
+                "high efficiency under normality. They did not test a timing "
+                "rule."
+            ),
+            implemented_rule=(
+                "Long while the median of the Walsh averages (r_i + r_j) / 2, "
+                "i <= j, of the last n daily log returns is above zero. The "
+                "zero stays fixed."
+            ),
+            differences=(
+                "The sign of a robust location, not of the total return, so a "
+                "single large day moves it little; lib.tsmom30d is the sign of "
+                "the total return. Next-open fills, BTC."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="iqr",
+        title="Return interquartile range below its median, above the 200-day SMA",
+        family="trend",
+        evaluation="daily",
+        params=(
+            Param("n", 20, (15, 30)),
+            Param("trend", 200, (150, 250)),
+        ),
+        signal=_iqr_quiet,
+        citation=Citation(
+            authors="Tukey",
+            year=1977,
+            title="Exploratory Data Analysis",
+            venue="Addison-Wesley (the interquartile range and the box plot)",
+            peer_reviewed=False,
+            tested_rule=(
+                "The hinges, the quartiles, summarise the middle half of a "
+                "batch. Their distance is a spread that ignores the tails. He "
+                "used it to describe data, not to time a market."
+            ),
+            implemented_rule=(
+                "Long while the interquartile range of the last n daily log "
+                "returns, with linear-interpolated quartiles, is below its "
+                "100-day median and the close is above the 200-day SMA. The "
+                "median length stays 100."
+            ),
+            differences=(
+                "lib.hampel is the median absolute deviation around the "
+                "median. This is the distance between two quartiles. The two "
+                "agree on 94 percent of scored days at the center, so read "
+                "them as related scales, not independent evidence. Next-open "
+                "fills, BTC."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="dwid",
+        title="Narrow prior 20-day range above its midpoint",
+        family="breakout",
+        evaluation="daily",
+        params=(Param("n", 20, (15, 30)),),
+        signal=_donchian_width_quiet,
+        citation=Citation(
+            authors="Donchian",
+            year=0,
+            title="4-week rule (the width and the midpoint of the prior range)",
+            venue="Practitioner commodity channel; restated in Faith, Way of the Turtle (2007)",
+            peer_reviewed=False,
+            tested_rule=(
+                "The channel is the highest high and the lowest low of the "
+                "prior weeks. A move through it is the signal. The rule does "
+                "not look at how wide the channel is."
+            ),
+            implemented_rule=(
+                "Long while the log width ln(prior high / prior low) of the n "
+                "bars before today is below its 100-day median and the close "
+                "is above the midpoint of that same range. Today is outside "
+                "the window. The median length stays 100."
+            ),
+            differences=(
+                "The width is the log ratio, so a rising price level does not "
+                "make every window look wide against its median. lib.dmid has "
+                "the midpoint without the width gate and lib.qdon uses "
+                "quartiles of the closes. Next-open fills, BTC."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="inside2",
+        title="Break of the second of two inside days, above the 200-day SMA",
+        family="breakout",
+        evaluation="daily",
+        params=(Param("trend", 200, (150, 250)),),
+        signal=_two_inside_days,
+        citation=Citation(
+            authors="Crabel",
+            year=1990,
+            title="Day Trading with Short Term Price Patterns and Opening Range Breakout",
+            venue="Practitioner book (the inside day, two in a row)",
+            peer_reviewed=False,
+            tested_rule=(
+                "An inside day has a lower high and a higher low than the day "
+                "before it. He trades the break of that range on the next "
+                "session, as an opening-range trade."
+            ),
+            implemented_rule=(
+                "Two consecutive inside bars, each with a lower high and a "
+                "higher low than the bar before it. Long on a later daily "
+                "close above the second bar's high when the close is above the "
+                "200-day SMA. A close through the second bar's low drops the "
+                "setup. The long is that one close."
+            ),
+            differences=(
+                "lib.inside_day needs one inside bar (or a bar inside the "
+                "prior 2 or 3). This needs two in a row, so it fires less "
+                "often. The opening range is not on this tape, so the break is "
+                "the daily close. Next-open fills, BTC."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="yzgap",
+        title="Yang-Zhang less close-to-close variance below its median, above the 200-day SMA",
+        family="trend",
+        evaluation="daily",
+        params=(
+            Param("n", 20, (15, 30)),
+            Param("trend", 200, (150, 250)),
+        ),
+        signal=_yz_gap_quiet,
+        citation=Citation(
+            authors="Yang & Zhang",
+            year=2000,
+            title="Drift-Independent Volatility Estimation Based on High, Low, Open, and Close Prices",
+            venue="Journal of Business 73(3), 477-491",
+            peer_reviewed=True,
+            link="https://doi.org/10.1086/209650",
+            tested_rule=(
+                "The estimator combines overnight variance, open-to-close "
+                "variance, and the Rogers-Satchell term. It is unbiased "
+                "without drift and handles opening jumps. They compare "
+                "estimators and do not publish a timing rule."
+            ),
+            implemented_rule=(
+                "Long while the n-day Yang-Zhang variance minus the n-day "
+                "close-to-close variance is below its 100-day median and the "
+                "close is above the 200-day SMA. The median length stays 100."
+            ),
+            differences=(
+                "lib.yz uses the level of the Yang-Zhang variance. This uses "
+                "its excess over the close-to-close variance, which is the "
+                "part the intraday range adds. The close-to-close term is the "
+                "population variance, not the sample one. Next-open fills, BTC."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="rspk",
+        title="Rogers-Satchell variance below Parkinson variance, above the 200-day SMA",
+        family="trend",
+        evaluation="daily",
+        params=(
+            Param("n", 20, (15, 30)),
+            Param("trend", 200, (150, 250)),
+        ),
+        signal=_rs_below_park,
+        citation=Citation(
+            authors="Rogers & Satchell",
+            year=1991,
+            title="Estimating Variance From High, Low and Closing Prices",
+            venue="Annals of Applied Probability 1(4), 504-512",
+            peer_reviewed=True,
+            link="https://doi.org/10.1214/aoap/1177005835",
+            tested_rule=(
+                "The estimator uses the open, high, low and close and stays "
+                "unbiased when the price has drift. Parkinson (Journal of "
+                "Business, 1980) uses the high-low range alone and assumes no "
+                "drift. Neither paper times a market."
+            ),
+            implemented_rule=(
+                "Long while the n-day Rogers-Satchell variance is below the "
+                "n-day Parkinson variance and the close is above the 200-day "
+                "SMA."
+            ),
+            differences=(
+                "The two estimators differ when the close sits away from the "
+                "range extremes, so the comparison is a range-location read, "
+                "not a volatility level. lib.rsvol and lib.park gate each on "
+                "its own median; lib.parkcc compares Parkinson with the "
+                "close-to-close variance. Next-open fills, BTC."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="volvol",
+        title="Volatility of Parkinson terms below its median, above the 200-day SMA",
+        family="trend",
+        evaluation="daily",
+        params=(
+            Param("n", 20, (15, 30)),
+            Param("trend", 200, (150, 250)),
+        ),
+        signal=_vol_of_vol_quiet,
+        citation=Citation(
+            authors="Engle",
+            year=1982,
+            title="Autoregressive Conditional Heteroscedasticity with Estimates of the Variance of United Kingdom Inflation",
+            venue="Econometrica 50(4), 987-1007",
+            peer_reviewed=True,
+            link="https://doi.org/10.2307/1912773",
+            tested_rule=(
+                "The variance of the forecast error depends on past squared "
+                "errors, so volatility clusters and moves over time. The "
+                "paper fits that model to inflation. It does not time a "
+                "market and does not study the volatility of volatility."
+            ),
+            implemented_rule=(
+                "Long while the population standard deviation of the last n "
+                "daily Parkinson variance terms is below its 100-day median "
+                "and the close is above the 200-day SMA. The median length "
+                "stays 100."
+            ),
+            differences=(
+                "This is a proxy for how unstable the variance is, in the "
+                "spirit of time-varying variance, and not an ARCH fit. "
+                "lib.park gates the mean of the terms; this gates their "
+                "spread. Next-open fills, BTC."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="pwmid",
+        title="Close above the prior completed week's midpoint and the 200-day SMA",
+        family="breakout",
+        evaluation="daily",
+        params=(Param("trend", 200, (150, 250)),),
+        signal=_prior_week_mid,
+        citation=Citation(
+            authors="Rhea",
+            year=1932,
+            title="The Dow Theory",
+            venue="Practitioner book (the prior swing's midpoint)",
+            peer_reviewed=False,
+            tested_rule=(
+                "The averages move in swings. A finished swing marks a high "
+                "and a low, and the price relative to that finished range "
+                "tells which side is in control. The swing has to be over "
+                "before it is used."
+            ),
+            implemented_rule=(
+                "Long while the daily close is above the midpoint of the "
+                "prior completed UTC Monday-Sunday week and above the 200-day "
+                "SMA. The midpoint is (week high + week low) / 2. A week that "
+                "has not ended is not the reference."
+            ),
+            differences=(
+                "lib.wkhigh needs the close above the week's high and lib.dmid "
+                "is a rolling 20-day midpoint. This is a calendar-week "
+                "midpoint. A partial first week is ignored. Next-open fills, "
+                "BTC."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="medruns",
+        title="Fewer than 10 runs about the median, close above that median",
+        family="trend",
+        evaluation="daily",
+        params=(Param("n", 20, (15, 30)),),
+        signal=_median_runs,
+        citation=Citation(
+            authors="Swed & Eisenhart",
+            year=1943,
+            title="Tables for Testing Randomness of Grouping in a Sequence of Alternatives",
+            venue="Annals of Mathematical Statistics 14(1), 66-87",
+            peer_reviewed=True,
+            link="https://doi.org/10.1214/aoms/1177731494",
+            tested_rule=(
+                "The runs test counts runs of two kinds in a sequence. Too "
+                "few runs means grouping. The tables give the cut-offs. The "
+                "authors used it for sequences of alternatives and did not "
+                "time prices."
+            ),
+            implemented_rule=(
+                "Mark each of the last n closes above or below the median of "
+                "those n closes, and drop a close that equals it. Long while "
+                "the number of runs is below 10 and today's close is above "
+                "the median. The 10 stays fixed."
+            ),
+            differences=(
+                "The cut-off is fixed at 10 for every n, not a table value, "
+                "so the n = 30 neighbour is stricter. lib.runs counts runs of "
+                "up and down steps; this counts runs about the window median. "
+                "Next-open fills, BTC."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="cusumsq",
+        title="Reset CUSUM of squares at or below the prior mean shock, above the 200-day SMA",
+        family="trend",
+        evaluation="daily",
+        params=(Param("trend", 200, (150, 250)),),
+        signal=_cusum_squares,
+        citation=Citation(
+            authors="Brown, Durbin & Evans",
+            year=1975,
+            title="Techniques for Testing the Constancy of Regression Relationships over Time",
+            venue="Journal of the Royal Statistical Society, Series B 37(2), 149-192",
+            peer_reviewed=True,
+            link="https://doi.org/10.1111/j.2517-6161.1975.tb01532.x",
+            tested_rule=(
+                "The CUSUM of squares sums squared recursive residuals and "
+                "compares the path with a band. A path that leaves the band "
+                "says the variance changed. They test the stability of a "
+                "regression, not a market timing rule."
+            ),
+            implemented_rule=(
+                "Each shock is the squared deviation of a daily log return "
+                "from the mean of the 50 returns before it. The sum of shocks "
+                "is compared with the mean of the prior 50 shocks. The sum "
+                "restarts at zero after the day it exceeds that mean. Long "
+                "while the sum is at or below the mean and the close is above "
+                "the 200-day SMA. The 50 stays fixed."
+            ),
+            differences=(
+                "The reset is what keeps it from sitting above the line for "
+                "good, which is why a plain CUSUM was not a key. The band is "
+                "the prior mean shock and not the paper's significance "
+                "bound. Next-open fills, BTC."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="pmhigh",
+        title="Close above the prior completed month's high and the 200-day SMA",
+        family="breakout",
+        evaluation="daily",
+        params=(Param("trend", 200, (150, 250)),),
+        signal=_prior_month_high,
+        citation=Citation(
+            authors="Rhea",
+            year=1932,
+            title="The Dow Theory",
+            venue="Practitioner book (the prior swing high, taken over a calendar month)",
+            peer_reviewed=False,
+            tested_rule=(
+                "A rally that exceeds the high of the previous completed swing "
+                "confirms the advance. The swing has to be finished before "
+                "the high is used."
+            ),
+            implemented_rule=(
+                "Long while the daily close is above the high of the prior "
+                "completed UTC calendar month and above the 200-day SMA. On "
+                "the month-end close the high includes that day, so that "
+                "close is not above it. A month in progress is not the "
+                "reference."
+            ),
+            differences=(
+                "The month is a calendar proxy for a swing, not a Dow-theory "
+                "swing. lib.wkhigh uses one week, lib.faber10m acts once a "
+                "month on the average, and this holds as long as the close "
+                "stays above the level. Next-open fills, BTC."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="lshadow",
+        title="Lower-shadow imbalance above zero, above the 200-day SMA",
+        family="mean_reversion",
+        evaluation="daily",
+        params=(
+            Param("n", 10, (7, 14)),
+            Param("trend", 200, (150, 250)),
+        ),
+        signal=_lower_shadow_up,
+        citation=Citation(
+            authors="Nison",
+            year=1991,
+            title="Japanese Candlestick Charting Techniques",
+            venue="Practitioner book (the lower and upper shadows)",
+            peer_reviewed=False,
+            tested_rule=(
+                "A long lower shadow says sellers pushed the price down and "
+                "buyers took it back. A long upper shadow says the reverse. "
+                "He reads single candles and does not average them."
+            ),
+            implemented_rule=(
+                "Each bar scores (lower shadow - upper shadow) / (high - low), "
+                "and 0 when the range is zero. Long while the mean score of "
+                "the last n bars is above zero and the close is above the "
+                "200-day SMA. The zero stays fixed."
+            ),
+            differences=(
+                "A ratio averaged over n bars, not a single hammer. "
+                "lib.hammer is one pattern and lib.uhalf counts closes in the "
+                "upper half of the range. Next-open fills, BTC."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="coxstu",
+        title="Cox-Stuart sign test: 80 percent of later closes above their earlier pair",
+        family="trend",
+        evaluation="daily",
+        params=(Param("n", 20, (16, 30)),),
+        signal=_cox_stuart_up,
+        citation=Citation(
+            authors="Cox & Stuart",
+            year=1955,
+            title="Some Quick Sign Tests for Trend in Location and Dispersion",
+            venue="Biometrika 42(1/2), 80-95",
+            peer_reviewed=True,
+            link="https://doi.org/10.1093/biomet/42.1-2.80",
+            tested_rule=(
+                "Split a series into an earlier and a later half and pair each "
+                "earlier value with its later partner. Under no trend the "
+                "number of rising pairs is binomial. Too many rising pairs is "
+                "a sign test for an upward trend in location. They did not "
+                "test a market timing rule."
+            ),
+            implemented_rule=(
+                "Long while at least 80 percent of the pairs between the "
+                "earlier and later half of the last n closes rise. With an "
+                "odd n the middle close is dropped. A tie is not rising. The "
+                "80 percent stays fixed."
+            ),
+            differences=(
+                "The test uses a significance table; the cut-off here is a "
+                "fixed share, so the neighbours move the strictness. It "
+                "counts pairs, not rank correlation like lib.spearman and not "
+                "a fitted slope like lib.linreg. Next-open fills, BTC."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="bpv",
+        title="Bipower jump share below its median, above the 200-day SMA",
+        family="trend",
+        evaluation="daily",
+        params=(
+            Param("n", 20, (15, 30)),
+            Param("trend", 200, (150, 250)),
+        ),
+        signal=_jump_quiet,
+        citation=Citation(
+            authors="Barndorff-Nielsen & Shephard",
+            year=2004,
+            title="Power and Bipower Variation with Stochastic Volatility and Jumps",
+            venue="Journal of Financial Econometrics 2(1), 1-37",
+            peer_reviewed=True,
+            link="https://doi.org/10.1093/jjfinec/nbh001",
+            tested_rule=(
+                "Realized variance picks up both diffusion and jumps. Bipower "
+                "variation, the sum of adjacent absolute-return products, "
+                "picks up the diffusion only. Their gap measures the jump "
+                "part. The paper builds a test for jumps, not a timing rule."
+            ),
+            implemented_rule=(
+                "Long while max(0, RV - BV) / RV over the last n daily log "
+                "returns is below its 100-day median and the close is above "
+                "the 200-day SMA. BV is pi / 2 times the sum of adjacent "
+                "absolute-return products. The median length stays 100."
+            ),
+            differences=(
+                "A ratio of two daily-return moments, not the paper's "
+                "intraday test statistic. A window with no variation is 0. "
+                "lib.skew and lib.kurt read the shape of the returns, not "
+                "this jump share. Next-open fills, BTC."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="wvb",
+        title="Williams volatility breakout: close above the open plus half the prior range",
+        family="breakout",
+        evaluation="daily",
+        params=(Param("k", 50, (30, 70), unit="pct"),),
+        signal=_volatility_breakout,
+        citation=Citation(
+            authors="Williams",
+            year=1999,
+            title="Long-Term Secrets to Short-Term Trading",
+            venue="Practitioner book (the volatility breakout)",
+            peer_reviewed=False,
+            tested_rule=(
+                "Buy when the price rises above today's open by a fraction of "
+                "yesterday's range. Yesterday's range is the measure of how "
+                "far the market is willing to move."
+            ),
+            implemented_rule=(
+                "Long on a daily close above today's open plus k percent of "
+                "yesterday's high-low range. The center is 50 percent. The "
+                "long is that one close."
+            ),
+            differences=(
+                "His entry is an intraday stop at the trigger. This book "
+                "acts on the daily close, so a close above the trigger is "
+                "the signal. The exit is the next bar's flat signal. "
+                "Next-open fills, BTC."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="smash",
+        title="Break of a smash day's high, above the 200-day SMA",
+        family="mean_reversion",
+        evaluation="daily",
+        params=(Param("trend", 200, (150, 250)),),
+        signal=_smash_day_break,
+        citation=Citation(
+            authors="Williams",
+            year=1999,
+            title="Long-Term Secrets to Short-Term Trading",
+            venue="Practitioner book (the smash day)",
+            peer_reviewed=False,
+            tested_rule=(
+                "A smash day closes below the prior day's low. A buy on a "
+                "stop above the smash day's high on a later session catches "
+                "the failed break."
+            ),
+            implemented_rule=(
+                "A smash day closes below the prior day's low. Long on a "
+                "later daily close above the smash day's high when the close "
+                "is above the 200-day SMA. A close through the smash day's "
+                "low drops the setup. A newer smash day replaces it. The "
+                "long is that one close."
+            ),
+            differences=(
+                "His fill is a stop order above the high, not the daily "
+                "close. lib.oops needs the low to break and the close to "
+                "recover in one bar; this waits for a later close above the "
+                "smash day's high. Next-open fills, BTC."
+            ),
+        ),
+    ),
+    LibraryStrategy(
+        key="r310",
+        title="Raschke 3/10 oscillator above its 16-day average",
+        family="momentum",
+        evaluation="daily",
+        params=(
+            Param("fast", 3, (2, 5)),
+            Param("slow", 10, (8, 13)),
+        ),
+        signal=_three_ten_oscillator,
+        citation=Citation(
+            authors="Raschke & Connors",
+            year=1995,
+            title="Street Smarts: High Probability Short-Term Trading Strategies",
+            venue="Practitioner book (the 3/10 oscillator)",
+            peer_reviewed=False,
+            tested_rule=(
+                "The oscillator is the 3-day simple average minus the 10-day "
+                "simple average, plotted with a 16-day simple average of "
+                "itself. The line turning up through its average marks "
+                "short-term momentum."
+            ),
+            implemented_rule=(
+                "Long while SMA(fast) - SMA(slow) of the close is above its "
+                "16-day SMA. The 16 stays fixed. The center is 3 and 10."
+            ),
+            differences=(
+                "Simple averages, not the exponential averages of lib.macd. "
+                "The book trades it with other filters; this is the bare "
+                "state. At the center it agrees with no registered name on "
+                "more than 85 percent of scored days. Next-open fills, BTC."
             ),
         ),
     ),
